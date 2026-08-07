@@ -1,0 +1,11 @@
+<manifest name='technology/qt-mimic' version='1.0' format-version='8'>
+    <!-- Intentionally use none. -->
+    <require name="none" />
+
+    <headers path="." scope="public" />
+
+    <source path="CoreApplication.cpp" />
+    <source path="Object.cpp" />
+    <source path="Thread.cpp" />
+    <source path="ThreadData.cpp" />
+</manifest>

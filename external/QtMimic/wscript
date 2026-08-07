@@ -1,0 +1,28 @@
+def build(bld):
+    """
+    Build the QtMimic library and its test program.
+    """
+    kw = {}
+    kw["use"] = ["boost"]
+    kw["features"] = ["cxx"]
+    kw["source"] = bld.path.ant_glob("src/*.cpp")
+    kw["includes"] = "src"
+    kw["export_includes"] = "src"
+
+    build_shared_lib = getattr(bld.env, "QT_MIMIC_BUILD_SHARED_LIB", False)
+    if build_shared_lib and bld.env.DEST_OS != "win32":
+        kw["features"].append("cxxshlib")
+
+    bld(target="QtMimic", **kw)
+
+    kw_test = {}
+    if bld.env.DEST_OS == "win32" and "msvc" in bld.env.CXX_NAME:
+        kw_test["linkflags"] = ["/SUBSYSTEM:CONSOLE"]
+
+    bld.program(
+        target="QtMimic-test",
+        use=["QtMimic", "google-test"],
+        features=["cxx", "cxxprogram"],
+        source=bld.path.ant_glob("tests/*.cpp"),
+        **kw_test,
+    )

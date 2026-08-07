@@ -50,6 +50,7 @@ def build_tests(bld):
 
     bld.recurse("submodules/external")
     bld.recurse("src")
+    bld.recurse("external/QtMimic")
 
 
 product_table = {
