@@ -16,6 +16,14 @@
 #include <string>
 #include <thread>
 
+#if !defined( _WIN32 )
+    // For pthread_t only. A real pthread_t is more honest about what the member is than an
+    // opaque handle would be, and this is a source-only library with no ABI to protect. The
+    // Windows handle is a void* instead, purely to keep <windows.h> -- and its macros -- out of
+    // every translation unit that includes this header.
+    #include <pthread.h>
+#endif
+
 #include "Signal.hpp"
 #include "ThreadData.hpp"
 
@@ -69,7 +77,43 @@ namespace QtMimic
             Thread&&
             ) = delete;
 
-        void start();
+        //! Scheduling priority of a thread, mirroring QThread::Priority.
+        //!
+        //! The numeric order is load-bearing, not cosmetic: the UNIX backend scales these values
+        //! arithmetically onto whatever range the platform scheduler reports, so IdlePriority
+        //! must stay lowest and TimeCriticalPriority highest, with no gaps introduced between
+        //! them.
+        //!
+        //! InheritPriority means "whatever the thread that called start() was running at". It is
+        //! the state reported when there is no OS thread to ask. start() accepts it -- it is the
+        //! default -- but setPriority() does not, because once a thread is running there is no
+        //! operation that corresponds to re-inheriting.
+        enum Priority
+        {
+            IdlePriority,
+
+            LowestPriority,
+            LowPriority,
+            NormalPriority,
+            HighPriority,
+            HighestPriority,
+
+            TimeCriticalPriority,
+
+            InheritPriority
+        };
+
+        void start
+            (
+            Priority aPriority = InheritPriority
+            );
+
+        void setPriority
+            (
+            Priority aPriority
+            );
+
+        Priority priority() const;
 
         int exec();
 
@@ -134,6 +178,31 @@ namespace QtMimic
 
         void adopt();
 
+        //! Platform half of start(): creates the OS thread (already at mPriority when it
+        //! executes its first instruction) and publishes its handle. Implemented in
+        //! ThreadWin.cpp / ThreadPosix.cpp so the platform code sits in one place per platform
+        //! instead of scattered through #if blocks. Called with mPriorityMutex held.
+        void startPlatformSpecific();
+
+        void applyPriority
+            (
+            Priority aPriority
+            );
+
+        #if defined( _WIN32 )
+            static unsigned int __stdcall threadEntry
+                (
+                void* aArg
+                );
+
+        #else
+            static void* threadEntry
+                (
+                void* aArg
+                );
+
+        #endif
+
         //! Per-thread state that outlives this Thread. Created in the constructor with a
         //! back-pointer to this, cleared in ~Thread(). Anything that needs to remember "which
         //! thread" holds this rather than a raw Thread*, so it can never dangle. It also owns the
@@ -141,8 +210,29 @@ namespace QtMimic
         //! goes through the ThreadData and never dereferences this Thread.
         std::shared_ptr<ThreadData> mData;
         std::string mName;                        //!< Thread name
-        std::thread mThread;                      //!< Underlying OS thread
-        std::thread::id mId;                      //!< Cached id of mThread
+
+        #if defined( _WIN32 )
+            //! The OS thread handle from _beginthreadex(), or nullptr when there is none to
+            //! reap. Typed void* so this header does not pull in <windows.h>. Guarded by
+            //! mPriorityMutex; owned, and closed by whichever join() sees the thread finish with
+            //! no other waiter left inside the wait.
+            void* mHandle { nullptr };
+
+            //! How many calls are currently blocked inside WaitForSingleObject() on mHandle.
+            //! Closing the handle out from under one of them would be a use-after-close, so the
+            //! last one out closes it. Guarded by mPriorityMutex.
+            int mWaiters { 0 };
+        #else
+            //! The OS thread from pthread_create(). Meaningful only while mJoinable.
+            pthread_t mThreadId {};
+
+            //! True while mThreadId names a thread that has been created and not yet joined.
+            //! Joining twice is undefined, so this is what makes join() a no-op once a previous
+            //! join() has already reaped it. Guarded by mPriorityMutex.
+            bool mJoinable { false };
+        #endif
+
+        std::thread::id mId;                      //!< Id of the OS thread, set from inside it.
         bool mAdopted = false; //!< True if this represents an already-running native thread
         int mExitCode = 0; //!< Value returned by exec()
         std::function<void( int )> mDispatcher; //!< External event pump (optional)
@@ -150,6 +240,24 @@ namespace QtMimic
         int mWaiterTimeoutMs = -1;            //!< Timeout for external wait (optional)
         LifecycleSignalType mStarted;         //!< Emitted when loop starts
         LifecycleSignalType mFinished;        //!< Emitted when loop exits
+
+        //! Guards mPriority, mPriorityNeedsReset, and the native handle members above, including
+        //! every use of that handle (creation, priority application, join()).
+        //!
+        //! start() holds it across thread creation, so a UNIX priority fix-up inside run() can
+        //! never run before the priority meant for THIS run has been decided, and
+        //! setPriority()/priority() can never observe a handle published for a run whose
+        //! priority is still being set up.
+        mutable std::mutex mPriorityMutex;
+        Priority mPriority { InheritPriority };  //!< Priority applied to the current/most recent run.
+
+        //! Set when the new thread has to apply its own priority instead of being born with it.
+        //!
+        //! Only ever true on UNIX, and only when the kernel refused the scheduling attributes
+        //! passed to pthread_create(); the thread then inherits the caller's priority and fixes
+        //! it up itself. Guarded by mPriorityMutex, which is also what makes the fix-up wait for
+        //! start() to publish the handle it needs.
+        bool mPriorityNeedsReset { false };
     };
 
 } // namespace QtMimic

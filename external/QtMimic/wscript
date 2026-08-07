@@ -5,7 +5,13 @@ def build(bld):
     kw = {}
     kw["use"] = ["boost"]
     kw["features"] = ["cxx"]
-    kw["source"] = bld.path.ant_glob("src/*.cpp")
+    kw["source"] = bld.path.ant_glob(
+        "src/*.cpp", excl=["src/ThreadWin.cpp", "src/ThreadPosix.cpp"]
+    )
+    if bld.env.DEST_OS == "win32":
+        kw["source"].append(bld.path.find_node("src/ThreadWin.cpp"))
+    elif bld.env.DEST_OS == "linux":
+        kw["source"].append(bld.path.find_node("src/ThreadPosix.cpp"))
     kw["includes"] = "src"
     kw["export_includes"] = "src"
 

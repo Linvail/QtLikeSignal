@@ -6,6 +6,7 @@
 
 #include "Thread.hpp"
 
+#include <cstdio>
 #include <memory>
 
 namespace QtMimic
@@ -70,10 +71,25 @@ namespace QtMimic
         mData->setThread( nullptr );
     }
 
-    //! @brief Start the event loop on a new native thread.
-    //! If already running or previously started without join(), this is a no-op or
-    //! joins the previous run first. Safe to call multiple times.
-    void Thread::start()
+    //! @brief Start the event loop on a new native OS thread, running at @p aPriority.
+    //!
+    //! If already running or previously started without join(), this is a no-op or joins the
+    //! previous run first. Safe to call multiple times.
+    //!
+    //! The thread is already at aPriority before it executes its first instruction, as in Qt: on
+    //! Windows it is created suspended, given the priority, then resumed; on UNIX the priority
+    //! travels in the pthread attributes handed to pthread_create(). Nothing runs at the wrong
+    //! priority, not even briefly.
+    //!
+    //! The one exception is a UNIX kernel that refuses the scheduling attributes outright, where
+    //! the thread is created inheriting the caller's priority and applies the requested one to
+    //! itself as its first action -- still before mStarted is emitted. Qt falls back the same way.
+    //! @param aPriority Priority for the new thread. InheritPriority, the default, keeps the
+    //!        creating thread's priority and preserves the behaviour of the no-argument call.
+    void Thread::start
+        (
+        Priority aPriority
+        )
     {
         if( mAdopted )
         {
@@ -82,35 +98,41 @@ namespace QtMimic
 
         {
             std::lock_guard<std::mutex> locker( mData->mMutex );
-            if( mThread.joinable() && mData->mAccepting )
+            #if defined( _WIN32 )
+                const bool haveThread = ( mHandle != nullptr );
+            #else
+                const bool haveThread = mJoinable;
+            #endif
+            if( haveThread && mData->mAccepting )
             {
-                // mThread stays joinable throughout an active run (only join()/detach() clears
-                // that), so joinable() alone can't tell "still running" apart from "finished, just
-                // never joined". mAccepting is what makes that distinction: still true here means
-                // the previous run's loop() has not committed to stopping yet, i.e. it's genuinely
-                // still in progress (or this is a fresh Thread that was never started, in which case
-                // mThread isn't joinable at all and this branch is skipped regardless).
+                // The native handle stays live throughout an active run (only join() clears it),
+                // so that alone can't tell "still running" apart from "finished, just never
+                // joined". mAccepting is what makes that distinction: still true here means the
+                // previous run's loop() has not committed to stopping yet, i.e. it's genuinely
+                // still in progress (or this is a fresh Thread that was never started, in which
+                // case there is no handle at all and this branch is skipped regardless).
                 return;
             }
             mData->mRunning = true;
             mData->mAccepting = true;
         }
 
-        // A previous run may have finished (loop() returned) without ever being join()ed: mThread is
-        // then still joinable, and overwriting it below would destroy a joinable std::thread, which
-        // calls std::terminate() (same hazard as Thread::start() guards against).
-        // Safe to join unconditionally here, without mMutex held: the guard above already confirmed
-        // any previous run has fully finished (mLoopFinished was true) or never started (mThread not
-        // joinable), so this is either a no-op or an already-complete thread's join, never a block.
-        // Must happen outside the lock regardless -- loop()'s own exit path needs mMutex to finish,
-        // so holding it here while joining would risk deadlocking against that.
-        if( mThread.joinable() )
-        {
-            mThread.join();
-        }
+        // A previous run may have finished (loop() returned) without ever being join()ed: its
+        // handle is then still outstanding, and overwriting it below would leak the OS thread
+        // instead of reaping it.
+        join();
 
-        mThread = std::thread( &Thread::run, this );
-        mId = mThread.get_id();
+        // Held across thread creation so a UNIX priority fix-up inside run() can never run
+        // before the priority meant for THIS run has been decided, and so setPriority()/
+        // priority() can never observe a handle published for a run whose priority is still
+        // being set up.
+        std::lock_guard<std::mutex> startLock( mPriorityMutex );
+        mPriorityNeedsReset = false;
+        // Each run starts from what start() was given, never from what the previous run ended
+        // at: a priority set on an earlier run said nothing about this one.
+        mPriority = aPriority;
+
+        startPlatformSpecific();
     }
 
     //! @brief Adopt the calling thread as this Thread and register it for affinity.
@@ -225,13 +247,67 @@ namespace QtMimic
         quit();
     }
 
-    //! @brief Block until the event loop has exited and the thread has joined.
-    void Thread::join()
+    // join() is platform-specific: see ThreadWin.cpp / ThreadPosix.cpp.
+
+    //! @brief Set the scheduling priority of the running OS thread. Thread-safe.
+    //!
+    //! Only meaningful while the thread is running: there is no OS thread to act on before
+    //! start(), and the value is deliberately not remembered for a later start() either -- pass
+    //! a priority to start() instead. A call made when there is no OS thread is rejected with a
+    //! warning and changes nothing, so priority() will still report InheritPriority afterwards.
+    //!
+    //! What the OS does with the request varies, and a successful call does not promise the
+    //! thread's scheduling actually changed. On Linux the default SCHED_OTHER policy reports a
+    //! priority range of exactly one value, so every priority maps onto the same number and the
+    //! call is accepted but has no effect; real prioritisation there needs a realtime policy and
+    //! the privileges to select it. Qt behaves the same way. Windows applies all seven levels.
+    //! @param aPriority The priority to apply. InheritPriority is not accepted; rejected with a
+    //!        warning.
+    void Thread::setPriority
+        (
+        Priority aPriority
+        )
     {
-        if( mThread.joinable() )
+        if( aPriority == InheritPriority )
         {
-            mThread.join();
+            std::fprintf( stderr,
+                "Thread::setPriority: InheritPriority cannot be set, only reported\n" );
+            return;
         }
+
+        std::lock_guard<std::mutex> lock( mPriorityMutex );
+        #if defined( _WIN32 )
+            const bool haveThread = ( mHandle != nullptr );
+        #else
+            const bool haveThread = mJoinable;
+        #endif
+        if( !haveThread )
+        {
+            std::fprintf( stderr,
+                "Thread::setPriority: cannot set priority, thread is not running\n" );
+            return;
+        }
+
+        mPriority = aPriority;
+        applyPriority( aPriority );
+    }
+
+    //! @brief Get the scheduling priority of the running OS thread. Thread-safe.
+    //! @return The priority last set on the running thread, or InheritPriority if there is no OS
+    //!         thread running or no priority has been set on this run.
+    Thread::Priority Thread::priority() const
+    {
+        std::lock_guard<std::mutex> lock( mPriorityMutex );
+        #if defined( _WIN32 )
+            const bool haveThread = ( mHandle != nullptr );
+        #else
+            const bool haveThread = mJoinable;
+        #endif
+        if( !haveThread )
+        {
+            return InheritPriority;
+        }
+        return mPriority;
     }
 
     //! @brief Check if the calling thread is this Thread.
@@ -273,8 +349,27 @@ namespace QtMimic
     //! @private
     void Thread::run()
     {
+        mId = std::this_thread::get_id();
+
+        {
+            // Blocks here until start() releases mPriorityMutex, which is what guarantees the
+            // native handle/id above and mPriority are published before anything below relies on
+            // them. Normally nothing is left to do here -- Windows set the priority on the
+            // suspended thread, UNIX passed it to pthread_create() -- so this only bites when the
+            // UNIX scheduling attributes were refused, and even then it lands before mStarted is
+            // emitted.
+            std::lock_guard<std::mutex> priorityLock( mPriorityMutex );
+            if( mPriorityNeedsReset )
+            {
+                mPriorityNeedsReset = false;
+                applyPriority( mPriority );
+            }
+        }
+
         loop();
     }
+
+    // threadEntry() and applyPriority() are platform-specific: see ThreadWin.cpp / ThreadPosix.cpp.
 
     //! @brief Shared event loop body.
     //! Drains posted tasks and pumps the dispatcher (if any) until quit()/exit() is
