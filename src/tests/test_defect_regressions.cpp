@@ -1410,8 +1410,15 @@ protected:
 //! where Qt preserves the schedule -- past a whole interval Qt resynchronises too, so asserting
 //! anything there would be asserting non-Qt behaviour.
 //!
-//! Second fire lands at ~100 ms if the deadline drives the schedule, or ~120 ms if the moment of
-//! noticing does. The threshold sits between them with 10 ms of margin either side.
+//! Second fire lands at ~400 ms if the deadline drives the schedule, or ~480 ms if the moment of
+//! noticing does, so the threshold sits 40 ms clear of either.
+//!
+//! The intervals are deliberately large. An earlier version used 50 ms / 70 ms, which separated the
+//! two outcomes by only 20 ms -- fine on Linux, but it failed on Windows at 112.7 ms against a
+//! 110 ms threshold. That was not the defect resurfacing: Windows' default timer resolution is about
+//! 15.6 ms and a wait only ever overshoots, so 112.7 ms was the *correct* 100 ms deadline plus
+//! granularity (the broken behaviour could not have produced less than 120 ms). Scaling everything
+//! up by 4x makes that fixed overshoot small next to the 80 ms that actually distinguishes the two.
 TEST( EventDispatcherDefaultDefectTest, LatePassDoesNotShiftARepeatingTimersCadence )
 {
     // Declared before the dispatcher so the dispatcher is destroyed first and never holds a stale
@@ -1419,8 +1426,8 @@ TEST( EventDispatcherDefaultDefectTest, LatePassDoesNotShiftARepeatingTimersCade
     TimerCadenceRecorder recorder;
     DefectTestableDispatcher dispatcher;
 
-    constexpr int kIntervalMs = 50;
-    constexpr int kLatePassMs = 70;   // 20 ms past the first deadline, still short of the second
+    constexpr int kIntervalMs = 200;
+    constexpr int kLatePassMs = 280;  // 80 ms past the first deadline, still short of the second
 
     recorder.mOrigin = std::chrono::steady_clock::now();
     dispatcher.registerTimer( 1, kIntervalMs, &recorder );
@@ -1432,6 +1439,14 @@ TEST( EventDispatcherDefaultDefectTest, LatePassDoesNotShiftARepeatingTimersCade
     ASSERT_EQ( recorder.mFireOffsetsMs.size(), 1u )
         << "the overdue timer should fire on the first pass that services it";
 
+    // Guards the premise rather than the behaviour: if the sleep above overshot so far that the
+    // *second* deadline had also passed, the resynchronisation branch legitimately takes over and
+    // this test is no longer measuring what it claims to. Fail with that explanation instead of a
+    // confusing cadence mismatch.
+    ASSERT_LT( recorder.mFireOffsetsMs[0], 2.0 * kIntervalMs )
+        << "the first pass was more than a whole interval late, so the dispatcher correctly "
+        "resynchronised and there is no preserved cadence left to assert";
+
     // Drive the dispatcher until the timer fires again. Each pass blocks until the next deadline,
     // so this does not spin.
     while( recorder.mFireOffsetsMs.size() < 2 )
@@ -1440,7 +1455,7 @@ TEST( EventDispatcherDefaultDefectTest, LatePassDoesNotShiftARepeatingTimersCade
     }
 
     const double secondFireMs = recorder.mFireOffsetsMs[1];
-    EXPECT_LT( secondFireMs, 110.0 )
+    EXPECT_LT( secondFireMs, 440.0 )
         << "the second fire landed at " << secondFireMs << " ms. The first pass was "
         << ( kLatePassMs - kIntervalMs ) << " ms late, and that lateness has been folded into the "
         "schedule: the next deadline was computed from when the dispatcher noticed the timer ("
