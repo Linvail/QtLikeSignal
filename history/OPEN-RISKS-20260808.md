@@ -12,8 +12,10 @@ no runtime probe was written.
 
 ## Status at a glance
 
-> **Open defects have failing tests.** `src/tests/test_known_defects.cpp` holds R24 and stays red
-> until it is fixed. R23 was fixed on 2026-08-08 and its tests moved to
+> **No open defect currently has a failing test** — `src/tests/test_known_defects.cpp` is empty,
+> since R23, R24 and R26 were all fixed on 2026-08-08 and their tests moved to
+> `test_defect_regressions.cpp`. The file is kept for the convention: prove the next defect there
+> first, leave it red, and move it out once green. R23 was fixed on 2026-08-08 and its tests moved to
 > `test_defect_regressions.cpp`, which is the rule: a defect test turns green and *leaves* that file,
 > so `--gtest_filter=-KnownDefect.*` stays a trustworthy baseline (91 pass). R25 and R27 are
 > deliberately not represented -- see that file's header for why a runtime test would be dishonest
@@ -44,7 +46,7 @@ no runtime probe was written.
 | R21 | `CoreApplication` has no test coverage at all | Medium | Inspection — **Fixed 2026-08-08** (13 tests) |
 | R22 | Platform dispatchers are still empty shells (was R6) | Medium | Inspection — **Fixed 2026-08-08** |
 | R23 | An object outliving its thread keeps a live dispatcher: queued work accumulates, `deleteLater()` leaks | **Medium** | Probe — **Fixed 2026-08-08** |
-| R24 | Timer ids never recycle and can wrap onto the `-1` sentinel | Low | Inspection |
+| R24 | Timer ids never recycle and can wrap onto the `-1` sentinel | Low | Inspection — **Fixed 2026-08-08** |
 | R25 | `Object::thread()` now costs a mutex on every call | Low | Inspection |
 | R26 | Repeating timers drift; interval is measured from dispatch, not deadline | Low | Inspection — **Fixed 2026-08-08** |
 | R27 | `Thread::create()` returns an owning raw pointer with no ownership doc | Low | Inspection |
@@ -406,19 +408,40 @@ QtLikeSignal grew ~30 MB every round without bound.
 > Confirmed by re-running with `ASAN_OPTIONS=quarantine_size_mb=1`, which passes.
 
 
-## R24 — Timer ids never recycle and can wrap onto the `-1` sentinel
+## R24 — timer ids never recycle and can wrap onto the `-1` sentinel *(fixed 2026-08-08)*
 
 **Severity: Low. Inspection.**
 
-`Object::sNextTimerId` is a monotonically increasing `std::atomic<int>` consumed by
-`fetch_add(1)`; ids are never returned to a pool, unlike Qt, which explicitly releases them
-(`QAbstractEventDispatcherPrivate::releaseTimerId`). After 2^31 `startTimer()` calls the counter
-wraps (well-defined for atomics, two's complement), and will eventually hand out `-1` — the exact
-value `startTimer()` returns to signal failure and that `Timer::stop()` tests against. It can also
-collide with a still-live timer's id.
+`Object::sNextTimerId` only ever incremented. Qt releases ids
+(`QAbstractEventDispatcherPrivate::releaseTimerId`, backed by a lock-free `QFreeList` capped at
+2²⁴), so a program that starts and stops timers forever reuses a small set. Here the counter climbed
+until it wrapped, eventually handing out `-1` — the value `startTimer()` returns to mean failure and
+`Timer::stop()` tests against.
 
-Not reachable in any realistic run; recorded so the sentinel collision is a known property rather
-than a surprise.
+> **Resolution (2026-08-08).** A process-wide `TimerIdPool` (mutex + deque) replaces the counter;
+> `Object` now tracks the ids it owns so `~Object()` can return them, and `killTimer()` releases
+> while `moveToThread()` deliberately does not — migrating timers keep their ids, as Qt also notes.
+>
+> **Recycling is not free, and two further changes were required to make it safe.** Once ids are
+> reused, a `TimerEvent` for a killed timer can match a *newly issued* timer with the same id and
+> fire it spuriously. That could not happen while ids only climbed, so this was a hazard the fix
+> itself introduced:
+>   - `unregisterTimer()` purges pending `TimerEvent`s for the id — from the dispatch batch as well
+>     as from `mEventQueue`. The batch is the one that matters: `TimerEvent`s are *only* ever created
+>     inside the collection loop, so purging the posted-event queue alone would have covered nothing
+>     in production. This was caught by writing the test before trusting the fix.
+>   - Reuse is **FIFO, not LIFO**. Handing a freed id straight back out would make the narrowest
+>     window trivially reachable — a handler that kills one timer and starts another would get the
+>     same id immediately.
+>
+> Closing that hazard also fixed a plain correctness bug that predates recycling: a timer killed from
+> inside a sibling timer's handler **still fired in the same pass**, because its event had already
+> been collected into the batch. Covered by
+> `EventDispatcherDefaultDefectTest.TimerKilledDuringDispatchDoesNotStillFire`, which failed before
+> the batch purge existed.
+>
+> Recycling itself is covered by `ObjectDefectTest.TimerIdsAreRecycled`.
+
 
 ## R25 — `Object::thread()` now costs a mutex acquisition on every call
 

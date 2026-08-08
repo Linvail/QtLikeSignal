@@ -134,6 +134,14 @@ namespace QtLikeSignal
         // bare notify_all() from wakeUp() cannot end the wait.
         bool mWakeUpRequested { false };
 
+        //! The timer batch currently being dispatched, or nullptr outside a dispatch pass.
+        //!
+        //! Timers that expire together are collected into one batch and then dispatched with mMutex
+        //! released, so a killTimer() from inside one handler lands after the others' events already
+        //! exist. This lets unregisterTimer() reach into that batch and cancel them. Guarded by
+        //! mMutex, and every read of an entry takes mMutex too, so cancelling races nothing.
+        std::vector<EventPair>* mDispatchingTimerBatch { nullptr };
+
         //! Nudges an adopted thread's own native loop when work is posted; empty if unused.
         std::function<void()> mWakeCallback;
 

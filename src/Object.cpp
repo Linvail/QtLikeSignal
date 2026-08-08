@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <deque>
 #include <unordered_map>
 
 namespace QtLikeSignal
@@ -36,7 +37,63 @@ namespace QtLikeSignal
         Object::CallLaterKeyHash>
     CallLaterRegistry::sPending;
 
-    std::atomic<int> Object::sNextTimerId { 1 };
+    //! Process-wide pool of timer ids, handing out reusable ids rather than an ever-rising count.
+    //!
+    //! Qt does the same with a lock-free QFreeList capped at 2^24 simultaneous timers; a mutex and a
+    //! deque is the proportionate equivalent here, since allocation happens once per startTimer()
+    //! rather than on any hot path.
+    //!
+    //! Reuse is **FIFO, deliberately**. A freed id going straight back out (LIFO) would make the
+    //! narrowest recycling hazard trivially reachable: a handler that kills one timer and starts
+    //! another would get the same id back immediately, and any TimerEvent for the old timer still
+    //! in flight would then match the new one. Taking the oldest free id instead means an id is only
+    //! reused after every other freed id has been, which is what makes that window practically
+    //! unreachable rather than merely unlikely.
+    struct TimerIdPool
+    {
+        //! Takes an id, reusing the oldest freed one if there is any.
+        static int allocate()
+        {
+            std::lock_guard<std::mutex> lock( sMutex );
+            if( !sFree.empty() )
+            {
+                const int id = sFree.front();
+                sFree.pop_front();
+                return id;
+            }
+            // Never hand out 0 or a negative value: -1 is startTimer()'s failure sentinel and the
+            // value Timer::stop() tests against, so an id colliding with it would be indisguishable
+            // from "no timer". The old monotonic counter would eventually have wrapped onto exactly
+            // that.
+            if( sNextFresh <= 0 )
+            {
+                return -1;
+            }
+            return sNextFresh++;
+        }
+
+        //! Returns an id to the pool.
+        static void release
+            (
+            int aTimerId
+            )
+        {
+            if( aTimerId <= 0 )
+            {
+                return;
+            }
+            std::lock_guard<std::mutex> lock( sMutex );
+            sFree.push_back( aTimerId );
+        }
+
+        static std::mutex sMutex;        //!< Guards both members below.
+        static std::deque<int> sFree;    //!< Freed ids, oldest first.
+        static int sNextFresh;           //!< Next never-yet-issued id.
+    };
+
+    std::mutex TimerIdPool::sMutex;
+    std::deque<int> TimerIdPool::sFree;
+    int TimerIdPool::sNextFresh = 1;
 
     //! Constructs an object.
     Object::Object()
@@ -155,6 +212,19 @@ namespace QtLikeSignal
             {
                 dispatcher->removeEventsForReceiver( this );
             }
+        }
+
+        // Hand back any ids whose timers were still running. removeEventsForReceiver() above has
+        // already dropped this object's timers and its queued events, so nothing can still be
+        // referring to them by the time they are reissued.
+        std::vector<int> outstandingTimerIds;
+        {
+            std::lock_guard<std::mutex> lock( mRunningTimerIdsMutex );
+            outstandingTimerIds.swap( mRunningTimerIds );
+        }
+        for( const int timerId : outstandingTimerIds )
+        {
+            TimerIdPool::release( timerId );
         }
     }
 
@@ -530,8 +600,19 @@ namespace QtLikeSignal
             if( auto disp = tData->dispatcher() )
             {
                 // Only consume an id once the timer is actually going to be registered.
-                const int timerId = sNextTimerId.fetch_add( 1 );
+                const int timerId = TimerIdPool::allocate();
+                if( timerId < 0 )
+                {
+                    std::fprintf( stderr,
+                        "Object::startTimer: no timer ids left\n" );
+                    return -1;
+                }
                 disp->registerTimer( timerId, aInterval, this );
+                {
+                    // Recorded so ~Object() can hand the id back even if the timer is never killed.
+                    std::lock_guard<std::mutex> lock( mRunningTimerIdsMutex );
+                    mRunningTimerIds.push_back( timerId );
+                }
                 return timerId;
             }
         }
@@ -560,12 +641,32 @@ namespace QtLikeSignal
             return;
         }
 
+        bool wasOurs = false;
+        {
+            std::lock_guard<std::mutex> lock( mRunningTimerIdsMutex );
+            auto it = std::find( mRunningTimerIds.begin(), mRunningTimerIds.end(), aId );
+            if( it != mRunningTimerIds.end() )
+            {
+                mRunningTimerIds.erase( it );
+                wasOurs = true;
+            }
+        }
+
         if( auto tData = threadData() )
         {
             if( auto disp = tData->dispatcher() )
             {
                 disp->unregisterTimer( aId );
             }
+        }
+
+        // Released only after unregisterTimer() has both dropped the timer and purged any event it
+        // had already queued, so the id cannot be reissued while something still referring to it is
+        // in the queue. Only ids this object actually owns are returned, so a bogus or double
+        // killTimer() cannot inject a duplicate into the pool.
+        if( wasOurs )
+        {
+            TimerIdPool::release( aId );
         }
     }
 

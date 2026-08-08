@@ -387,6 +387,7 @@ class DefectTestableDispatcher : public EventDispatcherDefault
 public:
     using EventDispatcherDefault::postEvent;
     using EventDispatcherDefault::registerTimer;
+    using EventDispatcherDefault::unregisterTimer;
 };
 
 TEST( EventDispatcherDefaultDefectTest, InterruptDuringTimerCollectionStress )
@@ -1445,4 +1446,103 @@ TEST( EventDispatcherDefaultDefectTest, LatePassDoesNotShiftARepeatingTimersCade
         "schedule: the next deadline was computed from when the dispatcher noticed the timer ("
         << kLatePassMs << " + " << kIntervalMs << ") instead of from the deadline that elapsed ("
         << kIntervalMs << " + " << kIntervalMs << "). Every late pass shifts the cadence again.";
+}
+
+//! Records which timers fired, and kills a nominated one from inside the first handler.
+class TimerKillDuringDispatchRecorder : public Object
+{
+public:
+    DefectTestableDispatcher* mDispatcher { nullptr };  //!< Dispatcher to kill through.
+    int mIdToKill { -1 };                                //!< Killed on the first fire, then cleared.
+    std::vector<int> mFiredIds;                          //!< Ids delivered to this object, in order.
+
+protected:
+    virtual void timerEvent
+        (
+        TimerEvent* aEvent
+        ) override
+    {
+        mFiredIds.push_back( aEvent->timerId() );
+        if( mIdToKill >= 0 && mDispatcher )
+        {
+            const int toKill = mIdToKill;
+            mIdToKill = -1;
+            mDispatcher->unregisterTimer( toKill );
+        }
+    }
+};
+
+//! Verifies a timer killed during a dispatch pass does not still fire in that same pass.
+//!
+//! Timers expiring together are collected into one batch and then dispatched with the lock
+//! released, so killing one from inside another's handler happens *after* its event already exists.
+//! Delivering it anyway is wrong on its own terms -- the timer was stopped -- and became actively
+//! dangerous once timer ids started being recycled: the id can be reissued to a new timer, and the
+//! stale event would then fire that one instead.
+//!
+//! Note this is the batch, not the posted-event queue. TimerEvents are only ever created inside the
+//! collection loop, so purging mEventQueue alone would not have covered this at all.
+TEST( EventDispatcherDefaultDefectTest, TimerKilledDuringDispatchDoesNotStillFire )
+{
+    // Declared before the dispatcher so the dispatcher outlives nothing it points at.
+    TimerKillDuringDispatchRecorder recorder;
+    DefectTestableDispatcher dispatcher;
+
+    recorder.mDispatcher = &dispatcher;
+    recorder.mIdToKill = 2;
+
+    // Interval 0 so both are already due and land in a single batch.
+    dispatcher.registerTimer( 1, 0, &recorder );
+    dispatcher.registerTimer( 2, 0, &recorder );
+
+    dispatcher.processEvents();
+
+    EXPECT_EQ( recorder.mFiredIds.size(), 1u )
+        << "timer 2 was killed from inside timer 1's handler but still fired in the same pass, "
+        "because its event had already been collected into the dispatch batch.";
+    ASSERT_FALSE( recorder.mFiredIds.empty() );
+    EXPECT_EQ( recorder.mFiredIds[0], 1 );
+
+    dispatcher.unregisterTimer( 1 );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Defect (R24, fixed 2026-08-08): timer ids were consumed monotonically and never returned to a
+// pool, so the counter climbed until it wrapped and eventually handed out -1 -- the value
+// startTimer() returns to mean failure and Timer::stop() tests against.
+//
+// Qt releases ids (QAbstractEventDispatcherPrivate::releaseTimerId, backed by a lock-free QFreeList)
+// so a program that starts and stops timers forever reuses a small set. Object now does the same
+// through a process-wide pool, tracks the ids it owns so ~Object() can return them, and reuses them
+// FIFO rather than LIFO -- see TimerIdPool in Object.cpp for why that ordering is load-bearing.
+// ---------------------------------------------------------------------------------------------
+
+//! Verifies starting and stopping a timer repeatedly reuses ids instead of consuming fresh ones.
+//!
+//! Tests the underlying property -- recycling -- rather than the 2^31 wrap non-recycling eventually
+//! caused, which is not reachable in a test.
+TEST( ObjectDefectTest, TimerIdsAreRecycled )
+{
+    Object owner;
+    ASSERT_EQ( owner.thread(), Thread::currentThread() )
+        << "startTimer() is thread-confined; this object must live here";
+
+    constexpr int kCycles = 200;
+    std::vector<int> ids;
+    ids.reserve( kCycles );
+
+    for( int i = 0; i < kCycles; ++i )
+    {
+        const int id = owner.startTimer( 1000 );
+        ASSERT_GT( id, 0 ) << "the adopted thread should have a dispatcher to register with";
+        owner.killTimer( id );
+        ids.push_back( id );
+    }
+
+    const int idSpan = ids.back() - ids.front();
+    EXPECT_LE( idSpan, 10 )
+        << kCycles << " start/kill cycles on a single timer spanned " << ( idSpan + 1 )
+        << " ids (from " << ids.front() << " to " << ids.back()
+        << "). Ids are not being returned to the pool, so the counter climbs until it wraps and "
+        "eventually collides with the -1 failure sentinel.";
 }
