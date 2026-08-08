@@ -14,7 +14,7 @@ no runtime probe was written.
 
 | ID  | Risk | Severity | Confirmed by |
 |-----|------|----------|--------------|
-| R17 | Destroyed receivers are never disconnected — unbounded dead-slot growth | **High** | Probe (672 MB, 327 ms emit) |
+| R17 | Destroyed receivers are never disconnected — unbounded dead-slot growth | **High** | Probe (672 MB, 327 ms emit) — **Fixed 2026-08-08** |
 | R18 | `CoreApplication::exec()` after `quit()` burns 100% CPU (was R1) | **High** | Probe (cpu/wall = 100%) |
 | R19 | Objects with no affinity get cross-thread *direct* calls; Qt drops them | Medium | Probe |
 | R20 | `~Object()`'s new warning dereferences a `Thread*` that may dangle | Low-Med | Inspection — *self-inflicted this pass* |
@@ -28,9 +28,26 @@ no runtime probe was written.
 
 ---
 
-## R17 — Destroyed receivers are never disconnected from the signals they were connected to
+## R17 — Destroyed receivers are never disconnected from the signals they were connected to *(fixed 2026-08-08)*
 
-**Severity: High. Confirmed by probe. This is the most serious finding in this pass.**
+**Severity: High. Confirmed by probe. This was the most serious finding in this pass.**
+
+> **Resolution (2026-08-08).** Ported QtMimic's two-sided teardown. `Object` gained
+> `mIncoming` (+ its mutex) recording every connection where it is the receiver, and `~Object()`
+> swaps that vector out and disconnects each handle — after `mLife.reset()`, so the `Cleanup`
+> destructors it triggers bail out instead of re-entering `mIncoming`. Each connection's closure
+> also carries a `shared_ptr<Object::Cleanup>` whose destructor prunes that object's own
+> `mIncoming` entry when the connection ends any other way (manual `disconnect()`, sender
+> destroyed), which is the half that stops `mIncoming` growing on a receiver that outlives its
+> connections. The disconnect loop deliberately does **not** hold `mIncomingMutex`, to avoid
+> nesting it inside boost's signal mutex — the reverse of the order `~Cleanup` takes them in.
+>
+> Re-running the same probe: **RSS growth 672036 kB → 32 kB, emit 326844 us → 30 us.**
+>
+> Covered by `ObjectDefectTest.DestroyedReceiverIsDisconnectedFromItsSender`, which asserts through
+> a new read-only `Signal::receivers()` accessor (mirroring `QObject::receivers()` and QtMimic's
+> `Signal::receivers()`) rather than by measuring memory. Verified to catch the regression:
+> disabling the disconnect loop makes it report 501 accumulated dead slots.
 
 `Object::connect()` ends with `return aSignal.connect( wrapper );` and nothing anywhere removes
 that slot again. `~Object()` resets the life token, runs cleanup callbacks, clears the callLater
@@ -255,8 +272,7 @@ self-enforcing.
 
 ## Suggested order
 
-1. **R17** — the only finding that degrades a correct, ordinary program. Port QtMimic's
-   `mIncoming` + `Cleanup`.
+1. ~~**R17**~~ — done 2026-08-08.
 2. **R18** — one-line fix (clear `mInterrupt`), and it removes a 100% CPU spin.
 3. **R21** — add `CoreApplicationTest`; it is what let R18 survive, and R9 is waiting behind it.
 4. **R20** — small, and it closes a hazard this pass opened.

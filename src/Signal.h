@@ -52,6 +52,16 @@ namespace QtLikeSignal
             mSignal( aArgs ... );
         }
 
+        //! Gets the number of slots currently connected to this signal. Thread-safe.
+        //!
+        //! Read-only diagnostic, mirroring Qt's QObject::receivers(). Mainly useful for asserting
+        //! that a destroyed receiver really was disconnected rather than left as an inert slot --
+        //! see ObjectDefectTest.DestroyedReceiverIsDisconnectedFromItsSender.
+        std::size_t receivers() const
+        {
+            return mSignal.num_slots();
+        }
+
     private:
         boost::signals2::signal<void( Args... )> mSignal;
     };

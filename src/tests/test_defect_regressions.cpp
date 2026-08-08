@@ -550,6 +550,86 @@ TEST( ObjectDefectTest, ConcurrentMoveToThreadAndThreadDataAccessStress )
 // exercised exactly that out-of-contract pattern, so it was removed rather than "fixed" -- there is
 // nothing to fix here that Qt itself does not also leave unfixed.
 // ---------------------------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------------------------
+// Defect (R17): a destroyed receiver's slot was never removed from the sender. The wrapper's life
+// token made it inert, but it stayed in the signal's slot list holding its captured state and was
+// still walked on every emit, so one long-lived signal feeding many short-lived receivers grew
+// without bound. Measured before the fix, with 200k transient receivers on one signal: 672 MB of
+// RSS retained after every receiver was destroyed, and a single emit() taking 327 ms to reach the
+// one slot still alive. After: 32 kB and 30 us.
+// ---------------------------------------------------------------------------------------------
+
+//! Regression test for receiver-side connection teardown.
+//!
+//! ~Object() now disconnects every connection where it was the receiver (mIncoming), and each
+//! connection carries a Cleanup token that prunes its own mIncoming entry when the connection ends
+//! some other way. Both halves are needed and both are checked here: without the first, dead slots
+//! accumulate on the sender; without the second, mIncoming accumulates stale handles on a receiver
+//! that outlives connections made to it.
+//!
+//! Asserted through Signal::receivers() rather than by measuring memory, so the check is exact and
+//! portable -- boost only counts still-connected slots, so an inert-but-connected slot is caught.
+TEST( ObjectDefectTest, DestroyedReceiverIsDisconnectedFromItsSender )
+{
+    Signal<int> longLivedSignal;
+    ASSERT_EQ( longLivedSignal.receivers(), 0u );
+
+    {
+        Object receiver;
+        Object::connect( longLivedSignal, &receiver, []( int )
+            {
+            }, ConnectionType::DirectConnection );
+        EXPECT_EQ( longLivedSignal.receivers(), 1u );
+    }
+    EXPECT_EQ( longLivedSignal.receivers(), 0u )
+        << "the destroyed receiver's slot is still connected to the sender; it is inert (the life "
+        "token stops it running) but still retained and still walked on every emit.";
+
+    // Repeat in bulk: this is the shape that made the leak unbounded.
+    for( int i = 0; i < 500; ++i )
+    {
+        Object receiver;
+        Object::connect( longLivedSignal, &receiver, []( int )
+            {
+            }, ConnectionType::DirectConnection );
+    }
+    EXPECT_EQ( longLivedSignal.receivers(), 0u )
+        << "dead slots accumulated on the sender across many short-lived receivers.";
+
+    // The other direction: a connection ended while its receiver is still alive must prune its own
+    // mIncoming entry, so the receiver is not left holding a stale handle to disconnect later.
+    {
+        Object receiver;
+        ConnectionHandle handle = Object::connect( longLivedSignal, &receiver, []( int )
+            {
+            }, ConnectionType::DirectConnection );
+        EXPECT_EQ( longLivedSignal.receivers(), 1u );
+
+        Object::disconnect( handle );
+        EXPECT_EQ( longLivedSignal.receivers(), 0u );
+
+        // Reconnecting after the manual disconnect must still work, and destroying the receiver
+        // must still clean up -- i.e. the pruning above did not corrupt mIncoming.
+        Object::connect( longLivedSignal, &receiver, []( int )
+            {
+            }, ConnectionType::DirectConnection );
+        EXPECT_EQ( longLivedSignal.receivers(), 1u );
+    }
+    EXPECT_EQ( longLivedSignal.receivers(), 0u );
+
+    // A live emit must still reach a live receiver -- the teardown must not over-disconnect.
+    Object liveReceiver;
+    int calls = 0;
+    Object::connect( longLivedSignal, &liveReceiver, [&calls]( int )
+        {
+            ++calls;
+        }, ConnectionType::DirectConnection );
+    longLivedSignal.emit( 1 );
+    EXPECT_EQ( calls, 1 );
+}
+
+// ---------------------------------------------------------------------------------------------
 // Defect: ~Object() invoked cleanup callbacks while still holding mCleanupMutex, so a callback
 // that called addCleanupCallback() on the same object self-deadlocked on a non-recursive mutex.
 // ---------------------------------------------------------------------------------------------

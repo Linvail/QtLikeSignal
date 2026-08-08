@@ -444,6 +444,49 @@ namespace QtLikeSignal
             ConnectionType aType
             );
 
+        //! Prunes one connection from its receiver's mIncoming when that connection ends.
+        //!
+        //! Held by shared_ptr inside the connection's own slot closure, so it is destroyed exactly
+        //! when boost destroys the slot -- whether that is a manual disconnect(), the sender Signal
+        //! being destroyed, or ~Object() below. Without it mIncoming would only ever grow: an
+        //! object that outlives a connection it received would keep a handle to a connection that
+        //! no longer exists, and eventually disconnect() a recycled one.
+        struct Cleanup
+        {
+            Cleanup
+                (
+                Object* aOwner,
+                std::weak_ptr<int> aLife
+                )
+                : mOwner( aOwner )
+                , mLife( std::move( aLife ) )
+            {
+            }
+
+            ~Cleanup();
+
+            Cleanup
+                (
+                const Cleanup&
+                ) = delete;
+
+            Cleanup& operator=
+                (
+                const Cleanup&
+                ) = delete;
+
+            Object* mOwner;                //!< Receiver owning the mIncoming entry.
+            std::weak_ptr<int> mLife;      //!< Receiver's life token; expired means it is gone.
+            ConnectionHandle mHandle;      //!< The entry to prune; set once the handle exists.
+        };
+
+        static ConnectionHandle
+        trackIncoming
+            (
+            const std::shared_ptr<Cleanup>& aCleanup,
+            ConnectionHandle aHandle
+            );
+
         //! Grants the event queue access to event(), which it alone invokes.
         friend class EventDispatcherDefault;
 
@@ -462,6 +505,16 @@ namespace QtLikeSignal
         mutable std::mutex mNameMutex;                       //!< Guards mObjectName.
         std::vector<std::function<void()> > mCleanupCallbacks;  //!< Callbacks to run on destruction.
         std::mutex mCleanupMutex;                            //!< Guards mCleanupCallbacks.
+
+        //! Connections where this object is the receiver, disconnected by ~Object().
+        //!
+        //! Without this a destroyed receiver's slot stays in the sender's slot list forever. The
+        //! wrapper's life-token check makes it inert, but inert is not gone: it retains its
+        //! captured state and is still walked on every emit, so one long-lived signal feeding
+        //! many short-lived receivers grows without bound in both memory and emit cost. Qt does
+        //! the equivalent by walking cd->senders in ~QObject().
+        std::vector<ConnectionHandle> mIncoming;
+        mutable std::mutex mIncomingMutex;                   //!< Guards mIncoming.
         static std::atomic<int> sNextTimerId;                //!< Process-wide timer id counter.
     };
 
@@ -494,8 +547,9 @@ namespace QtLikeSignal
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
         std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
+        std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aReceiver, weakLife );
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( auto&&... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity, cleanup]( auto&&... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -514,7 +568,7 @@ namespace QtLikeSignal
                 dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
-        return aSignal.connect( wrapper );
+        return trackIncoming( cleanup, aSignal.connect( wrapper ) );
     }
 
     //! Connect Overload 2 definition. If the target slot is overloaded, the compiler cannot deduce
@@ -545,8 +599,9 @@ namespace QtLikeSignal
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
         std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
+        std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aReceiver, weakLife );
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( SignalArgs... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity, cleanup]( SignalArgs... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -565,7 +620,7 @@ namespace QtLikeSignal
                 dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
-        return aSignal.connect( wrapper );
+        return trackIncoming( cleanup, aSignal.connect( wrapper ) );
     }
 
     //! Connect Overload 3 definition. Same as Overload 2, but specifically for const member
@@ -590,8 +645,9 @@ namespace QtLikeSignal
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
         std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
+        std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aReceiver, weakLife );
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( SignalArgs... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity, cleanup]( SignalArgs... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -610,7 +666,7 @@ namespace QtLikeSignal
                 dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
-        return aSignal.connect( wrapper );
+        return trackIncoming( cleanup, aSignal.connect( wrapper ) );
     }
 
     //! Connect Overload 4 definition. If an overloaded inherited slot returns a value (e.g. bool),
@@ -639,8 +695,9 @@ namespace QtLikeSignal
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
         std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
+        std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aReceiver, weakLife );
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( SignalArgs... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity, cleanup]( SignalArgs... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -659,7 +716,7 @@ namespace QtLikeSignal
                 dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
-        return aSignal.connect( wrapper );
+        return trackIncoming( cleanup, aSignal.connect( wrapper ) );
     }
 
     //! Connect Overload 5 definition. Same as Overload 4, but specifically for const member
@@ -683,8 +740,9 @@ namespace QtLikeSignal
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
         std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
+        std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aReceiver, weakLife );
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( SignalArgs... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity, cleanup]( SignalArgs... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -703,7 +761,7 @@ namespace QtLikeSignal
                 dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
-        return aSignal.connect( wrapper );
+        return trackIncoming( cleanup, aSignal.connect( wrapper ) );
     }
 
     //! Connect Overload 6 definition. If the target slot is overloaded (e.g. onEvent() and
@@ -726,8 +784,9 @@ namespace QtLikeSignal
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
         std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
+        std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aReceiver, weakLife );
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( SignalArgs... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity, cleanup]( SignalArgs... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -746,7 +805,7 @@ namespace QtLikeSignal
                 dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
-        return aSignal.connect( wrapper );
+        return trackIncoming( cleanup, aSignal.connect( wrapper ) );
     }
 
     //! Connect Overload 7 definition. Same as Overload 6, but specifically matches const member
@@ -767,8 +826,9 @@ namespace QtLikeSignal
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
         std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
+        std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aReceiver, weakLife );
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( SignalArgs... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity, cleanup]( SignalArgs... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -787,7 +847,7 @@ namespace QtLikeSignal
                 dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
-        return aSignal.connect( wrapper );
+        return trackIncoming( cleanup, aSignal.connect( wrapper ) );
     }
 
     //! Connect Overload 8 definition. If an overloaded slot returns a value (e.g. bool), it won't
@@ -810,8 +870,9 @@ namespace QtLikeSignal
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
         std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
+        std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aReceiver, weakLife );
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( SignalArgs... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity, cleanup]( SignalArgs... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -830,7 +891,7 @@ namespace QtLikeSignal
                 dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
-        return aSignal.connect( wrapper );
+        return trackIncoming( cleanup, aSignal.connect( wrapper ) );
     }
 
     //! Connect Overload 9 definition. Same as Overload 8, but specifically for const member
@@ -852,8 +913,9 @@ namespace QtLikeSignal
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
         std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
+        std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aReceiver, weakLife );
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( SignalArgs... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity, cleanup]( SignalArgs... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -872,7 +934,7 @@ namespace QtLikeSignal
                 dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
-        return aSignal.connect( wrapper );
+        return trackIncoming( cleanup, aSignal.connect( wrapper ) );
     }
 
     //! Connect Overload 10 definition. Captures anything that is not a member function: free
@@ -895,8 +957,9 @@ namespace QtLikeSignal
 
         std::weak_ptr<int> weakLife = aContext->objectLife();
         std::shared_ptr<Affinity> ctxAffinity = aContext->mAffinity;
+        std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aContext, weakLife );
 
-        auto wrapper = [weakLife, aContext, aSlot, aType, ctxAffinity]( auto&&... aArgs )
+        auto wrapper = [weakLife, aContext, aSlot, aType, ctxAffinity, cleanup]( auto&&... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -915,7 +978,7 @@ namespace QtLikeSignal
                 dispatchMetaCall( ctxAffinity, aContext, boundSlot, aType );
             };
 
-        return aSignal.connect( wrapper );
+        return trackIncoming( cleanup, aSignal.connect( wrapper ) );
     }
 
     //! Disconnects a signal connection using a connection handle. Thread-safe.

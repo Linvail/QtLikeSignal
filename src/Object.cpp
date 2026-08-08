@@ -85,7 +85,32 @@ namespace QtLikeSignal
         // shrinks the window in which such a wrapper can still observe this object as "alive" to
         // the check-then-post race itself, instead of the whole destructor body (which below runs
         // arbitrary user cleanup-callback code).
+        //
+        // Doing it before the disconnect loop below is also what keeps that loop re-entrancy-free:
+        // disconnect() destroys the slot, which destroys its captured Cleanup, whose destructor
+        // checks this very token and bails out rather than trying to prune mIncoming while we are
+        // already tearing it down.
         mLife.reset();
+
+        // Disconnect every connection where this object is the receiver, so the sender stops
+        // holding a slot that can never do anything again. The life token above already makes such
+        // a slot inert, but inert is not gone: it keeps its captured state and is still walked on
+        // every emit, so a long-lived signal accumulates dead slots without bound. Qt does the
+        // same thing by walking cd->senders in ~QObject().
+        //
+        // Swap the handles out and disconnect them with mIncomingMutex released. Holding it across
+        // disconnect() would nest our mutex inside boost's signal mutex, the reverse of the order
+        // ~Cleanup takes them in (boost destroys slots with its signal mutex held), and there is no
+        // reason to invite that inversion when a swap avoids it entirely.
+        std::vector<ConnectionHandle> incoming;
+        {
+            std::lock_guard<std::mutex> lock( mIncomingMutex );
+            incoming.swap( mIncoming );
+        }
+        for( auto& handle : incoming )
+        {
+            handle.disconnect();
+        }
 
         // Move the callbacks out from under mCleanupMutex before invoking any of them. Running them
         // while still holding the lock deadlocks on the non-recursive mutex if a callback calls
@@ -126,6 +151,54 @@ namespace QtLikeSignal
                 dispatcher->removeEventsForReceiver( this );
             }
         }
+    }
+
+    //! Records a freshly-made connection on its receiver, so ~Object() can disconnect it.
+    //!
+    //! The receiver is recovered from the Cleanup rather than passed separately, which keeps the
+    //! call identical in all ten connect() overloads. Returns the handle so call sites can simply
+    //! wrap their existing return expression. Thread-safe.
+    ConnectionHandle Object::trackIncoming
+        (
+        const std::shared_ptr<Cleanup>& aCleanup,  //!< Cleanup token created for this connection.
+        ConnectionHandle aHandle                    //!< The connection just established.
+        )
+    {
+        if( !aCleanup || !aCleanup->mOwner )
+        {
+            return aHandle;
+        }
+
+        // Publish the handle into the Cleanup before registering it, so that if the connection is
+        // torn down concurrently the destructor below has something to match on rather than the
+        // default-constructed handle.
+        aCleanup->mHandle = aHandle;
+
+        Object* receiver = aCleanup->mOwner;
+        std::lock_guard<std::mutex> lock( receiver->mIncomingMutex );
+        receiver->mIncoming.push_back( aHandle );
+        return aHandle;
+    }
+
+    //! Removes this connection from its receiver's mIncoming as the connection is destroyed.
+    //!
+    //! Runs when boost destroys the slot holding this token -- a manual disconnect(), the sender
+    //! Signal being destroyed, or ~Object()'s own disconnect loop. Without it mIncoming would only
+    //! ever grow for an object that outlives connections made to it, and would eventually hold
+    //! stale handles.
+    Object::Cleanup::~Cleanup()
+    {
+        // The receiver is gone or already being destroyed; ~Object() has taken mIncoming over and
+        // touching mOwner here would be a use-after-free. This is also what makes ~Object()'s own
+        // disconnect loop non-re-entrant, since it resets the token before disconnecting.
+        if( mLife.expired() )
+        {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock( mOwner->mIncomingMutex );
+        auto& handles = mOwner->mIncoming;
+        handles.erase( std::remove( handles.begin(), handles.end(), mHandle ), handles.end() );
     }
 
     //! Internal helper to schedule or update a callLater deferred invocation.
