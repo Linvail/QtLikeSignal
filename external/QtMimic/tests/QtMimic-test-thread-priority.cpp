@@ -6,6 +6,7 @@
 //! Copyright 2026 by Garmin Ltd. or its subsidiaries.
 
 #include "Thread.hpp"
+#include "Object.hpp"
 
 #include "gtest/gtest.h"
 #include <atomic>
@@ -47,7 +48,7 @@ namespace
             return false;
         }
         return ranFuture.wait_for( std::chrono::milliseconds( aTimeoutMs ) ) ==
-            std::future_status::ready;
+               std::future_status::ready;
     }
 
     //! A thread that is not running reports InheritPriority.
@@ -213,13 +214,16 @@ namespace
     TEST( ThreadPriority, PriorityIsInEffectBeforeStartedSignal )
     {
         Thread thread( "prio-before-started-signal" );
-
+        Thread localThread;
+        Object local( &localThread );
         std::mutex mutex;
         std::condition_variable cv;
         bool sampled = false;
         Thread::Priority sampledPriority = Thread::InheritPriority;
 
-        auto connection = thread.connectStarted( [&]()
+        localThread.start();
+
+        auto connection = Object::connect( thread.getStarted(), &local, [&]()
             {
                 std::lock_guard<std::mutex> locker( mutex );
                 sampledPriority = thread.priority();
@@ -241,6 +245,8 @@ namespace
 
         thread.quit();
         thread.join();
+        localThread.quit();
+        localThread.join();
     }
 
     //! setPriority() racing the thread's own exit must not crash or touch a dead handle.
@@ -304,7 +310,8 @@ namespace
         }
 
         const Thread::Priority finalPriority = thread.priority();
-        EXPECT_TRUE( finalPriority == Thread::LowPriority || finalPriority == Thread::HighPriority );
+        EXPECT_TRUE( finalPriority == Thread::LowPriority || finalPriority == Thread::HighPriority )
+        ;
 
         thread.quit();
         thread.join();
@@ -402,13 +409,16 @@ namespace
         TEST( ThreadPriority, WindowsPriorityIsInForceBeforeStartedSignal )
         {
             Thread thread( "prio-win-before-started" );
-
+            Thread localThread;
+            Object local( &localThread );
             std::mutex mutex;
             std::condition_variable cv;
             bool sampled = false;
             int sampledNativePriority = THREAD_PRIORITY_ERROR_RETURN;
 
-            auto connection = thread.connectStarted( [&]()
+            localThread.start();
+
+            auto connection = Object::connect( thread.getStarted(), &local, [&]()
                 {
                     std::lock_guard<std::mutex> locker( mutex );
                     sampledNativePriority = GetThreadPriority( GetCurrentThread() );
@@ -430,6 +440,8 @@ namespace
 
             thread.quit();
             thread.join();
+            localThread.quit();
+            localThread.join();
         }
 
         //! InheritPriority means the creating thread's priority, and has to be made to happen.
@@ -452,7 +464,11 @@ namespace
             bool sampled = false;
             int sampledNativePriority = THREAD_PRIORITY_ERROR_RETURN;
 
-            auto connection = thread.connectStarted( [&]()
+            Thread localThread;
+            Object local( &localThread );
+            localThread.start();
+
+            auto connection = Object::connect( thread.getStarted(), &local, [&]()
                 {
                     std::lock_guard<std::mutex> locker( mutex );
                     sampledNativePriority = GetThreadPriority( GetCurrentThread() );
@@ -484,6 +500,8 @@ namespace
 
             thread.quit();
             thread.join();
+            localThread.quit();
+            localThread.join();
         }
 
     #endif // _WIN32

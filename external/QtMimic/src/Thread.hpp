@@ -49,7 +49,6 @@ namespace QtMimic
     class Thread
     {
     public:
-        using LifecycleSignalType = Signal<>;
         explicit Thread
             (
             const std::string& aName = std::string()
@@ -102,7 +101,6 @@ namespace QtMimic
 
             InheritPriority
         };
-
         void start
             (
             Priority aPriority = InheritPriority
@@ -155,15 +153,9 @@ namespace QtMimic
 
         const std::string& name() const;
 
-        Connection connectStarted
-            (
-            const LifecycleSignalType::Slot& aSlot
-            );
+        SignalView<>& getStarted() const;
 
-        Connection connectFinished
-            (
-            const LifecycleSignalType::Slot& aSlot
-            );
+        SignalView<>& getFinished() const;
 
         static Thread* current();
 
@@ -238,8 +230,8 @@ namespace QtMimic
         std::function<void( int )> mDispatcher; //!< External event pump (optional)
         std::function<void( int )> mWaiter;   //!< External blocking wait (optional)
         int mWaiterTimeoutMs = -1;            //!< Timeout for external wait (optional)
-        LifecycleSignalType mStarted;         //!< Emitted when loop starts
-        LifecycleSignalType mFinished;        //!< Emitted when loop exits
+        Signal<> mStarted;         //!< Emitted when loop starts
+        Signal<> mFinished;        //!< Emitted when loop exits
 
         //! Guards mPriority, mPriorityNeedsReset, and the native handle members above, including
         //! every use of that handle (creation, priority application, join()).

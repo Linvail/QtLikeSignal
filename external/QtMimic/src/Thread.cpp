@@ -485,24 +485,18 @@ namespace QtMimic
         return mName;
     }
 
-    //! Connect a callback invoked when the thread event loop starts (Qt-like
-    //! QThread::started()).
-    Connection Thread::connectStarted
-        (
-        const LifecycleSignalType::Slot& aSlot
-        )
+    //! Return a view of the signal emitted when the thread event loop starts
+    //!  (Qt-like QThread::started()).
+    SignalView<>& Thread::getStarted() const
     {
-        return mStarted.connect( aSlot );
+        return mStarted.view();
     }
 
-    //! Connect a callback invoked when the thread event loop finishes (Qt-like
-    //! QThread::finished()).
-    Connection Thread::connectFinished
-        (
-        const LifecycleSignalType::Slot& aSlot
-        )
+    //! Return a view of the signal emitted when the thread event loop exits
+    //!  (Qt-like QThread::finished()).
+    SignalView<>& Thread::getFinished() const
     {
-        return mFinished.connect( aSlot );
+        return mFinished.view();
     }
 
     //! @return this Thread's ThreadData. Outlives this Thread; its thread() reports

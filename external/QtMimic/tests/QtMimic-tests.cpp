@@ -640,24 +640,27 @@ namespace
     TEST( ThreadTest, StartedAndFinishedSignalsAreEmitted )
     {
         Thread worker( "thread-lifecycle-worker" );
+        Thread localThread;
+        Object local( &localThread ); // context for the signal connections
 
         std::mutex mutex;
         std::condition_variable cv;
         bool started = false;
         bool finished = false;
 
+        localThread.start();
+
         // Connect BEFORE start(): the started signal is emitted from inside the
         // worker's loop the moment it begins, so a connection made afterwards could
-        // miss it. The callbacks run on the worker thread, hence the mutex/condvar
-        // handshake to publish the flags back to this thread.
-        auto startedConnection = worker.connectStarted( [&]()
+        // miss it.
+        auto startedConnection = Object::connect( worker.getStarted(), &local, [&]()
             {
                 std::lock_guard<std::mutex> locker( mutex );
                 started = true;
                 cv.notify_all();
             } );
 
-        auto finishedConnection = worker.connectFinished( [&]()
+        auto finishedConnection = Object::connect( worker.getFinished(), &local, [&]()
             {
                 std::lock_guard<std::mutex> locker( mutex );
                 finished = true;
@@ -687,6 +690,9 @@ namespace
 
         startedConnection.disconnect();
         finishedConnection.disconnect();
+
+        localThread.quit();
+        localThread.join();
     }
 
 } // namespace
