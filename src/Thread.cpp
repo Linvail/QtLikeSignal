@@ -52,7 +52,7 @@ namespace QtLikeSignal
                             //!< no-argument call.
         )
     {
-        if( mRunning.load() )
+        if( mData->isThreadRunning() )
         {
             return;
         }
@@ -63,12 +63,12 @@ namespace QtLikeSignal
         // reap.
         wait();
 
-        // Held across thread creation so setPriority() can never observe mRunning == true while
-        // the handle is still the previous run's (or absent). A run body that finishes before
+        // Held across thread creation so setPriority() can never observe the running flag set
+        // while the handle is still the previous run's (or absent). A run body that finishes before
         // this scope ends simply waits for the lock at its tail.
         std::lock_guard<std::mutex> startLock( mPriorityMutex );
 
-        mRunning.store( true );
+        mData->setThreadRunning( true );
         mFinished.store( false );
         mExiting.store( false );
         mPriorityNeedsReset = false;
@@ -144,12 +144,13 @@ namespace QtLikeSignal
         }
 
         {
-            // Under the same mutex setPriority() uses. This is the only place mRunning becomes
-            // false, so a setPriority() holding the lock and seeing mRunning == true knows this
+            // Under the same mutex setPriority() uses. This is the only place a *running* thread
+            // clears the flag, so a setPriority() holding the lock and seeing it set knows this
             // store has not happened yet and the OS thread is still alive -- which is what makes
-            // using the native handle there safe rather than merely likely.
+            // using the native handle there safe rather than merely likely. (The two thread-
+            // creation-failure paths also clear it, but those run before any thread exists.)
             std::lock_guard<std::mutex> priorityLock( mPriorityMutex );
-            mRunning.store( false );
+            mData->setThreadRunning( false );
         }
         mFinished.store( true );
         {
@@ -184,7 +185,7 @@ namespace QtLikeSignal
     //! Checks if the thread is currently running. Thread-safe.
     bool Thread::isRunning() const
     {
-        return mRunning.load();
+        return mData->isThreadRunning();
     }
 
     //! Checks if the thread has finished execution. Thread-safe.
@@ -227,7 +228,7 @@ namespace QtLikeSignal
         #else
             const bool haveThread = mJoinable;
         #endif
-        if( !mRunning.load() || !haveThread )
+        if( !mData->isThreadRunning() || !haveThread )
         {
             std::fprintf( stderr,
                 "Thread::setPriority: cannot set priority, thread is not running\n" );
@@ -244,7 +245,7 @@ namespace QtLikeSignal
     Thread::Priority Thread::priority() const
     {
         std::lock_guard<std::mutex> lock( mPriorityMutex );
-        if( !mRunning.load() )
+        if( !mData->isThreadRunning() )
         {
             return InheritPriority;
         }

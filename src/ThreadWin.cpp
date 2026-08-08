@@ -22,7 +22,7 @@ namespace QtLikeSignal
         if( handle == 0 )
         {
             std::fprintf( stderr, "Thread::start: failed to create thread\n" );
-            mRunning.store( false );
+            mData->setThreadRunning( false );
             return;
         }
 

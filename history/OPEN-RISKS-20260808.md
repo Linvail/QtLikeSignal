@@ -17,7 +17,7 @@ no runtime probe was written.
 | R17 | Destroyed receivers are never disconnected — unbounded dead-slot growth | **High** | Probe (672 MB, 327 ms emit) — **Fixed 2026-08-08** |
 | R18 | `CoreApplication::exec()` after `quit()` burns 100% CPU (was R1) | **High** | Probe (cpu/wall = 100%) |
 | R19 | Objects with no affinity get cross-thread *direct* calls; Qt drops them | Medium | Probe |
-| R20 | `~Object()`'s new warning dereferences a `Thread*` that may dangle | Low-Med | Inspection — *self-inflicted this pass* |
+| R20 | `~Object()`'s new warning dereferences a `Thread*` that may dangle | Low-Med | Inspection — *self-inflicted* — **Fixed 2026-08-08** |
 | R21 | `CoreApplication` has no test coverage at all | Medium | Inspection |
 | R22 | Platform dispatchers are still empty shells (was R6) | Medium | Inspection |
 | R23 | `moveToThread(nullptr)` can leave stale `ThreadData` behind | Low | Inspection |
@@ -147,9 +147,19 @@ direct-connection suite depends on `Auto` resolving to `Direct`. Changing the ru
 auto-adoption would break those tests; adding auto-adoption is the larger, Qt-faithful fix. Until
 then, the hazard is a silent unsynchronised cross-thread slot invocation with no diagnostic.
 
-## R20 — `~Object()`'s new cross-thread warning dereferences a `Thread*` that may dangle
+## R20 — `~Object()`'s new cross-thread warning dereferences a `Thread*` that may dangle *(fixed 2026-08-08)*
 
-**Severity: Low-Medium. Inspection. Introduced by this pass — flagging it against my own change.**
+**Severity: Low-Medium. Inspection. Introduced by this pass — flagged against my own change.**
+
+> **Resolution (2026-08-08).** The running flag moved out of `Thread` and into `ThreadData` as
+> `mThreadRunning`, with `Thread::isRunning()` reading through to it — one source of truth, not a
+> mirror that could drift. The destructor now asks the `ThreadData` it already holds alive
+> (`ownerData->isThreadRunning()`) and only ever *compares* the `Thread*`
+> (`ownerData->thread() != Thread::currentThread()`), never dereferences it. `grep` over `src/*.cpp`
+> confirms no remaining dereference of a `thread()` result anywhere.
+>
+> Behaviour is unchanged: the suite still emits exactly the same two warnings, 66 tests pass, zero
+> TSan reports, deterministic across four runs.
 
 The diagnostic added to `~Object()` reads:
 
@@ -275,7 +285,7 @@ self-enforcing.
 1. ~~**R17**~~ — done 2026-08-08.
 2. **R18** — one-line fix (clear `mInterrupt`), and it removes a 100% CPU spin.
 3. **R21** — add `CoreApplicationTest`; it is what let R18 survive, and R9 is waiting behind it.
-4. **R20** — small, and it closes a hazard this pass opened.
+4. ~~**R20**~~ — done 2026-08-08.
 5. **R19** — needs the auto-adoption design decision first; do not change the rule piecemeal.
 
 ## Not re-verified this pass

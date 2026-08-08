@@ -135,7 +135,7 @@ namespace QtLikeSignal
         if( code != 0 )
         {
             std::fprintf( stderr, "Thread::start: thread creation error\n" );
-            mRunning.store( false );
+            mData->setThreadRunning( false );
             return;
         }
 

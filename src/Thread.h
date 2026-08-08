@@ -166,7 +166,6 @@ namespace QtLikeSignal
         #endif
 
         std::shared_ptr<ThreadData> mData;        //!< This thread's dispatcher-holding data.
-        std::atomic<bool> mRunning { false };      //!< True while the OS thread is executing.
         std::atomic<bool> mFinished { false };     //!< True once the OS thread has finished.
         std::atomic<bool> mExiting { false };      //!< Set by exit()/quit() to stop exec()'s loop.
         std::atomic<int> mExitCode { 0 };          //!< Return code passed to exit(), reported by exec().
@@ -175,11 +174,11 @@ namespace QtLikeSignal
 
         //! Guards mPriority, the native handle members, and every use of that handle.
         //!
-        //! Not merely protecting the enum. The run body clears mRunning while holding this mutex,
-        //! so a setPriority() that has observed mRunning == true under the same lock is
+        //! Not merely protecting the enum. The run body clears the running flag while holding
+        //! this mutex, so a setPriority() that has observed it true under the same lock is
         //! guaranteed the OS thread has not yet reached the end of its body -- without that, the
         //! handle could be touched after the thread had exited. start() holds it across thread
-        //! creation for the same reason in reverse: nobody may see mRunning == true before the
+        //! creation for the same reason in reverse: nobody may see the flag true before the
         //! handle exists. It is never held across a blocking wait, so a waiter cannot keep the
         //! finishing thread from taking it.
         mutable std::mutex mPriorityMutex;

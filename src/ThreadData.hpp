@@ -38,6 +38,13 @@ namespace QtLikeSignal
             Thread* aThread
             );
 
+        bool isThreadRunning() const;
+
+        void setThreadRunning
+            (
+            bool aRunning
+            );
+
         std::shared_ptr<AbstractEventDispatcher> dispatcher() const;
 
         void setDispatcher
@@ -46,6 +53,13 @@ namespace QtLikeSignal
             );
 
         std::atomic<Thread*> mThread { nullptr };                 //!< Owning thread; nulled by ~Thread().
+
+        //! True while the owning thread's body is executing. Lives here rather than in Thread so
+        //! that "is this object's thread still running?" can be answered from any thread without
+        //! dereferencing a Thread* that a concurrent ~Thread() could free -- the whole point of
+        //! ThreadData outliving its Thread. Thread::isRunning() reads through to this, so there is
+        //! one source of truth rather than a mirror that could drift.
+        std::atomic<bool> mThreadRunning { false };
         mutable std::mutex mDispatcherMutex;                      //!< Guards mDispatcher.
         std::shared_ptr<AbstractEventDispatcher> mDispatcher;    //!< This thread's dispatcher, if any.
 

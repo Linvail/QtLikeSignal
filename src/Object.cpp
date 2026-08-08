@@ -61,23 +61,28 @@ namespace QtLikeSignal
         // defers the actual delete onto that thread, where it is safe by construction). This is a
         // diagnostic only; it changes no behavior below.
         //
-        // Gated on owner->isRunning(), not just "a different thread": destroying an object from
-        // another thread AFTER its affinity thread's loop has already stopped (the ordinary
-        // "workerThread.quit(); workerThread.wait();" teardown idiom used all over the test suite,
-        // where a moved-to object is then destroyed by the test's own thread) is completely safe --
-        // there is no loop left to race. isRunning() also naturally covers a Thread destroying
-        // itself (it self-adopts via moveToThread(this)): ~Thread() calls quit()+wait() before this
-        // base destructor runs, so isRunning() is already false by the time we get here regardless
-        // of which thread ends up calling delete on it.
-        if( Thread* owner = thread() )
+        // Gated on the owning thread still running, not just "a different thread": destroying an
+        // object from another thread AFTER its affinity thread's loop has already stopped (the
+        // ordinary "workerThread.quit(); workerThread.wait();" teardown idiom used all over the
+        // test suite, where a moved-to object is then destroyed by the test's own thread) is
+        // completely safe -- there is no loop left to race. That also naturally covers a Thread
+        // destroying itself (it self-adopts via moveToThread(this)): ~Thread() calls quit()+wait()
+        // before this base destructor runs, so the flag is already clear by the time we get here
+        // regardless of which thread ends up calling delete on it.
+        //
+        // Everything here is read through the ThreadData, which this scope keeps alive, and the
+        // Thread* is only ever *compared*, never dereferenced. Asking the Thread itself
+        // (owner->isRunning()) would have reintroduced exactly the dangling-pointer hazard the
+        // Affinity indirection exists to remove: thread() can hand back a pointer that a
+        // concurrent ~Thread() frees before the call lands.
+        const std::shared_ptr<ThreadData> ownerData = mAffinity->data();
+        if( ownerData && ownerData->isThreadRunning()
+            && ownerData->thread() != Thread::currentThread() )
         {
-            if( owner != Thread::currentThread() && owner->isRunning() )
-            {
-                std::fprintf( stderr,
-                    "Object::~Object: object destroyed from a thread other than the one it lives "
-                    "in while that thread's event loop is still running; this is not safe. Use "
-                    "deleteLater() to destroy an object from another thread.\n" );
-            }
+            std::fprintf( stderr,
+                "Object::~Object: object destroyed from a thread other than the one it lives "
+                "in while that thread's event loop is still running; this is not safe. Use "
+                "deleteLater() to destroy an object from another thread.\n" );
         }
 
         // Invalidate the life token first. connect()/callLater() wrappers running on other threads
