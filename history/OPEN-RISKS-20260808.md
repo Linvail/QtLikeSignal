@@ -12,6 +12,27 @@ no runtime probe was written.
 
 ## Status at a glance
 
+> **Open defects now have failing tests.** `src/tests/test_known_defects.cpp` proves R23, R24 and
+> R26 are real and stays red until each is fixed. For a green baseline meanwhile:
+> `QtLikeSignal-Tests --gtest_filter=-KnownDefect.*` (89 pass). R25 and R27 are deliberately not
+> represented -- see that file's header for why a runtime test would be dishonest for those two.
+
+> **Why a sanitizer never caught R17 or R23.** Two independent reasons, both verified. First,
+> address and thread sanitizers are mutually exclusive in `tools/toolchain-linux.py` and the build
+> was configured with `-fsanitize=thread`, so LeakSanitizer never ran at all. (Older comments in the
+> repo claiming "the default debug build enables AddressSanitizer" are stale.) Second, and more
+> importantly, **neither defect is a leak**: the accumulated events and dead slots stay *reachable*
+> from live objects, and LSan only reports blocks that are unreachable at exit. Confirmed on the real
+> code -- running the R23 tests under `-fsanitize=address` with `detect_leaks=1` retained 124 MB and
+> produced no LeakSanitizer output whatsoever. A long-running process could reach gigabytes with a
+> clean report.
+>
+> Switching sanitizers is cheap (`./waf configure --enable-address-sanitizer-on-Linux`) and worth
+> doing periodically: the first ASan run found a **stack-use-after-return** in
+> `ThreadTest.PostFromOwnThreadStillDefers` that TSan cannot detect by construction. They catch
+> disjoint classes of defect; neither alone is sufficient.
+
+
 | ID  | Risk | Severity | Confirmed by |
 |-----|------|----------|--------------|
 | R17 | Destroyed receivers are never disconnected — unbounded dead-slot growth | **High** | Probe (672 MB, 327 ms emit) — **Fixed 2026-08-08** |
