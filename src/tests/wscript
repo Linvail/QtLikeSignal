@@ -5,4 +5,7 @@ def build(bld):
     kw["includes"] = ["."]
     kw["use"] = ["QtLikeSignal", "google-test"]
 
+    if bld.env.DEST_OS == "win32":
+        kw["lib"] = ["user32"]
+
     bld(target="QtLikeSignal-Tests", **kw)
