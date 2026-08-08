@@ -18,6 +18,7 @@ namespace QtLikeSignal
         : Object()
     {
         mData = std::make_shared<ThreadData>();
+        mData->setThread( this );
     }
 
     //! Destroys the thread, waiting for it to finish if running.
@@ -25,6 +26,12 @@ namespace QtLikeSignal
     {
         quit();
         wait();
+
+        // Clear the back-pointer LAST, once the OS thread is guaranteed stopped. Anything still
+        // holding this ThreadData (an Object living here, an Affinity captured by a connect() made
+        // to one) now sees thread() == nullptr instead of a dangling Thread*, the same thing Qt does
+        // in ~QThread() with `d->data->thread.storeRelease(nullptr)`.
+        mData->setThread( nullptr );
     }
 
     //! Starts execution of the thread by invoking run(). Thread-safe.

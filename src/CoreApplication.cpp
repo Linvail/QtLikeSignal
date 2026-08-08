@@ -39,9 +39,9 @@ namespace QtLikeSignal
 
         // Self-adopt, mirroring exactly what Thread::start()'s lambda does for a worker thread
         // (sCurrentThread = this; this->moveToThread(this);). Without this, mMainThread's own
-        // Object-inherited thread affinity (mThreadData, set via moveToThread) never gets pointed
-        // at its own dispatcher-holding ThreadData (mData) -- those are two separate fields that
-        // only coincide once an object has been moved onto itself. Anything that targets the
+        // Object-inherited thread affinity (its Affinity box, pointed via moveToThread) never gets
+        // pointed at its own dispatcher-holding ThreadData (mData) -- those are two separate fields
+        // that only coincide once an object has been moved onto itself. Anything that targets the
         // Thread object directly (dispatchMetaCall(mainThreadPtr, ...), e.g. via Thread::post())
         // would silently fail to find a dispatcher without this, even though one exists.
         mMainThread->moveToThread( mMainThread.get() );

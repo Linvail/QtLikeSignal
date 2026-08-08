@@ -533,73 +533,22 @@ TEST( ObjectDefectTest, ConcurrentMoveToThreadAndThreadDataAccessStress )
 }
 
 // ---------------------------------------------------------------------------------------------
-// Defect: ~Object() invalidated the life token (mLife) as its LAST step rather than its first,
-// widening the window in which a concurrent connect()/callLater() wrapper could still queue a
-// new event for an object that is mid-destruction.
-// ---------------------------------------------------------------------------------------------
-
-//! Regression/stress test for the ~Object() teardown ordering fix.
-//!
-//! The life token is now invalidated as the very first step of destruction, before running
-//! cleanup callbacks or erasing pending call-laters, rather than as the last step after
-//! removeEventsForReceiver() has already run. The residual window this leaves (a connect()
-//! wrapper's weakLife.lock() succeeding in the brief moment before mLife.reset() executes) is
-//! narrow in both the old and new code and not reliably reproducible from a black-box test on its
-//! own; what the reordering robustly guarantees is that removeEventsForReceiver() now always runs
-//! strictly *after* the life token is invalidated within the same destructor call, giving it a
-//! chance to clean up anything that slips past that narrow check -- unlike before, where
-//! anything posted in the tail window after removeEventsForReceiver() had already run had no
-//! further safety net at all.
-//!
-//! This test exercises many iterations of concurrent destroy-vs-emit and only checks that they
-//! complete without crashing; treat it as a stress/robustness check best combined with
-//! AddressSanitizer/ThreadSanitizer, not as proof either the old code always fails or the new
-//! code is fully race-free (see the "not patched" notes in CHANGES.md for the fully-airtight fix
-//! this would need).
-TEST( ObjectDefectTest, ConcurrentEmitDuringDestructionStress )
-{
-    Thread workerThread;
-    workerThread.start();
-    while( !workerThread.eventDispatcher() )
-    {
-        std::this_thread::yield();
-    }
-
-    constexpr int kIterations = 300;
-
-    for( int i = 0; i < kIterations; ++i )
-    {
-        auto* victim = new Object();
-        victim->moveToThread( &workerThread );
-
-        Signal<int> sig;
-        Object::connect( sig, victim, []( int )
-            {
-            }, ConnectionType::QueuedConnection );
-
-        std::atomic<bool> go { false };
-        std::thread racer(
-            [&sig, &go]()
-            {
-                while( !go.load( std::memory_order_acquire ) )
-                {
-                    std::this_thread::yield();
-                }
-                sig.emit( 0 ); // races against `delete victim` below
-            } );
-
-        go.store( true, std::memory_order_release );
-        delete victim;
-
-        racer.join();
-    }
-
-    workerThread.quit();
-    workerThread.wait();
-
-    SUCCEED();
-}
-
+// Formerly: ObjectDefectTest.ConcurrentEmitDuringDestructionStress.
+//
+// That test raced `delete victim` (called from the test's own thread) against a queued
+// `sig.emit()` (from a third thread) while `victim` lived on a *fourth*, still-running
+// workerThread. That is precisely the pattern Qt's own qobject.cpp documents as unsupported:
+// "QObject: shared QObject was deleted directly. The program is malformed and may crash." Qt's
+// safety for cross-thread teardown comes from deleteLater() deferring the actual delete onto the
+// object's own thread (where it can never race that thread's own event loop, since it's the same
+// thread) -- not from making a raw, foreign-thread delete safe. QObject::event()'s DeferredDelete/
+// MetaCall cases dereference the receiver exactly the way Object::event() does; nothing about Qt's
+// dispatch loop is intrinsically safer.
+//
+// We now make that same contract explicit (see the warning at the top of ~Object() in Object.cpp)
+// rather than trying to engineer around a scenario Qt itself does not guarantee. The test above
+// exercised exactly that out-of-contract pattern, so it was removed rather than "fixed" -- there is
+// nothing to fix here that Qt itself does not also leave unfixed.
 // ---------------------------------------------------------------------------------------------
 // Defect: ~Object() invoked cleanup callbacks while still holding mCleanupMutex, so a callback
 // that called addCleanupCallback() on the same object self-deadlocked on a non-recursive mutex.
@@ -873,6 +822,92 @@ TEST( ObjectDefectTest, PendingDeleteLaterIsProcessedWhenThreadStops )
     EXPECT_TRUE( destroyed->load() )
         << "deleteLater() was still pending when the loop stopped, and the object was leaked "
         "instead of destroyed.";
+}
+
+// ---------------------------------------------------------------------------------------------
+// Contract: deleteLater() is idempotent -- calling it repeatedly, from any thread, destroys the
+// object exactly once. Enforced by a de-bounce guard mirroring Qt's own
+// QObjectPrivate::deleteLaterCalled ("De-bounce QDeferredDeleteEvents", qobject.cpp).
+// ---------------------------------------------------------------------------------------------
+
+//! Verifies deleteLater() is idempotent across threads.
+//!
+//! NOT a regression test: this passes with or without the de-bounce guard, and deliberately so --
+//! it pins the observable contract, not one particular implementation of it. Two pre-existing
+//! mechanisms already make a duplicate DeferredDeleteEvent harmless, and between them they leave
+//! no reachable window for a double-dispatch:
+//!   - both events drained into the SAME processEvents() batch: the deletedReceivers set in
+//!     EventDispatcherDefault::processEvents() skips the second one;
+//!   - second event still in the live queue when the first is dispatched: ~Object() calls
+//!     removeEventsForReceiver(), which strips it before it can ever be drained.
+//! The only ordering those two do not cover -- second event posted after the receiver is already
+//! destroyed -- cannot arise from a correct caller, because deleteLater() would itself be running
+//! on freed memory. The guard is therefore Qt parity and defense-in-depth (and one less redundant
+//! heap allocation), not a fix for a reachable defect; this test locks in the behavior so a
+//! future change to either mechanism above cannot silently make repeat calls observable.
+//!
+//! workerThread is parked inside a blocking slot (the same technique used elsewhere in this
+//! file) for the whole time both deleteLater() calls run, and only released afterward. Without
+//! that, workerThread -- already running -- could drain and dispatch the first posted event,
+//! deleting victim, before the second thread's call had even started; that call would then be
+//! made on already-freed memory, which is a bug in the test's own synchronization rather than
+//! anything about deleteLater(). An earlier draft of this test omitted the park and ThreadSanitizer
+//! caught exactly that.
+TEST( ObjectDefectTest, DeleteLaterIsDebounced )
+{
+    Thread workerThread;
+    workerThread.start();
+    while( !workerThread.eventDispatcher() )
+    {
+        std::this_thread::yield();
+    }
+
+    std::promise<void> blockEnteredPromise;
+    std::promise<void> blockReleasePromise;
+    auto blockEnteredFuture = blockEnteredPromise.get_future();
+    auto blockReleaseFuture = blockReleasePromise.get_future();
+
+    Object dummyContext;
+    dummyContext.moveToThread( &workerThread );
+
+    Signal<> blockSig;
+    Object::connect(
+        blockSig,
+        &dummyContext,
+        [&blockEnteredPromise, &blockReleaseFuture]()
+        {
+            blockEnteredPromise.set_value();
+            blockReleaseFuture.wait();
+        },
+        ConnectionType::QueuedConnection );
+
+    blockSig.emit();
+    blockEnteredFuture.get();
+
+    // workerThread is now parked inside the slot above, so nothing posted below can be
+    // dispatched -- and victim cannot be deleted -- until it is released.
+    auto destroyCount = std::make_shared<std::atomic<int> >( 0 );
+    auto* victim = new Object();
+    victim->moveToThread( &workerThread );
+    victim->addCleanupCallback( [destroyCount]()
+        {
+            destroyCount->fetch_add( 1 );
+        } );
+
+    std::thread secondCaller( [victim]()
+        {
+            victim->deleteLater();
+        } );
+    victim->deleteLater();
+    secondCaller.join();
+
+    blockReleasePromise.set_value();
+
+    workerThread.quit();
+    workerThread.wait();
+
+    EXPECT_EQ( destroyCount->load(), 1 )
+        << "deleteLater() called twice destroyed the object more than once, or not at all.";
 }
 
 // ---------------------------------------------------------------------------------------------

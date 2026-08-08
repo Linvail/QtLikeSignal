@@ -41,20 +41,45 @@ namespace QtLikeSignal
     //! Constructs an object.
     Object::Object()
         : mLife( std::make_shared<int>( 0 ) )
+        // Store the thread's ThreadData, not the Thread itself: it outlives the Thread, so this
+        // object's affinity can never become a dangling pointer. Held in an Affinity box read at
+        // emit time, so a later moveToThread() redirects existing connections too.
+        , mAffinity( std::make_shared<Affinity>(
+              Thread::currentThread() ? Thread::currentThread()->threadData() : nullptr ) )
     {
-        Thread* current = Thread::currentThread();
-        mThread.store( current );
-        if( current )
-        {
-            std::shared_ptr<ThreadData> data = current->threadData();
-            std::lock_guard<std::mutex> lock( mThreadDataMutex );
-            mThreadData = std::move( data );
-        }
     }
 
     //! Destroys the object and triggers all registered cleanup callbacks.
     Object::~Object()
     {
+        // Qt does not guarantee this is safe either: deleting a QObject directly from a thread
+        // other than the one it lives in, while that thread's own event loop may still be
+        // dispatching to it, is documented in Qt's own source as a malformed program ("QObject:
+        // shared QObject was deleted directly. The program is malformed and may crash." --
+        // qobject.cpp). We make the same contract explicit instead of trying to engineer around
+        // it: destruction is only safe from this object's own thread, or via deleteLater() (which
+        // defers the actual delete onto that thread, where it is safe by construction). This is a
+        // diagnostic only; it changes no behavior below.
+        //
+        // Gated on owner->isRunning(), not just "a different thread": destroying an object from
+        // another thread AFTER its affinity thread's loop has already stopped (the ordinary
+        // "workerThread.quit(); workerThread.wait();" teardown idiom used all over the test suite,
+        // where a moved-to object is then destroyed by the test's own thread) is completely safe --
+        // there is no loop left to race. isRunning() also naturally covers a Thread destroying
+        // itself (it self-adopts via moveToThread(this)): ~Thread() calls quit()+wait() before this
+        // base destructor runs, so isRunning() is already false by the time we get here regardless
+        // of which thread ends up calling delete on it.
+        if( Thread* owner = thread() )
+        {
+            if( owner != Thread::currentThread() && owner->isRunning() )
+            {
+                std::fprintf( stderr,
+                    "Object::~Object: object destroyed from a thread other than the one it lives "
+                    "in while that thread's event loop is still running; this is not safe. Use "
+                    "deleteLater() to destroy an object from another thread.\n" );
+            }
+        }
+
         // Invalidate the life token first. connect()/callLater() wrappers running on other threads
         // check objectLife().lock() before posting a call to this object; resetting mLife up front
         // shrinks the window in which such a wrapper can still observe this object as "alive" to
@@ -93,11 +118,7 @@ namespace QtLikeSignal
             }
         }
 
-        std::shared_ptr<ThreadData> threadDataCopy;
-        {
-            std::lock_guard<std::mutex> lock( mThreadDataMutex );
-            threadDataCopy = mThreadData;
-        }
+        std::shared_ptr<ThreadData> threadDataCopy = mAffinity->data();
         if( threadDataCopy )
         {
             if( auto dispatcher = threadDataCopy->dispatcher() )
@@ -182,10 +203,13 @@ namespace QtLikeSignal
         }
     }
 
-    //! Gets the thread affinity of this object. Thread-safe.
+    //! Gets the thread affinity of this object. Thread-safe. Never returns a dangling pointer: the
+    //! affinity is stored as a ThreadData (which outlives its Thread), so this reports nullptr once
+    //! the Thread it lived in has been destroyed rather than a stale Thread*.
     Thread* Object::thread() const
     {
-        return mThread.load();
+        const std::shared_ptr<ThreadData> data = mAffinity->data();
+        return data ? data->thread() : nullptr;
     }
 
     //! Gets the thread data container holding this object's event dispatcher.
@@ -197,8 +221,7 @@ namespace QtLikeSignal
     //! Thread-safe.
     std::shared_ptr<ThreadData> Object::threadData() const
     {
-        std::lock_guard<std::mutex> lock( mThreadDataMutex );
-        return mThreadData;
+        return mAffinity->data();
     }
 
     //! Changes the thread affinity of this object.
@@ -218,7 +241,7 @@ namespace QtLikeSignal
         Thread* aThread  //!< The new thread this object will live in; nullptr clears the affinity.
         )
     {
-        Thread* const currentAffinity = mThread.load();
+        Thread* const currentAffinity = thread();
         Thread* const callerThread = Thread::currentThread();
 
         if( currentAffinity == aThread )
@@ -249,11 +272,7 @@ namespace QtLikeSignal
         // no longer lives.
         std::vector<AbstractEventDispatcher::TimerRegistration> timersToMove;
         {
-            std::shared_ptr<ThreadData> oldData;
-            {
-                std::lock_guard<std::mutex> lock( mThreadDataMutex );
-                oldData = mThreadData;
-            }
+            std::shared_ptr<ThreadData> oldData = mAffinity->data();
             if( oldData )
             {
                 if( auto oldDispatcher = oldData->dispatcher() )
@@ -263,16 +282,11 @@ namespace QtLikeSignal
             }
         }
 
-        // Resolve the new thread's data before taking our own lock, and store it under the lock in
-        // one atomic-looking step so concurrent readers of threadData() never see a half-updated or
-        // torn shared_ptr. The lock is still needed even though writes are now single-threaded:
-        // threadData() is read from other threads.
+        // Resolve the new thread's data and store it in the Affinity box in one step, so concurrent
+        // readers of thread()/threadData() (notably a connect() wrapper resolving affinity at emit
+        // time) never see a half-updated pairing of thread and dispatcher.
         std::shared_ptr<ThreadData> newData = aThread ? aThread->threadData() : nullptr;
-        mThread.store( aThread );
-        {
-            std::lock_guard<std::mutex> lock( mThreadDataMutex );
-            mThreadData = std::move( newData );
-        }
+        mAffinity->setData( std::move( newData ) );
 
         if( !timersToMove.empty() )
         {
@@ -322,6 +336,21 @@ namespace QtLikeSignal
     //! Schedules this object for deletion in the event loop. Thread-safe.
     void Object::deleteLater()
     {
+        // De-bounce repeated calls: only the first ever posts a DeferredDeleteEvent, matching Qt's
+        // own guard ("De-bounce QDeferredDeleteEvents" over QObjectPrivate::deleteLaterCalled,
+        // qobject.cpp).
+        //
+        // This is Qt parity and defense-in-depth, not a fix for a reachable bug: a duplicate event
+        // is already harmless, since the deletedReceivers set in processEvents() covers the case
+        // where both land in one batch, and ~Object()'s removeEventsForReceiver() strips any that
+        // are still queued. What the guard adds is that the invariant "at most one deferred delete
+        // exists per object" holds at the source, rather than depending on two separate downstream
+        // mechanisms to keep covering every interleaving -- plus it skips a redundant allocation.
+        if( mDeleteLaterPosted.exchange( true ) )
+        {
+            return;
+        }
+
         auto* event = new DeferredDeleteEvent();
         if( auto tData = threadData() )
         {
@@ -504,6 +533,57 @@ namespace QtLikeSignal
                     disp->postEvent( aTarget, static_cast<Event*>( event ) );
                     return true;
                 }
+            }
+            delete event;
+            return false;
+        }
+
+        aSlot();
+        return true;
+    }
+
+    //! Dispatches a metacall callback based on connection type, resolving affinity from a
+    //! previously-captured Affinity box rather than dereferencing the receiver Object. Thread-safe.
+    //!
+    //! Used exclusively by the connect() wrapper closures, which run at emit time -- possibly much
+    //! later, and on a different thread, than connect() itself. boost::signals2's disconnect()
+    //! (invoked from ~Object()) does not block for an in-flight emit, so by the time this call
+    //! happens the receiver may already be under (or past) destruction; reading its own
+    //! thread()/threadData() directly, as the plain Object* overload above does, would then be a
+    //! use-after-free. aAffinity was captured by the wrapper when connect() was called, while the
+    //! receiver was still definitely alive, and is independently heap-allocated and ref-counted, so
+    //! it remains safe to read regardless. @p aReceiver is passed through purely as the dispatcher's
+    //! queue key (postEvent()/removeEventsForReceiver() bookkeeping) and is never dereferenced here.
+    //! Returns true if the slot ran (direct) or was queued successfully; false if it could not be
+    //! delivered, which happens when the receiver has no thread affinity or its thread has no event
+    //! dispatcher yet.
+    bool Object::dispatchMetaCall
+        (
+        const std::shared_ptr<Affinity>& aAffinity,  //!< Affinity box captured at connect() time.
+        Object* aReceiver,                             //!< Receiver; used only as the dispatcher's queue key.
+        std::function<void()> aSlot,                   //!< Callback function.
+        ConnectionType aType                         //!< Connection type.
+        )
+    {
+        const std::shared_ptr<ThreadData> targetData = aAffinity ? aAffinity->data() : nullptr;
+        Thread* const targetThread = targetData ? targetData->thread() : nullptr;
+
+        ConnectionType activeType = aType;
+        if( activeType == ConnectionType::AutoConnection )
+        {
+            Thread* currentThread = Thread::currentThread();
+            activeType = ( currentThread == targetThread )
+                ? ConnectionType::DirectConnection
+                : ConnectionType::QueuedConnection;
+        }
+
+        if( activeType == ConnectionType::QueuedConnection )
+        {
+            auto* event = new MetaCallEvent( aSlot );
+            if( auto disp = targetData ? targetData->dispatcher() : nullptr )
+            {
+                disp->postEvent( aReceiver, static_cast<Event*>( event ) );
+                return true;
             }
             delete event;
             return false;

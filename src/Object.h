@@ -420,6 +420,30 @@ namespace QtLikeSignal
             ConnectionType aType
             );
 
+        //! Dispatches a metacall callback based on connection type, resolving the target's thread
+        //! affinity from a previously-captured Affinity box instead of dereferencing the target
+        //! Object.
+        //!
+        //! Used exclusively by the connect() wrappers below: their closures run at EMIT time, which
+        //! may be much later and on a different thread than connect() itself, so they cannot safely
+        //! read the receiver's own thread()/threadData() the way a direct, synchronous call can --
+        //! boost::signals2's disconnect() (invoked from ~Object()) does not block for an in-flight
+        //! emit, so a life-token check performed right before touching the receiver narrows but does
+        //! not close that race. Resolving through the Affinity box instead removes the dependency on
+        //! the receiver's own memory entirely: the box is captured by each wrapper when connect() is
+        //! called (while the receiver is definitely still alive) and is independently heap-allocated
+        //! and ref-counted, so it stays valid to read no matter what has happened to the receiver by
+        //! the time this call happens. @p aReceiver is passed through only as the dispatcher's queue
+        //! key (for postEvent()/removeEventsForReceiver() bookkeeping); it is never dereferenced here.
+        static bool
+        dispatchMetaCall
+            (
+            const std::shared_ptr<Affinity>& aAffinity,
+            Object* aReceiver,
+            std::function<void()> aSlot,
+            ConnectionType aType
+            );
+
         //! Grants the event queue access to event(), which it alone invokes.
         friend class EventDispatcherDefault;
 
@@ -432,9 +456,8 @@ namespace QtLikeSignal
         friend class Thread;
 
         std::shared_ptr<int> mLife;                          //!< Lifetime token; reset in ~Object() so weak references expire.
-        std::shared_ptr<ThreadData> mThreadData;             //!< Thread data of the thread this object lives in, if any.
-        mutable std::mutex mThreadDataMutex;                 //!< Guards mThreadData.
-        std::atomic<Thread*> mThread { nullptr };           //!< The thread this object lives in.
+        const std::shared_ptr<Affinity> mAffinity;           //!< Thread affinity box; the box itself is never reassigned, only its contents (see moveToThread()).
+        std::atomic<bool> mDeleteLaterPosted { false };       //!< True once deleteLater() has posted a DeferredDeleteEvent; de-bounces repeat calls, matching QObject::deleteLaterCalled.
         std::string mObjectName;                              //!< This object's descriptive name.
         mutable std::mutex mNameMutex;                       //!< Guards mObjectName.
         std::vector<std::function<void()> > mCleanupCallbacks;  //!< Callbacks to run on destruction.
@@ -470,8 +493,9 @@ namespace QtLikeSignal
         }
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
+        std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType]( auto&&... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( auto&&... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -487,7 +511,7 @@ namespace QtLikeSignal
                         }
                     };
 
-                dispatchMetaCall( aReceiver, boundSlot, aType );
+                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
         return aSignal.connect( wrapper );
@@ -520,8 +544,9 @@ namespace QtLikeSignal
         }
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
+        std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType]( SignalArgs... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( SignalArgs... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -537,7 +562,7 @@ namespace QtLikeSignal
                         }
                     };
 
-                dispatchMetaCall( aReceiver, boundSlot, aType );
+                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
         return aSignal.connect( wrapper );
@@ -564,8 +589,9 @@ namespace QtLikeSignal
         }
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
+        std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType]( SignalArgs... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( SignalArgs... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -581,7 +607,7 @@ namespace QtLikeSignal
                         }
                     };
 
-                dispatchMetaCall( aReceiver, boundSlot, aType );
+                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
         return aSignal.connect( wrapper );
@@ -612,8 +638,9 @@ namespace QtLikeSignal
         }
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
+        std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType]( SignalArgs... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( SignalArgs... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -629,7 +656,7 @@ namespace QtLikeSignal
                         }
                     };
 
-                dispatchMetaCall( aReceiver, boundSlot, aType );
+                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
         return aSignal.connect( wrapper );
@@ -655,8 +682,9 @@ namespace QtLikeSignal
         }
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
+        std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType]( SignalArgs... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( SignalArgs... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -672,7 +700,7 @@ namespace QtLikeSignal
                         }
                     };
 
-                dispatchMetaCall( aReceiver, boundSlot, aType );
+                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
         return aSignal.connect( wrapper );
@@ -697,8 +725,9 @@ namespace QtLikeSignal
         }
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
+        std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType]( SignalArgs... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( SignalArgs... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -714,7 +743,7 @@ namespace QtLikeSignal
                         }
                     };
 
-                dispatchMetaCall( aReceiver, boundSlot, aType );
+                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
         return aSignal.connect( wrapper );
@@ -737,8 +766,9 @@ namespace QtLikeSignal
         }
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
+        std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType]( SignalArgs... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( SignalArgs... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -754,7 +784,7 @@ namespace QtLikeSignal
                         }
                     };
 
-                dispatchMetaCall( aReceiver, boundSlot, aType );
+                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
         return aSignal.connect( wrapper );
@@ -779,8 +809,9 @@ namespace QtLikeSignal
         }
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
+        std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType]( SignalArgs... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( SignalArgs... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -796,7 +827,7 @@ namespace QtLikeSignal
                         }
                     };
 
-                dispatchMetaCall( aReceiver, boundSlot, aType );
+                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
         return aSignal.connect( wrapper );
@@ -820,8 +851,9 @@ namespace QtLikeSignal
         }
 
         std::weak_ptr<int> weakLife = aReceiver->objectLife();
+        std::shared_ptr<Affinity> ctxAffinity = aReceiver->mAffinity;
 
-        auto wrapper = [weakLife, aReceiver, aSlot, aType]( SignalArgs... aArgs )
+        auto wrapper = [weakLife, aReceiver, aSlot, aType, ctxAffinity]( SignalArgs... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -837,7 +869,7 @@ namespace QtLikeSignal
                         }
                     };
 
-                dispatchMetaCall( aReceiver, boundSlot, aType );
+                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
             };
 
         return aSignal.connect( wrapper );
@@ -862,8 +894,9 @@ namespace QtLikeSignal
         }
 
         std::weak_ptr<int> weakLife = aContext->objectLife();
+        std::shared_ptr<Affinity> ctxAffinity = aContext->mAffinity;
 
-        auto wrapper = [weakLife, aContext, aSlot, aType]( auto&&... aArgs )
+        auto wrapper = [weakLife, aContext, aSlot, aType, ctxAffinity]( auto&&... aArgs )
             {
                 auto life = weakLife.lock();
                 if( !life )
@@ -879,7 +912,7 @@ namespace QtLikeSignal
                         }
                     };
 
-                dispatchMetaCall( aContext, boundSlot, aType );
+                dispatchMetaCall( ctxAffinity, aContext, boundSlot, aType );
             };
 
         return aSignal.connect( wrapper );
