@@ -12,8 +12,8 @@ no runtime probe was written.
 
 ## Status at a glance
 
-> **Open defects have failing tests.** `src/tests/test_known_defects.cpp` holds R24 and R26 and
-> stays red until each is fixed. R23 was fixed on 2026-08-08 and its tests moved to
+> **Open defects have failing tests.** `src/tests/test_known_defects.cpp` holds R24 and stays red
+> until it is fixed. R23 was fixed on 2026-08-08 and its tests moved to
 > `test_defect_regressions.cpp`, which is the rule: a defect test turns green and *leaves* that file,
 > so `--gtest_filter=-KnownDefect.*` stays a trustworthy baseline (91 pass). R25 and R27 are
 > deliberately not represented -- see that file's header for why a runtime test would be dishonest
@@ -46,7 +46,7 @@ no runtime probe was written.
 | R23 | An object outliving its thread keeps a live dispatcher: queued work accumulates, `deleteLater()` leaks | **Medium** | Probe — **Fixed 2026-08-08** |
 | R24 | Timer ids never recycle and can wrap onto the `-1` sentinel | Low | Inspection |
 | R25 | `Object::thread()` now costs a mutex on every call | Low | Inspection |
-| R26 | Repeating timers drift; interval is measured from dispatch, not deadline | Low | Inspection |
+| R26 | Repeating timers drift; interval is measured from dispatch, not deadline | Low | Inspection — **Fixed 2026-08-08** |
 | R27 | `Thread::create()` returns an owning raw pointer with no ownership doc | Low | Inspection |
 
 ---
@@ -434,16 +434,42 @@ emit throughput ever matters, the obvious cheaper design is Qt's: hold the affin
 `atomic<ThreadData*>` with the data refcounted separately, so the common read is one atomic load.
 No measurement was taken — flagged as a known cost, not a demonstrated problem.
 
-## R26 — Repeating timers drift
+## R26 — repeating timers drift *(fixed 2026-08-08)*
 
-**Severity: Low. Inspection.**
+**Severity: Low — and lower than this entry originally implied; see the correction below.**
 
-`EventDispatcherDefault::processEvents()` re-arms an expired timer with
-`t.mNextFire = now + interval`, where `now` is when the dispatcher got around to collecting it —
-not the deadline that just passed. Every late wakeup is therefore folded permanently into the
-schedule, so a 10 ms timer in a busy loop runs slower than 100 Hz and never catches up. Qt's
-default `Qt::CoarseTimer` tolerates drift too, but computes from the deadline rather than from
-dispatch time, so the error does not accumulate.
+`EventDispatcherDefault::processEvents()` re-armed an expired timer with
+`t.mNextFire = now + interval`, where `now` is when the dispatcher got around to collecting it, not
+the deadline that had just passed. Every late pass was therefore folded permanently into the
+schedule.
+
+> **Correction (2026-08-08): the first test written for this asserted the wrong thing.** It required
+> the cadence to realign after a 170 ms stall on a 50 ms timer — but Qt does not do that either.
+> `calculateNextTimeout()` (qtimerinfo_unix.cpp) advances from the previous deadline *and then*
+> resynchronises if the result is already past:
+>
+> ```cpp
+> t->timeout += t->interval;
+> if (t->timeout < now) { t->timeout = now; t->timeout += t->interval; }
+> ```
+>
+> So beyond one interval Qt gives up on the original cadence too, precisely to avoid firing off a
+> backlog. The real divergence is narrower: only lateness of *less than one interval* was absorbed by
+> Qt and accumulated here. The original test would have failed against Qt itself, which makes it an
+> invented requirement — the same thing R25 is excluded for — so it was replaced rather than moved.
+>
+> Measured idle drift before the fix was 0.005 ms per fire, so this only ever mattered to a loop
+> under sustained load. Recorded because the severity claim in the first draft was too strong.
+
+> **Resolution (2026-08-08).** Adopted Qt's two-step exactly: advance from the elapsed deadline, then
+> resynchronise only if that is already in the past.
+>
+> Covered by `EventDispatcherDefaultDefectTest.LatePassDoesNotShiftARepeatingTimersCadence`, which
+> drives a standalone dispatcher rather than a running loop — that turns "this pass is late by a
+> controlled amount" into one precise sleep instead of a contrived load generator. A pass 20 ms late
+> on a 50 ms timer put the second fire at 120.20 ms before the fix and 100 ms after, stable across
+> three runs.
+
 
 ## R27 — `Thread::create()` returns an owning raw pointer with no ownership documentation
 

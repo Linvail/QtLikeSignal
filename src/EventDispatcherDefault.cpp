@@ -55,7 +55,21 @@ namespace QtLikeSignal
                 {
                     timerEventsToProcess.push_back( { t.mReceiver, new TimerEvent( t.mTimerId ) } )
                     ;
-                    t.mNextFire = now + std::chrono::milliseconds( t.mIntervalMs );
+
+                    // Advance from the deadline that just elapsed, not from the moment we noticed
+                    // it. `now` is whenever this pass got around to looking, so re-arming from it
+                    // folds that lateness into the cadence permanently -- one pass 20 ms late and
+                    // every fire thereafter is 20 ms off, with the error compounding under load.
+                    t.mNextFire += std::chrono::milliseconds( t.mIntervalMs );
+
+                    if( t.mNextFire < now )
+                    {
+                        // The loop was blocked for longer than a whole interval, so keeping the
+                        // original cadence would mean firing repeatedly to work off a backlog
+                        // nobody asked for. Give up on it and resynchronise. Qt makes the same two
+                        // choices in the same order (calculateNextTimeout(), qtimerinfo_unix.cpp).
+                        t.mNextFire = now + std::chrono::milliseconds( t.mIntervalMs );
+                    }
                 }
             }
 
