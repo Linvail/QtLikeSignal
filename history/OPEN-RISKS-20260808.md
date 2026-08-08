@@ -47,7 +47,7 @@ no runtime probe was written.
 | R22 | Platform dispatchers are still empty shells (was R6) | Medium | Inspection — **Fixed 2026-08-08** |
 | R23 | An object outliving its thread keeps a live dispatcher: queued work accumulates, `deleteLater()` leaks | **Medium** | Probe — **Fixed 2026-08-08** |
 | R24 | Timer ids never recycle and can wrap onto the `-1` sentinel | Low | Inspection — **Fixed 2026-08-08** |
-| R25 | `Object::thread()` now costs a mutex on every call | Low | Inspection |
+| R25 | `Object::thread()` now costs a mutex on every call | Low | Inspection — now **measured**, see PERFORMANCE-20260808.md (P2) |
 | R26 | Repeating timers drift; interval is measured from dispatch, not deadline | Low | Inspection — **Fixed 2026-08-08** |
 | R27 | `Thread::create()` returns an owning raw pointer with no ownership doc, and auto-starts | Low | Inspection — **Fixed 2026-08-08** |
 
@@ -446,6 +446,12 @@ until it wrapped, eventually handing out `-1` — the value `startTimer()` retur
 ## R25 — `Object::thread()` now costs a mutex acquisition on every call
 
 **Severity: Low (performance). Inspection. Introduced by this pass.**
+
+> **Measured 2026-08-08** — see `PERFORMANCE-20260808.md` (P2) for numbers and Qt's implementation.
+> Short version: 5–6 ns per call against 0.24 ns for Qt's atomic load, ~6% of a direct emit
+> uncontended, but ~32x degradation with 8 threads reading one object's affinity. Still not
+> recommended for action: the mutex buys a lifetime guarantee Qt does not provide, and the
+> dispatcher's own per-thread mutex (P4) is a wider bottleneck that should be measured first.
 
 Before the `Affinity` port, `thread()` was a single relaxed atomic load of `mThread`. It is now
 `mAffinity->data()` — which locks `Affinity::mMutex`, copies a `shared_ptr` (atomic refcount
