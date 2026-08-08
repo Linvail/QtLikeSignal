@@ -3,8 +3,9 @@
 // since these specifically target crash/UAF/leak/race scenarios rather than day-to-day API
 // behavior, and several of them are stress tests rather than single-shot deterministic checks --
 // see each test's doc comment for what it actually proves and how to get the strongest signal
-// out of it (most benefit from being run under AddressSanitizer and/or ThreadSanitizer; this
-// project's default debug build already enables AddressSanitizer, see tools/toolchain-linux.py).
+// out of it (most benefit from being run under AddressSanitizer and/or ThreadSanitizer; the build
+// enables one or the other, never both -- see tools/toolchain-linux.py -- so run it under each in
+// turn, since they catch disjoint classes of defect).
 #include <gtest/gtest.h>
 #include "Object.h"
 #include "Thread.h"
@@ -16,8 +17,94 @@
 #include <future>
 #include <memory>
 #include <thread>
+#include <vector>
+
+#if defined( __linux__ )
+    #include <fstream>
+    #include <string>
+#endif
+
+//! True when this translation unit is compiled under AddressSanitizer.
+//!
+//! Clang exposes it through __has_feature, GCC through a predefined macro; check both.
+#if defined( __has_feature )
+    #if __has_feature( address_sanitizer )
+        #define QLS_ADDRESS_SANITIZER_ACTIVE 1
+    #endif
+#endif
+#if defined( __SANITIZE_ADDRESS__ ) && !defined( QLS_ADDRESS_SANITIZER_ACTIVE )
+    #define QLS_ADDRESS_SANITIZER_ACTIVE 1
+#endif
 
 using namespace QtLikeSignal;
+
+namespace
+{
+    //! Resident set size in kB, or -1 where it is not implemented.
+    //!
+    //! Only Linux is implemented; the tests that need it skip elsewhere rather than pretending.
+    long residentSetKb()
+    {
+        #if defined( __linux__ )
+            std::ifstream status( "/proc/self/status" );
+            std::string key;
+            long value = 0;
+            while( status >> key )
+            {
+                if( key == "VmRSS:" )
+                {
+                    status >> value;
+                    return value;
+                }
+            }
+            return -1;
+        #else
+            return -1;
+        #endif
+    }
+
+    //! Object that records its own destruction, so deferred deletion can be observed.
+    class DestructionRecorder : public Object
+    {
+    public:
+        explicit DestructionRecorder
+            (
+            std::shared_ptr<std::atomic<bool> > aFlag
+            )
+            : mFlag( std::move( aFlag ) )
+        {
+        }
+
+        virtual ~DestructionRecorder() override
+        {
+            mFlag->store( true );
+        }
+
+    private:
+        std::shared_ptr<std::atomic<bool> > mFlag;
+    };
+
+    //! Creates an Object on a short-lived native thread and returns it after that thread has exited.
+    //!
+    //! The returned object is "orphaned": auto-adoption gave its creating thread a Thread, and that
+    //! Thread was destroyed when the native thread exited, so the object's affinity now reports
+    //! thread() == nullptr while still holding the dead thread's ThreadData -- and, crucially, the
+    //! live dispatcher that ThreadData still owns.
+    template <typename Factory>
+    auto makeOrphanedObject
+        (
+        Factory aFactory
+        ) -> decltype( aFactory() )
+    {
+        decltype( aFactory() ) created = nullptr;
+        std::thread creator( [&created, &aFactory]()
+            {
+                created = aFactory();
+            } );
+        creator.join();
+        return created;
+    }
+}
 
 // ---------------------------------------------------------------------------------------------
 // Defect: Thread::start() could call std::terminate().
@@ -1149,4 +1236,126 @@ TEST( TimerDefectTest, SingleShotIsStoppedBeforeTimeoutIsEmitted )
         "timeout never fired, or the slot deadlocked against Timer's own mutex.";
     EXPECT_FALSE( activeFuture.get() )
         << "single-shot timer was still active inside its own timeout slot.";
+}
+
+// ---------------------------------------------------------------------------------------------
+// Defect (R23, fixed 2026-08-08): an object whose thread had been destroyed still had a live
+// dispatcher, so work posted to it was accepted by a queue nothing would ever drain.
+//
+// Thread::threadBody() cleared the dispatcher when a worker finished, but ~Thread() did not, so an
+// adopted thread's ThreadData kept a live EventDispatcherDefault after the thread was gone. The
+// object was then in a state the design did not anticipate: thread() == nullptr, yet posting
+// succeeded. Fixed in three places -- dispatchMetaCallTo() and deleteLater() now refuse to queue
+// when the target thread is gone, and ~Thread() drains deferred deletes and releases the dispatcher
+// before nulling the back-pointer, so the two can no longer disagree.
+//
+// QtMimic forecloses this. ~Thread() closes the mailbox *before* nulling the back-pointer, stating
+// the invariant outright -- "Done BEFORE clearing the back-pointer, so the invariant 'thread() ==
+// nullptr implies not accepting' holds" -- and connectImpl() additionally drops when
+// ctxData->thread() == nullptr. Measured side by side over five rounds of 200k emits, QtMimic grows
+// 276 kB then flattens; QtLikeSignal grows ~30 MB every round without bound.
+// ---------------------------------------------------------------------------------------------
+
+//! Verifies deleteLater() on an orphaned object deletes it instead of leaking it.
+//!
+//! Deterministic -- no timing, no sampling. Before the fix this queued a DeferredDeleteEvent into
+//! the dead thread's still-live dispatcher, reported success, and the object was never destroyed.
+//! It now falls back to a synchronous delete, the same trade QtMimic makes when its post() refuses
+//! the task: "Doing nothing here would leak self forever, which is strictly worse than the
+//! thread-affinity violation of deleting it synchronously."
+TEST( ObjectDefectTest, DeleteLaterOnAnOrphanedObjectDeletesItSynchronously )
+{
+    auto destroyed = std::make_shared<std::atomic<bool> >( false );
+
+    DestructionRecorder* orphan = makeOrphanedObject( [destroyed]()
+        {
+            return new DestructionRecorder( destroyed );
+        } );
+
+    ASSERT_NE( orphan, nullptr );
+    ASSERT_EQ( orphan->thread(), nullptr )
+        << "the creating thread's Thread should have been destroyed when that thread exited";
+
+    orphan->deleteLater();
+
+    const bool wasDestroyed = destroyed->load();
+    EXPECT_TRUE( wasDestroyed )
+        << "deleteLater() on an object whose thread is gone queued a DeferredDeleteEvent into a "
+        "dispatcher nothing will ever drain, so the object was leaked outright instead of being "
+        "deleted synchronously.";
+
+    if( !wasDestroyed )
+    {
+        // Reclaim it so this known-failing test does not also leak on every run.
+        delete orphan;
+    }
+}
+
+//! Verifies queued calls to an orphaned object are dropped rather than accumulating without bound.
+//!
+//! Sampled over repeated rounds rather than once, which is what distinguishes a genuine leak from
+//! allocator arena high-water -- a single measurement cannot tell them apart, since even correct
+//! code grows on the first round and then flattens. Before the fix this retained ~30 MB per round,
+//! climbing forever, and LeakSanitizer reported nothing because every byte stayed reachable.
+TEST( ObjectDefectTest, QueuedCallsToAnOrphanedObjectAreDropped )
+{
+    if( residentSetKb() < 0 )
+    {
+        GTEST_SKIP() << "resident-set sampling is implemented for Linux only";
+    }
+
+    #if defined( QLS_ADDRESS_SANITIZER_ACTIVE )
+        // AddressSanitizer holds freed allocations in a quarantine so it can detect use-after-free,
+        // so resident memory grows with the number of frees regardless of whether anything is
+        // retained. Emitting allocates one std::function per call even when the resulting metacall
+        // is correctly dropped, so 800k emits fill the quarantine and this measurement reports ~37 MB
+        // for entirely healthy code. Confirmed: with ASAN_OPTIONS=quarantine_size_mb=1 the same
+        // binary passes. Run this under ThreadSanitizer or without a sanitizer, where the number
+        // means what it claims to.
+        GTEST_SKIP() << "resident-set growth is not a meaningful signal under AddressSanitizer "
+            "(its quarantine retains freed blocks); re-run under TSan, or with "
+            "ASAN_OPTIONS=quarantine_size_mb=1";
+    #endif
+
+    Object* orphan = makeOrphanedObject( []()
+        {
+            return new Object();
+        } );
+    ASSERT_NE( orphan, nullptr );
+    ASSERT_EQ( orphan->thread(), nullptr );
+
+    Signal<> sig;
+    Object::connect( sig, orphan, []()
+        {
+        }, ConnectionType::QueuedConnection );
+
+    constexpr int kRounds = 4;
+    constexpr int kEmitsPerRound = 200000;
+    std::vector<long> growthPerRound;
+
+    for( int round = 0; round < kRounds; ++round )
+    {
+        const long before = residentSetKb();
+        for( int i = 0; i < kEmitsPerRound; ++i )
+        {
+            sig.emit();
+        }
+        growthPerRound.push_back( residentSetKb() - before );
+    }
+
+    // Ignore the first round: that is where the allocator's arena grows, and it does so even when
+    // the events are correctly dropped. Steady-state growth is the signal.
+    long steadyStateGrowth = 0;
+    for( size_t i = 1; i < growthPerRound.size(); ++i )
+    {
+        steadyStateGrowth += growthPerRound[i];
+    }
+
+    delete orphan;
+
+    EXPECT_LT( steadyStateGrowth, 4096 )
+        << "after the first round, " << ( kRounds - 1 ) << " further rounds of " << kEmitsPerRound
+        << " queued emits to an object whose thread is gone retained " << steadyStateGrowth
+        << " kB. They are being queued into a dispatcher nothing will ever drain, instead of being "
+        "dropped.";
 }

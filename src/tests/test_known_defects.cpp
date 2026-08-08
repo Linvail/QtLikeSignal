@@ -3,18 +3,21 @@
 //! **These tests are EXPECTED TO FAIL.** They exist to prove that the open risks recorded in
 //! history/OPEN-RISKS-20260808.md are real defects rather than theory, and they stay red until each
 //! one is fixed. Do not "fix" a test here by weakening it -- fix the code, then the test turns green
-//! and becomes an ordinary regression test.
+//! and *moves out of this file* into test_defect_regressions.cpp. That matters: the
+//! `-KnownDefect.*` baseline below is only trustworthy while everything here is genuinely broken.
+//!
+//! R23 was fixed on 2026-08-08 and its two tests now live in test_defect_regressions.cpp.
 //!
 //! For a green baseline while these are outstanding:
 //! @code
 //!   QtLikeSignal-Tests --gtest_filter=-KnownDefect.*
 //! @endcode
 //!
-//! Why these were not caught by a sanitizer: the build uses -fsanitize=thread, and address/thread
-//! are mutually exclusive in tools/toolchain-linux.py, so LeakSanitizer never runs. More
-//! fundamentally, R23's growth is not a leak -- the accumulated events stay *reachable* from a live
-//! object, and LSan only reports unreachable blocks at exit. A process could balloon to gigabytes
-//! and still get a clean LSan report.
+//! Why R23 was not caught by a sanitizer, which is worth remembering for the rest: the build uses
+//! -fsanitize=thread, and address/thread are mutually exclusive in tools/toolchain-linux.py, so
+//! LeakSanitizer never ran. More fundamentally its growth was not a leak -- the accumulated events
+//! stayed *reachable* from a live object, and LSan only reports unreachable blocks at exit. Verified:
+//! under -fsanitize=address with detect_leaks=1 it retained 124 MB and reported nothing.
 //!
 //! Two of the recorded risks are deliberately **not** represented here, because a runtime test
 //! would be dishonest rather than merely difficult:
@@ -44,38 +47,11 @@
 #include <thread>
 #include <vector>
 
-#if defined( __linux__ )
-    #include <fstream>
-    #include <string>
-#endif
 
 using namespace QtLikeSignal;
 
 namespace
 {
-    //! Resident set size in kB, or -1 where it is not implemented.
-    //!
-    //! Only Linux is implemented; the tests that need it skip elsewhere rather than pretending.
-    long residentSetKb()
-    {
-        #if defined( __linux__ )
-            std::ifstream status( "/proc/self/status" );
-            std::string key;
-            long value = 0;
-            while( status >> key )
-            {
-                if( key == "VmRSS:" )
-                {
-                    status >> value;
-                    return value;
-                }
-            }
-            return -1;
-        #else
-            return -1;
-        #endif
-    }
-
     //! How long R26's blocking task stalls the event loop, in milliseconds.
     //!
     //! 3.4 periods of R26's 50 ms timer, so it overshoots a deadline by 20 ms -- a phase error far
@@ -88,153 +64,6 @@ namespace
         std::this_thread::sleep_for( std::chrono::milliseconds( kR26BlockMs ) );
     }
 
-    //! Object that records its own destruction, so deferred deletion can be observed.
-    class DestructionRecorder : public Object
-    {
-    public:
-        explicit DestructionRecorder
-            (
-            std::shared_ptr<std::atomic<bool> > aFlag
-            )
-            : mFlag( std::move( aFlag ) )
-        {
-        }
-
-        virtual ~DestructionRecorder() override
-        {
-            mFlag->store( true );
-        }
-
-    private:
-        std::shared_ptr<std::atomic<bool> > mFlag;
-    };
-
-    //! Creates an Object on a short-lived native thread and returns it after that thread has exited.
-    //!
-    //! The returned object is "orphaned": auto-adoption gave its creating thread a Thread, and that
-    //! Thread was destroyed when the native thread exited, so the object's affinity now reports
-    //! thread() == nullptr while still holding the dead thread's ThreadData -- and, crucially, the
-    //! live dispatcher that ThreadData still owns.
-    template <typename Factory>
-    auto makeOrphanedObject
-        (
-        Factory aFactory
-        ) -> decltype( aFactory() )
-    {
-        decltype( aFactory() ) created = nullptr;
-        std::thread creator( [&created, &aFactory]()
-            {
-                created = aFactory();
-            } );
-        creator.join();
-        return created;
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
-// R23 -- an object whose thread has been destroyed still has a live dispatcher.
-//
-// Thread::threadBody() clears the dispatcher when a worker finishes, but ~Thread() does not, so an
-// adopted thread's ThreadData keeps a live EventDispatcherDefault after the thread is gone. The
-// object is then in a state the design does not anticipate: thread() == nullptr, yet work posted to
-// it is accepted by a dispatcher that nothing will ever drain.
-//
-// QtMimic forecloses this. ~Thread() closes the mailbox *before* nulling the back-pointer, stating
-// the invariant outright -- "Done BEFORE clearing the back-pointer, so the invariant 'thread() ==
-// nullptr implies not accepting' holds" -- and connectImpl() additionally drops when
-// ctxData->thread() == nullptr. Measured side by side over five rounds of 200k emits, QtMimic grows
-// 276 kB then flattens; QtLikeSignal grows ~30 MB every round without bound.
-// ---------------------------------------------------------------------------------------------
-
-//! R23a: deleteLater() on an orphaned object queues a deletion that can never run, leaking it.
-//!
-//! Deterministic -- no timing, no sampling. QtMimic handles this by checking post()'s return value
-//! and falling back to a synchronous delete ("Doing nothing here would leak self forever, which is
-//! strictly worse than the thread-affinity violation of deleting it synchronously"). QtLikeSignal
-//! finds a live dispatcher, queues a DeferredDeleteEvent into it, reports success, and the object is
-//! never destroyed.
-TEST( KnownDefect, R23a_DeleteLaterOnAnOrphanedObjectNeverRuns )
-{
-    auto destroyed = std::make_shared<std::atomic<bool> >( false );
-
-    DestructionRecorder* orphan = makeOrphanedObject( [destroyed]()
-        {
-            return new DestructionRecorder( destroyed );
-        } );
-
-    ASSERT_NE( orphan, nullptr );
-    ASSERT_EQ( orphan->thread(), nullptr )
-        << "the creating thread's Thread should have been destroyed when that thread exited";
-
-    orphan->deleteLater();
-
-    const bool wasDestroyed = destroyed->load();
-    EXPECT_TRUE( wasDestroyed )
-        << "deleteLater() on an object whose thread is gone queued a DeferredDeleteEvent into a "
-        "dispatcher nothing will ever drain, so the object is leaked outright. It should fall back "
-        "to deleting synchronously, as QtMimic does when post() refuses the task.";
-
-    if( !wasDestroyed )
-    {
-        // Reclaim it so this known-failing test does not also leak on every run.
-        delete orphan;
-    }
-}
-
-//! R23b: queued calls to an orphaned object accumulate without bound.
-//!
-//! Sampled over repeated rounds rather than once, which is what distinguishes a genuine leak from
-//! allocator arena high-water. A single measurement cannot tell them apart: QtMimic's first round
-//! also grows (276 kB) and then flattens to zero, while this grows by the same amount every round
-//! forever.
-TEST( KnownDefect, R23b_QueuedCallsToAnOrphanedObjectAccumulateForever )
-{
-    if( residentSetKb() < 0 )
-    {
-        GTEST_SKIP() << "resident-set sampling is implemented for Linux only";
-    }
-
-    Object* orphan = makeOrphanedObject( []()
-        {
-            return new Object();
-        } );
-    ASSERT_NE( orphan, nullptr );
-    ASSERT_EQ( orphan->thread(), nullptr );
-
-    Signal<> sig;
-    Object::connect( sig, orphan, []()
-        {
-        }, ConnectionType::QueuedConnection );
-
-    constexpr int kRounds = 4;
-    constexpr int kEmitsPerRound = 200000;
-    std::vector<long> growthPerRound;
-
-    for( int round = 0; round < kRounds; ++round )
-    {
-        const long before = residentSetKb();
-        for( int i = 0; i < kEmitsPerRound; ++i )
-        {
-            sig.emit();
-        }
-        growthPerRound.push_back( residentSetKb() - before );
-    }
-
-    // Ignore the first round: that is where the allocator's arena grows, and it does so even when
-    // the events are correctly dropped. Steady-state growth is the signal.
-    long steadyStateGrowth = 0;
-    for( size_t i = 1; i < growthPerRound.size(); ++i )
-    {
-        steadyStateGrowth += growthPerRound[i];
-    }
-
-    delete orphan;
-
-    EXPECT_LT( steadyStateGrowth, 4096 )
-        << "after the first round, " << ( kRounds - 1 ) << " further rounds of " << kEmitsPerRound
-        << " queued emits to an object whose thread is gone retained " << steadyStateGrowth
-        << " kB. They are being queued into a dispatcher nothing will ever drain, instead of being "
-        "dropped. QtMimic retains ~0 kB in the same steady state.";
 }
 
 // ---------------------------------------------------------------------------------------------

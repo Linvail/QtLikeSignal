@@ -432,10 +432,20 @@ namespace QtLikeSignal
         auto* event = new DeferredDeleteEvent();
         if( auto tData = threadData() )
         {
-            if( auto disp = tData->dispatcher() )
+            // Queue only if there is a live thread to dispatch it. A destroyed Thread leaves its
+            // ThreadData -- and that ThreadData's still-working dispatcher -- behind, so without
+            // this check the event is accepted by a queue nothing will ever drain and the object is
+            // leaked outright rather than deleted. Falling through to the synchronous delete below
+            // is the lesser evil, and the same trade QtMimic makes when its post() refuses the task:
+            // "Doing nothing here would leak self forever, which is strictly worse than the
+            // thread-affinity violation of deleting it synchronously."
+            if( tData->thread() != nullptr )
             {
-                disp->postEvent( this, static_cast<Event*>( event ) );
-                return;
+                if( auto disp = tData->dispatcher() )
+                {
+                    disp->postEvent( this, static_cast<Event*>( event ) );
+                    return;
+                }
             }
         }
         delete event;
@@ -674,6 +684,26 @@ namespace QtLikeSignal
 
         if( activeType == ConnectionType::QueuedConnection )
         {
+            // The receiver's thread is gone, so nothing will ever drain what we queue. Drop the
+            // call instead of accepting it.
+            //
+            // This is checked separately from the dispatcher below because the two can disagree: a
+            // destroyed Thread leaves its ThreadData behind (deliberately -- that is what stops
+            // affinity from dangling), and that ThreadData still owns a perfectly functional
+            // dispatcher. Queueing into it looks like success and accumulates without bound; the
+            // measured cost was ~30 MB per 200k emits, climbing forever, and invisible to
+            // LeakSanitizer because every byte of it stays reachable.
+            //
+            // Deliberately after the Auto resolution above and outside the Direct path: a
+            // DirectConnection means "run this now regardless of affinity", so it must still run
+            // even for an object with no thread. Qt describes the queued behaviour we are matching:
+            // "if a QObject has no thread affinity ... it cannot receive queued signals or posted
+            // events". QtMimic places the same guard at the same point.
+            if( targetThread == nullptr )
+            {
+                return false;
+            }
+
             auto* event = new MetaCallEvent( aSlot );
             if( auto disp = aData ? aData->dispatcher() : nullptr )
             {

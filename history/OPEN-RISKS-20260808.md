@@ -12,10 +12,12 @@ no runtime probe was written.
 
 ## Status at a glance
 
-> **Open defects now have failing tests.** `src/tests/test_known_defects.cpp` proves R23, R24 and
-> R26 are real and stays red until each is fixed. For a green baseline meanwhile:
-> `QtLikeSignal-Tests --gtest_filter=-KnownDefect.*` (89 pass). R25 and R27 are deliberately not
-> represented -- see that file's header for why a runtime test would be dishonest for those two.
+> **Open defects have failing tests.** `src/tests/test_known_defects.cpp` holds R24 and R26 and
+> stays red until each is fixed. R23 was fixed on 2026-08-08 and its tests moved to
+> `test_defect_regressions.cpp`, which is the rule: a defect test turns green and *leaves* that file,
+> so `--gtest_filter=-KnownDefect.*` stays a trustworthy baseline (91 pass). R25 and R27 are
+> deliberately not represented -- see that file's header for why a runtime test would be dishonest
+> for those two.
 
 > **Why a sanitizer never caught R17 or R23.** Two independent reasons, both verified. First,
 > address and thread sanitizers are mutually exclusive in `tools/toolchain-linux.py` and the build
@@ -41,7 +43,7 @@ no runtime probe was written.
 | R20 | `~Object()`'s new warning dereferences a `Thread*` that may dangle | Low-Med | Inspection — *self-inflicted* — **Fixed 2026-08-08** |
 | R21 | `CoreApplication` has no test coverage at all | Medium | Inspection — **Fixed 2026-08-08** (13 tests) |
 | R22 | Platform dispatchers are still empty shells (was R6) | Medium | Inspection — **Fixed 2026-08-08** |
-| R23 | `moveToThread(nullptr)` can leave stale `ThreadData` behind | Low | Inspection |
+| R23 | An object outliving its thread keeps a live dispatcher: queued work accumulates, `deleteLater()` leaks | **Medium** | Probe — **Fixed 2026-08-08** |
 | R24 | Timer ids never recycle and can wrap onto the `-1` sentinel | Low | Inspection |
 | R25 | `Object::thread()` now costs a mutex on every call | Low | Inspection |
 | R26 | Repeating timers drift; interval is measured from dispatch, not deadline | Low | Inspection |
@@ -360,20 +362,49 @@ depends on it.**
 concrete dispatcher for Windows and Linux. I want to receive OS/platform's messages") is therefore
 not started, despite the files existing and being wired into `Thread::threadBody()`.
 
-## R23 — `moveToThread(nullptr)` can leave stale `ThreadData` behind
+## R23 — an object outliving its thread keeps a live dispatcher *(fixed 2026-08-08)*
 
-**Severity: Low. Inspection.**
+**Severity: Medium (raised from Low once the `deleteLater()` half was measured). Confirmed by
+probe.**
 
-`moveToThread()` short-circuits on `currentAffinity == aThread`. Once an object's `Thread` has been
-destroyed, `thread()` reports `nullptr`, so `moveToThread(nullptr)` compares equal and returns
-`true` **without clearing the `Affinity` box** — which still holds a `shared_ptr` to the dead
-thread's `ThreadData`.
+`Thread::threadBody()` released the dispatcher when a worker finished, but `~Thread()` did not — so
+an *adopted* thread's `ThreadData` kept a fully working `EventDispatcherDefault` after the thread
+was gone. Two owners of "can this thread still accept work?" (the dispatcher's existence, and the
+`Thread`'s liveness) could therefore disagree, and which behaviour you got depended on *how* the
+thread died:
 
-The object is then in a mildly inconsistent state: `thread() == nullptr` but `threadData() !=
-nullptr`. Consequences are benign today (the dead thread's dispatcher has already been released, so
-`deleteLater()` falls back to a synchronous delete and `startTimer()` reports "no event
-dispatcher"), and the stale `ThreadData` is kept alive by this reference. Worth tightening if
-`moveToThread()` grows any behavior that depends on `threadData()` being in step with `thread()`.
+| orphaned because… | queued work |
+|---|---|
+| adopted thread exited | **accepted**, ~30 MB retained per 200k emits, forever |
+| worker `Thread` destroyed | dropped |
+
+`deleteLater()` had the same split, and there it was worse: on an adopted-thread orphan it queued a
+`DeferredDeleteEvent` nothing would run, so **the object leaked outright**.
+
+QtMimic forecloses all of this and was the model for the fix. Measured side by side over five rounds
+of 200k emits: QtMimic grows 276 kB on round one and then flattens (even returning memory);
+QtLikeSignal grew ~30 MB every round without bound.
+
+> **Resolution (2026-08-08).** Three layers, mirroring QtMimic's:
+>   1. `~Thread()` drains deferred deletes and releases the dispatcher **before** nulling the
+>      back-pointer, so the two owners can no longer disagree. QtMimic states the same invariant for
+>      its mailbox: *"Done BEFORE clearing the back-pointer, so the invariant 'thread() == nullptr
+>      implies not accepting' holds."*
+>   2. `dispatchMetaCallTo()` drops a queued call when the target thread is gone. Placed after the
+>      `Auto` resolution and outside the `Direct` path, since `DirectConnection` means "run now
+>      regardless of affinity" — QtMimic puts its guard at the same point.
+>   3. `deleteLater()` falls back to a synchronous delete rather than queueing into a dead thread.
+>
+> Covered by `ObjectDefectTest.DeleteLaterOnAnOrphanedObjectDeletesItSynchronously` (deterministic)
+> and `ObjectDefectTest.QueuedCallsToAnOrphanedObjectAreDropped` (per-round sampling).
+
+> **Testing note.** The growth test samples **per round**, not once. A single measurement cannot
+> distinguish a leak from allocator arena high-water — correct code grows on the first round too,
+> which is exactly how QtMimic was (correctly) cleared of the same suspicion. It also skips under
+> AddressSanitizer: ASan's quarantine retains freed blocks, and emitting allocates one `std::function`
+> per call even when the metacall is properly dropped, so 800k emits report ~37 MB for healthy code.
+> Confirmed by re-running with `ASAN_OPTIONS=quarantine_size_mb=1`, which passes.
+
 
 ## R24 — Timer ids never recycle and can wrap onto the `-1` sentinel
 

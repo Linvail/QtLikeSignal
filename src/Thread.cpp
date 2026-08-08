@@ -29,6 +29,25 @@ namespace QtLikeSignal
         quit();
         wait();
 
+        // Drain deferred deletes, then release the dispatcher -- BEFORE clearing the back-pointer
+        // below, so there is never a moment where thread() reports nullptr while a working
+        // dispatcher is still reachable through this ThreadData. QtMimic states the same invariant
+        // for its mailbox: "Done BEFORE clearing the back-pointer, so the invariant 'thread() ==
+        // nullptr implies not accepting' holds."
+        //
+        // threadBody() already does both for a worker that ran a loop, so this is normally a no-op
+        // there. It exists for the case that had no equivalent: an *adopted* thread, whose Thread is
+        // destroyed by its thread_local owner as the native thread exits. Its dispatcher was never
+        // released, so it outlived the thread and kept accepting work nothing would ever run, and
+        // any deleteLater() still queued was freed as an event without its target ever being
+        // deleted. Draining runs on the exiting thread itself, which is the thread those
+        // destructors expect.
+        if( auto dispatcher = mData->dispatcher() )
+        {
+            dispatcher->processDeferredDeletes();
+        }
+        mData->setDispatcher( nullptr );
+
         // An adopted Thread is destroyed by the thread_local that owns it, as the native thread
         // exits; nothing else clears the registration for it the way threadBody() does for a worker.
         // Leaving it set would hand out a pointer to freed memory on the way out.
