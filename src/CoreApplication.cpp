@@ -41,9 +41,8 @@ namespace QtLikeSignal
 
     //! Turns the calling thread into the main Thread and binds this application to it.
     //!
-    //! Shared by both constructors. Creates the platform dispatcher, wraps the calling thread in a
-    //! Thread that owns it, and registers that Thread as the current one so Objects constructed
-    //! from here on gain main-thread affinity.
+    //! Shared by both constructors. The calling thread is already adopted by the time this runs, so
+    //! all that remains is to record it and give it the platform dispatcher its loop needs.
     void CoreApplication::adoptMainThread()
     {
         // Qt asserts here ("there should be only one application object"). Warn rather than abort:
@@ -60,6 +59,20 @@ namespace QtLikeSignal
             sInstance = this;
         }
 
+        // The calling thread is already adopted -- this object's own Object base asked for
+        // currentThread() a moment ago, which adopted it if nobody had. So there is no second
+        // Thread to create and no moveToThread() dance: this application already lives in the
+        // thread it is about to run the loop for, and mMainThread is a non-owning pointer to the
+        // Thread that the thread_local in Thread owns.
+        mMainThread = Thread::currentThread();
+
+        // Swap the adopted thread's plain dispatcher for the platform one. Auto-adoption installs
+        // only EventDispatcherDefault, deliberately -- allocating an eventfd or a message-only
+        // window for every native thread that merely touches an Object would be wasteful. A thread
+        // that actually runs a loop needs the platform one, and this is that thread.
+        //
+        // Nothing can be lost in the swap: the adoption happened during this constructor, so no
+        // event can have been queued between then and now.
         #if defined( _WIN32 )
             mDispatcher = std::make_shared<EventDispatcherWin32>();
         #elif defined( __linux__ )
@@ -67,23 +80,7 @@ namespace QtLikeSignal
         #else
             mDispatcher = std::make_shared<EventDispatcherDefault>();
         #endif
-
-        mMainThread = std::make_unique<Thread>();
         mMainThread->mData->setDispatcher( mDispatcher );
-        Thread::sCurrentThread = mMainThread.get();
-
-        // Self-adopt, mirroring exactly what Thread::threadBody() does for a worker thread
-        // (sCurrentThread = this; this->moveToThread(this);). Without this, mMainThread's own
-        // Object-inherited thread affinity (its Affinity box, pointed via moveToThread) never gets
-        // pointed at its own dispatcher-holding ThreadData (mData) -- those are two separate fields
-        // that only coincide once an object has been moved onto itself. Anything that targets the
-        // Thread object directly (dispatchMetaCall(mainThreadPtr, ...), e.g. via Thread::post())
-        // would silently fail to find a dispatcher without this, even though one exists.
-        mMainThread->moveToThread( mMainThread.get() );
-
-        // Object::moveToThread rather than moveToThread: the derived name is deleted, precisely so
-        // that nobody re-homes the application later. Doing it here is the one legitimate use.
-        Object::moveToThread( mMainThread.get() );
     }
 
     //! Destroys the application, releasing the main thread it adopted.
@@ -100,9 +97,18 @@ namespace QtLikeSignal
             mDispatcher->processDeferredDeletes();
         }
 
-        Object::moveToThread( nullptr );
-        mMainThread->mData->setDispatcher( nullptr );
-        Thread::sCurrentThread = nullptr;
+        // Hand the thread back the plain dispatcher auto-adoption would have given it, rather
+        // than leaving it with the platform one (whose eventfd or message window should not outlive
+        // the application) or with none at all (which would silently break every Object still
+        // living on this thread). The thread itself stays adopted: it is owned by a thread_local in
+        // Thread and released when the native thread exits, not by us.
+        if( mMainThread )
+        {
+            mMainThread->mData->setDispatcher( std::make_shared<EventDispatcherDefault>() );
+        }
+        mDispatcher.reset();
+        mMainThread = nullptr;
+
         if( sInstance == this )
         {
             sInstance = nullptr;
@@ -123,7 +129,7 @@ namespace QtLikeSignal
     //! same two ("Must be called from the main thread" / "The event loop is already running").
     int CoreApplication::exec()
     {
-        if( Thread::currentThread() != mMainThread.get() )
+        if( Thread::currentThread() != mMainThread )
         {
             std::fprintf( stderr, "CoreApplication::exec: must be called from the main thread\n" );
             return -1;

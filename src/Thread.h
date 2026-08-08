@@ -88,6 +88,15 @@ namespace QtLikeSignal
 
         static Thread* currentThread();
 
+        void processEvents();
+
+        void setWakeCallback
+            (
+            std::function<void()> aCallback
+            );
+
+        bool isAdopted() const;
+
         std::shared_ptr<AbstractEventDispatcher> eventDispatcher() const;
 
         bool post
@@ -127,6 +136,10 @@ namespace QtLikeSignal
             );
 
         void threadBody();
+
+        void adoptCallingThread();
+
+        void bindAffinityToSelf();
 
         #if defined( _WIN32 )
             static unsigned int __stdcall threadEntry
@@ -192,7 +205,29 @@ namespace QtLikeSignal
         //! start() to publish the handle it needs.
         bool mPriorityNeedsReset { false };
 
+        //! True for a Thread that wraps an already-running native thread rather than one it started.
+        //!
+        //! An adopted Thread has no OS thread of its own to start, join or prioritise: it exists to
+        //! give the native thread an identity and an event queue.
+        bool mAdopted { false };
+
         static thread_local Thread* sCurrentThread;  //!< The Thread running on this OS thread, if any.
+
+        //! Owns the Thread auto-created to represent a native thread nobody started through us.
+        //!
+        //! Lives exactly as long as that native thread: destroyed when the thread exits, which nulls
+        //! its ThreadData back-pointer so anything still holding that data sees thread() == nullptr
+        //! rather than a dangling pointer. Mirrors Qt adopting a foreign QThread.
+        static thread_local std::unique_ptr<Thread> sAdoptedThread;
+
+        //! Guards against re-entering auto-adoption while it is constructing the adopted Thread.
+        //!
+        //! Thread derives from Object, and Object's constructor asks for currentThread() -- so
+        //! creating the adopted Thread re-enters currentThread() and, without this, would recurse
+        //! until the stack ran out. While set, currentThread() reports nullptr, so the adopted
+        //! Thread's own Object base is simply built with no affinity and bindAffinityToSelf() points
+        //! it at itself immediately afterwards.
+        static thread_local bool sAdopting;
         friend class CoreApplication;
         //! Grants Object access to threadData() when adopting or releasing thread affinity.
         friend class Object;

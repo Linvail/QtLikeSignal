@@ -444,6 +444,23 @@ namespace QtLikeSignal
             ConnectionType aType
             );
 
+        //! Dispatches a metacall to an explicitly named thread, ignoring the receiver's affinity.
+        //!
+        //! The shared core of the two overloads above, and the entry point for a caller that knows
+        //! which thread it means rather than inferring it from an Object. Thread::post() needs
+        //! exactly that: it targets the thread's *own* queue, which is not the same as the queue the
+        //! Thread object happens to live in -- a Thread is constructed on one thread and then runs on
+        //! another, so routing post() through its Object affinity would deliver to whoever created it
+        //! until its loop started and re-pointed the affinity at itself.
+        static bool
+        dispatchMetaCallTo
+            (
+            const std::shared_ptr<ThreadData>& aData,
+            Object* aReceiver,
+            std::function<void()> aSlot,
+            ConnectionType aType
+            );
+
         //! Prunes one connection from its receiver's mIncoming when that connection ends.
         //!
         //! Held by shared_ptr inside the connection's own slot closure, so it is destroyed exactly

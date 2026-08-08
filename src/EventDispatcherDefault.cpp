@@ -225,6 +225,29 @@ namespace QtLikeSignal
     void EventDispatcherDefault::wakeWaiter()
     {
         mCv.notify_all();
+
+        // Copy under its own lock, then invoke released: this is reached both with and without
+        // mMutex held, and the callback is user code that must not be run while holding a lock we
+        // might not even own.
+        std::function<void()> callback;
+        {
+            std::lock_guard<std::mutex> lock( mWakeCallbackMutex );
+            callback = mWakeCallback;
+        }
+        if( callback )
+        {
+            callback();
+        }
+    }
+
+    //! Installs the callback invoked whenever work is queued for this thread. Thread-safe.
+    void EventDispatcherDefault::setWakeCallback
+        (
+        std::function<void()> aCallback  //!< Invoked on post; nullptr clears.
+        )
+    {
+        std::lock_guard<std::mutex> lock( mWakeCallbackMutex );
+        mWakeCallback = std::move( aCallback );
     }
 
     //! Drains OS/platform events. No-op here: the cross-platform dispatcher has no OS event source.

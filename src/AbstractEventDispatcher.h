@@ -2,6 +2,7 @@
 #define ABSTRACTEVENTDISPATCHER_H
 
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <condition_variable>
 #include <atomic>
@@ -42,6 +43,22 @@ namespace QtLikeSignal
 
         //! Interrupts the event loop execution. Thread-safe.
         virtual void interrupt() = 0;
+
+        //! Installs a callback invoked whenever work is queued for this dispatcher's thread.
+        //!
+        //! For a thread that runs its own native loop instead of exec(): the callback runs on
+        //! whichever thread posted the work and should nudge that native loop so it knows to call
+        //! processEvents(). Pass nullptr to remove it.
+        //!
+        //! Loop-level like wakeUp() and interrupt(), so it is public for the same reason -- it
+        //! cannot be aimed at a particular receiver.
+        //!
+        //! The callback may run with this dispatcher's internal lock held, so it must not block or
+        //! call back into the dispatcher; signal the native loop and return. Thread-safe.
+        virtual void setWakeCallback
+            (
+            std::function<void()> aCallback  //!< Invoked on post; nullptr clears.
+            ) = 0;
 
         //! Dispatches any pending deferred-delete events, destroying their receivers.
         //!

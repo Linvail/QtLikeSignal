@@ -102,24 +102,44 @@ TEST( CoreApplicationTest, InstanceTracksApplicationLifetime )
     EXPECT_EQ( CoreApplication::instance(), nullptr );
 }
 
-//! Verifies constructing the application adopts the calling thread, and destroying it releases it.
+//! Verifies the application runs on the thread that was already adopted, and hands it back intact.
 //!
-//! Adoption is what gives main-thread Objects an affinity, and therefore what lets them receive
-//! timers, posted events and deleteLater(). The release half matters just as much here: without
-//! it every later test in this binary would inherit the affinity.
-TEST( CoreApplicationTest, ConstructionAdoptsTheCallingThreadAndDestructionReleasesIt )
+//! Since auto-adoption landed, the calling thread is a Thread before CoreApplication is built --
+//! its own Object base triggers the adoption. So the application does not create a second Thread to
+//! be "the main thread"; it takes over the existing one and gives it the platform dispatcher its
+//! loop needs. Destroying it must leave that thread usable rather than stripping its dispatcher,
+//! because the thread outlives the application and Objects still live on it.
+TEST( CoreApplicationTest, ApplicationRunsOnTheAlreadyAdoptedThreadAndLeavesItUsable )
 {
-    EXPECT_EQ( Thread::currentThread(), nullptr );
+    Thread* const adopted = Thread::currentThread();
+    ASSERT_NE( adopted, nullptr ) << "every thread should be adopted on demand";
+    EXPECT_TRUE( adopted->isAdopted() );
+
     {
         CoreApplication app;
-        ASSERT_NE( Thread::currentThread(), nullptr );
 
-        // An object created now lives in the adopted main thread.
+        // Same Thread, not a new one.
+        EXPECT_EQ( Thread::currentThread(), adopted );
+        EXPECT_EQ( app.thread(), adopted );
+
         Object owned;
-        EXPECT_EQ( owned.thread(), Thread::currentThread() );
-        EXPECT_EQ( app.thread(), Thread::currentThread() );
+        EXPECT_EQ( owned.thread(), adopted );
     }
-    EXPECT_EQ( Thread::currentThread(), nullptr );
+
+    // The thread is owned by a thread_local inside Thread, not by the application, so it survives.
+    EXPECT_EQ( Thread::currentThread(), adopted );
+    EXPECT_NE( adopted->eventDispatcher(), nullptr )
+        << "the application stripped the thread's dispatcher on the way out, which would silently "
+        "break every Object still living on it.";
+
+    // And it still works: a queued call must be deliverable, drained by processEvents() since no
+    // loop is running here any more.
+    Object receiver;
+    bool ran = false;
+    Object::callLater( &receiver, &Object::setObjectName, std::string( "ok" ) );
+    ( void )ran;
+    adopted->processEvents();
+    EXPECT_EQ( receiver.objectName(), "ok" );
 }
 
 //! Verifies the command-line overload captures arguments and the default constructor reports none.

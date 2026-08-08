@@ -740,17 +740,29 @@ TEST( ObjectDefectTest, CallLaterRecoversAfterFirstDispatchFails )
 {
     ObjectDefectCallLaterTarget target;
 
-    // No dispatcher anywhere yet -- this call cannot be delivered and is expected to be lost.
+    // Park the target on a Thread that exists but has not been started yet. A Thread only acquires
+    // a dispatcher when its loop starts (or when it is auto-adopted), so this is now the way to get
+    // an object whose thread genuinely cannot deliver. Leaving the target on the main thread no
+    // longer works: every thread is adopted and given a dispatcher, so the main thread would
+    // happily queue the call and the failure path would never be exercised.
+    //
+    // The same Thread is started later rather than moving the target to a different one, because
+    // moveToThread() is push-only -- once the target lives on `worker`, only `worker` may re-home
+    // it, and a thread that never runs never will. Qt has that property too.
+    Thread worker;
+    ASSERT_TRUE( target.moveToThread( &worker ) );
+    ASSERT_EQ( worker.eventDispatcher(), nullptr );
+
+    // No dispatcher on the target's thread -- this call cannot be delivered and is expected to be
+    // lost.
     Object::callLater( &target, &ObjectDefectCallLaterTarget::onCall );
     EXPECT_EQ( target.callCount(), 0 ) << "call ran despite there being no dispatcher.";
 
-    Thread worker;
     worker.start();
     while( !worker.eventDispatcher() )
     {
         std::this_thread::yield();
     }
-    target.moveToThread( &worker );
 
     // Same target, same slot -- must re-arm now that a dispatcher exists.
     Object::callLater( &target, &ObjectDefectCallLaterTarget::onCall );

@@ -32,6 +32,11 @@ namespace QtLikeSignal
 
         virtual void processDeferredDeletes() override;
 
+        virtual void setWakeCallback
+            (
+            std::function<void()> aCallback
+            ) override;
+
     protected:
         // Mirrors the access level AbstractEventDispatcher gives these. The base class's access
         // already governs every call made through the AbstractEventDispatcher* that
@@ -128,6 +133,17 @@ namespace QtLikeSignal
         // waiting. Needed because the wait is predicate-based: without a state change to observe, a
         // bare notify_all() from wakeUp() cannot end the wait.
         bool mWakeUpRequested { false };
+
+        //! Nudges an adopted thread's own native loop when work is posted; empty if unused.
+        std::function<void()> mWakeCallback;
+
+        //! Guards mWakeCallback -- deliberately NOT mMutex.
+        //!
+        //! wakeWaiter() is reached both with mMutex held (registerTimer, unregisterTimer) and
+        //! without it (postEvent, wakeUp, interrupt). Reading the callback under mMutex would
+        //! therefore relock a non-recursive mutex this thread already owns on half the paths. A
+        //! separate lock makes the read safe from either.
+        mutable std::mutex mWakeCallbackMutex;
     };
 }
 

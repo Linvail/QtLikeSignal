@@ -643,8 +643,25 @@ namespace QtLikeSignal
         ConnectionType aType                         //!< Connection type.
         )
     {
-        const std::shared_ptr<ThreadData> targetData = aAffinity ? aAffinity->data() : nullptr;
-        Thread* const targetThread = targetData ? targetData->thread() : nullptr;
+        return dispatchMetaCallTo( aAffinity ? aAffinity->data() : nullptr, aReceiver,
+            std::move( aSlot ), aType );
+    }
+
+    //! Dispatches a metacall to an explicitly named thread, ignoring the receiver's affinity.
+    //!
+    //! Thread-safe. @p aReceiver is only the dispatcher's queue key here (for postEvent() and
+    //! removeEventsForReceiver() bookkeeping) and is never dereferenced. Returns true if the slot
+    //! ran (direct) or was queued; false if @p aData is null or its thread has no dispatcher, in
+    //! which case the call is dropped.
+    bool Object::dispatchMetaCallTo
+        (
+        const std::shared_ptr<ThreadData>& aData,  //!< Thread to deliver on; null means nowhere.
+        Object* aReceiver,                           //!< Receiver; used only as the queue key.
+        std::function<void()> aSlot,                 //!< Callback function.
+        ConnectionType aType                       //!< Connection type.
+        )
+    {
+        Thread* const targetThread = aData ? aData->thread() : nullptr;
 
         ConnectionType activeType = aType;
         if( activeType == ConnectionType::AutoConnection )
@@ -658,7 +675,7 @@ namespace QtLikeSignal
         if( activeType == ConnectionType::QueuedConnection )
         {
             auto* event = new MetaCallEvent( aSlot );
-            if( auto disp = targetData ? targetData->dispatcher() : nullptr )
+            if( auto disp = aData ? aData->dispatcher() : nullptr )
             {
                 disp->postEvent( aReceiver, static_cast<Event*>( event ) );
                 return true;

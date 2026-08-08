@@ -16,7 +16,7 @@ no runtime probe was written.
 |-----|------|----------|--------------|
 | R17 | Destroyed receivers are never disconnected — unbounded dead-slot growth | **High** | Probe (672 MB, 327 ms emit) — **Fixed 2026-08-08** |
 | R18 | `CoreApplication::exec()` after `quit()` burns 100% CPU (was R1) | **High** | Probe (cpu/wall = 100%) — **Fixed 2026-08-08** |
-| R19 | Objects with no affinity get cross-thread *direct* calls; Qt drops them | Medium | Probe |
+| R19 | Objects with no affinity get cross-thread *direct* calls; Qt drops them | Medium | Probe — **Fixed 2026-08-08** |
 | R20 | `~Object()`'s new warning dereferences a `Thread*` that may dangle | Low-Med | Inspection — *self-inflicted* — **Fixed 2026-08-08** |
 | R21 | `CoreApplication` has no test coverage at all | Medium | Inspection — **Fixed 2026-08-08** (13 tests) |
 | R22 | Platform dispatchers are still empty shells (was R6) | Medium | Inspection — **Fixed 2026-08-08** |
@@ -130,9 +130,49 @@ is precisely that case.
 Minimal fix is to clear `mInterrupt` at the start of `processEvents()` (or on entry to `exec()`),
 matching Qt, where `QEventLoop::exec()` resets its own interruption state per run.
 
-## R19 — An object with no thread affinity receives cross-thread *direct* calls
+## R19 — An object with no thread affinity receives cross-thread *direct* calls *(fixed 2026-08-08)*
 
 **Severity: Medium. Confirmed by probe.**
+
+> **Resolution (2026-08-08).** Auto-adoption, so the premise is removed rather than the symptom
+> special-cased: `Thread::currentThread()` now adopts the calling native thread on demand and never
+> returns nullptr, so there is no affinity-less Object for two nullptrs to collapse against.
+>
+> Three things had to be solved to get there, none of them obvious up front:
+>   - **Recursion.** `Thread` derives from `Object`, and `Object`'s constructor asks for
+>     `currentThread()` -- so constructing the adopted `Thread` re-enters adoption. A thread_local
+>     `sAdopting` flag makes the nested call report nullptr; the adopted Thread is built with no
+>     affinity and `bindAffinityToSelf()` points it at itself a moment later.
+>   - **Thread self-adoption.** `threadBody()` used `moveToThread(this)`, which worked only via the
+>     *unowned object* exception. Once every thread is adopted, a Thread constructed on thread A
+>     always has affinity to A, so a starting worker was refused permission to adopt itself.
+>     Replaced with `bindAffinityToSelf()`, which sets the Affinity directly -- documented as the one
+>     legitimate bypass, since this is the thread in question taking ownership of the object that
+>     represents it, not a foreign thread yanking someone else's object.
+>   - **`Thread::post()` targeted the wrong queue.** It routed through the Thread's *Object*
+>     affinity, which points at whoever constructed it until its loop starts. Before adoption that
+>     was harmless (no dispatcher, so the post failed); after adoption the creating thread has a
+>     dispatcher, so `post()` before `start()` silently delivered to the creator. Caught by
+>     `ThreadTest.PostBeforeStartFails` and fixed with a new `dispatchMetaCallTo()` that takes the
+>     ThreadData explicitly.
+>
+> Adopted threads get a plain `EventDispatcherDefault`, not the platform one -- allocating an eventfd
+> or message-only window per native thread that merely touches an Object would be wasteful.
+> `CoreApplication` swaps in the platform dispatcher for the thread that actually runs a loop, and
+> hands a plain one back on destruction so Objects still living there keep working.
+>
+> An adopted thread has a queue but no loop, so queued work accumulates until drained -- matching Qt,
+> where posted events sit in the thread's list until something dispatches them. `Thread::processEvents()`
+> and `Thread::setWakeCallback()` are the drain and the notification, which is the adopted-thread
+> workflow the mission detail describes.
+>
+> Covered by `ThreadAdoptionTest` (6 tests), including the R19 regression itself -- verified to catch
+> it: disabling auto-adoption makes the slot run on the emitting thread again and the test fails.
+>
+> Two existing tests changed meaning and were rewritten rather than patched:
+> `CallLaterRecoversAfterFirstDispatchFails` now parks its target on an unstarted `Thread` (the only
+> remaining way to have a thread that cannot deliver), and the CoreApplication adoption test now
+> asserts the application reuses the already-adopted thread and leaves it usable.
 
 `dispatchMetaCall()` resolves `AutoConnection` as `currentThread == targetThread ? Direct :
 Queued`. When an object has no affinity **and** the emitting thread is not a `QtLikeSignal::Thread`,
@@ -347,7 +387,7 @@ self-enforcing.
 2. ~~**R18**~~ — done 2026-08-08.
 3. ~~**R21**~~ — done 2026-08-08. R9 (unguarded singleton) is now warned about, not asserted.
 4. ~~**R20**~~ — done 2026-08-08.
-5. **R19** — needs the auto-adoption design decision first; do not change the rule piecemeal.
+5. ~~**R19**~~ — done 2026-08-08 via auto-adoption.
 
 ## Not re-verified this pass
 

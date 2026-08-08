@@ -12,6 +12,8 @@
 namespace QtLikeSignal
 {
     thread_local Thread* Thread::sCurrentThread = nullptr;
+    thread_local std::unique_ptr<Thread> Thread::sAdoptedThread;
+    thread_local bool Thread::sAdopting = false;
 
     //! Constructs a new thread object.
     Thread::Thread()
@@ -26,6 +28,14 @@ namespace QtLikeSignal
     {
         quit();
         wait();
+
+        // An adopted Thread is destroyed by the thread_local that owns it, as the native thread
+        // exits; nothing else clears the registration for it the way threadBody() does for a worker.
+        // Leaving it set would hand out a pointer to freed memory on the way out.
+        if( sCurrentThread == this )
+        {
+            sCurrentThread = nullptr;
+        }
 
         // Clear the back-pointer LAST, once the OS thread is guaranteed stopped. Anything still
         // holding this ThreadData (an Object living here, an Affinity captured by a connect() made
@@ -87,7 +97,11 @@ namespace QtLikeSignal
     void Thread::threadBody()
     {
         sCurrentThread = this;
-        moveToThread( this );
+        // Not moveToThread(this): see bindAffinityToSelf(). Once every thread is adopted, this
+        // Thread object already has an affinity (to whichever thread constructed it), so
+        // moveToThread() would correctly refuse to let a *different* thread re-home it -- even
+        // though that different thread is this one, taking ownership of the object representing it.
+        bindAffinityToSelf();
 
         {
             // Blocks here until start() releases the lock, which is what guarantees the native
@@ -252,10 +266,126 @@ namespace QtLikeSignal
         return mPriority;
     }
 
-    //! Gets a pointer to the thread currently executing. Thread-safe.
+    //! Gets the Thread the calling thread is running as, never nullptr.
+    //!
+    //! If the caller was not started through this class -- the process's main thread, or a raw
+    //! std::thread -- it is *adopted* on the spot: a Thread is created to represent it, given a
+    //! default event dispatcher, and owned by a thread_local that releases it when the native
+    //! thread exits. Qt does the same, and the guarantee it buys is that every Object has a thread
+    //! affinity. Without it, an Object created off-thread had none, and a queued connection whose
+    //! emitter was also affinity-less compared nullptr == nullptr, decided "same thread", and ran
+    //! the slot directly on the emitting thread -- an unsynchronised cross-thread call that Qt
+    //! explicitly does not perform ("if a QObject has no thread affinity ... it cannot receive
+    //! queued signals or posted events").
+    //!
+    //! An adopted thread has a queue but no loop running on it, so queued work accumulates until
+    //! the thread drains it with processEvents() (or runs exec()). That matches Qt, where posted
+    //! events sit in the thread's list until something dispatches them.
+    //!
+    //! @note Do not store the returned pointer anywhere that may outlive the thread. For an adopted
+    //! thread that is only until the native thread exits. Hold the ThreadData instead, which stays
+    //! valid and reports thread() == nullptr once its Thread is gone.
     Thread* Thread::currentThread()
     {
+        // sAdopting breaks the recursion: constructing the Thread below runs Object's constructor,
+        // which calls straight back into here.
+        if( sCurrentThread == nullptr && !sAdopting )
+        {
+            sAdopting = true;
+            // Built with no affinity (currentThread() reports nullptr while sAdopting is set);
+            // adoptCallingThread() points it at itself immediately.
+            sAdoptedThread.reset( new Thread() );
+            sAdopting = false;
+
+            sAdoptedThread->adoptCallingThread();
+        }
         return sCurrentThread;
+    }
+
+    //! Makes this Thread represent the calling native thread.
+    //!
+    //! Used only for auto-adoption. Registers as the current thread, records the OS thread id, and
+    //! installs a plain cross-platform dispatcher -- not the platform one, which would allocate an
+    //! eventfd or a message-only window for every native thread that merely touches an Object. A
+    //! thread that actually runs a loop gets the platform dispatcher instead: worker threads in
+    //! threadBody(), the main thread in CoreApplication.
+    void Thread::adoptCallingThread()
+    {
+        mAdopted = true;
+        sCurrentThread = this;
+        bindAffinityToSelf();
+
+        if( !mData->dispatcher() )
+        {
+            mData->setDispatcher( std::make_shared<EventDispatcherDefault>() );
+        }
+    }
+
+    //! Points this Thread's own Object affinity at the thread it represents.
+    //!
+    //! Deliberately bypasses moveToThread(), which would refuse. moveToThread() enforces that only
+    //! the thread currently owning an object may re-home it, with an exception for objects that have
+    //! no affinity yet -- and once every thread is adopted, a Thread constructed on thread A always
+    //! *does* have affinity (to A), so a worker starting up would be refused permission to adopt
+    //! itself. That rule exists to stop one thread yanking another thread's live object away, which
+    //! is not what is happening here: this is the thread in question taking ownership of the object
+    //! that represents it, at the only moment that can possibly be correct.
+    //!
+    //! Skips moveToThread()'s timer migration too. A Thread object with timers registered against it
+    //! before its loop starts would keep them on the creating thread's dispatcher, which is a corner
+    //! case not worth the confinement violation of migrating them from here.
+    void Thread::bindAffinityToSelf()
+    {
+        mAffinity->setData( mData );
+    }
+
+    //! Whether this Thread wraps a pre-existing native thread rather than one it started.
+    bool Thread::isAdopted() const
+    {
+        return mAdopted;
+    }
+
+    //! Runs one pass of this thread's event loop, then returns.
+    //!
+    //! For a thread that has its own native loop and therefore never calls exec(): call this from
+    //! that loop to deliver queued slot invocations, deferred deletes and timer events. Combine it
+    //! with setWakeCallback() so the native loop knows when there is something to drain, instead of
+    //! polling for it.
+    //!
+    //! **Must be called from this thread**; it dispatches to objects that live here, and their
+    //! handlers expect to run here. A call from elsewhere is rejected with a warning.
+    void Thread::processEvents()
+    {
+        if( this != currentThread() )
+        {
+            std::fprintf( stderr,
+                "Thread::processEvents: must be called from the thread it belongs to\n" );
+            return;
+        }
+
+        if( auto dispatcher = mData->dispatcher() )
+        {
+            dispatcher->processEvents();
+        }
+    }
+
+    //! Installs a callback invoked whenever work is queued for this thread. Thread-safe.
+    //!
+    //! The other half of the adopted-thread story: it runs on whichever thread posted the work, and
+    //! its job is to nudge this thread's own native loop -- typically by sending it a private event
+    //! -- so that the loop knows to call processEvents(). Pass nullptr to remove it.
+    //!
+    //! Called with the dispatcher's internals locked, so it must not block or re-enter the
+    //! dispatcher; post to the native loop and return.
+    void Thread::setWakeCallback
+        (
+        std::function<void()> aCallback  //!< Invoked on post; nullptr clears.
+        )
+    {
+        if( auto dispatcher = mData->dispatcher() )
+        {
+            dispatcher->setWakeCallback( std::move( aCallback ) );
+        }
     }
 
     //! Gets the event dispatcher for this thread. Thread-safe.
@@ -294,7 +424,14 @@ namespace QtLikeSignal
         }
         // Explicit QueuedConnection (not Auto): post() must always defer, even when called from this
         // thread itself -- Auto would resolve to a same-thread call and run inline instead.
-        return dispatchMetaCall( this, std::move( aTask ), ConnectionType::QueuedConnection );
+        //
+        // Targeted at mData, this thread's own queue, rather than at this Thread *as an Object*. The
+        // two are not the same: a Thread is constructed on one thread and runs on another, so its
+        // Object affinity points at its creator until its loop starts and re-points it. Routing
+        // post() through the affinity therefore delivered to the creating thread for any task posted
+        // before start(), which is not what "post to this thread" can possibly mean.
+        return dispatchMetaCallTo( mData, this, std::move( aTask ),
+            ConnectionType::QueuedConnection );
     }
 
     //! Starting point for thread execution. Can be overridden. Default calls exec().

@@ -85,7 +85,9 @@ namespace QtLikeSignal
 
         static CoreApplication* sInstance;  //!< The process-wide application instance.
 
-        std::unique_ptr<Thread>                  mMainThread;  //!< The adopted main thread.
+        //! The adopted main thread. Non-owning: the thread_local inside Thread owns it, and
+        //! releases it when the native thread exits.
+        Thread* mMainThread { nullptr };
         // shared_ptr rather than unique_ptr: ThreadData hands out strong references, so a dispatcher
         // cannot be destroyed while another thread is part-way through a call into it.
         std::shared_ptr<AbstractEventDispatcher> mDispatcher;  //!< The main thread's event dispatcher.
