@@ -307,6 +307,7 @@ TEST( ObjectTest, TimerStartAndKill )
             obj.killTimer( timerId1 );
             obj.killTimer( timerId2 );
         } );
+    thread->start();
     thread->wait();
     delete thread;
 }

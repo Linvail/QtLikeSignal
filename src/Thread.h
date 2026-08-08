@@ -110,10 +110,22 @@ namespace QtLikeSignal
         //! Signal emitted when the thread finishes execution.
         Signal<> finished;
 
-        //! Creates and starts a Thread executing the specified function. Function is the callable
+        //! Creates a Thread that will execute the specified function. Function is the callable
         //! type and Args its argument types. Thread-safe.
+        //!
+        //! **The caller acquires ownership of the returned Thread**, and must eventually delete it
+        //! (directly, or by connecting finished to its own deleteLater()). Returned raw rather than
+        //! in a unique_ptr precisely so that self-deletion stays possible; a unique_ptr would turn
+        //! the usual "delete myself once my loop ends" idiom into a double delete. Qt returns a raw
+        //! QThread* and documents ownership the same way, for the same reason.
+        //!
+        //! **The thread is not started.** Call start() when ready. That gap is the point: it is the
+        //! only window in which you can connect to started, move Objects onto the thread, or choose
+        //! its priority -- setPriority() refuses on a thread that is not running, so a thread that
+        //! started itself can never be given one without a race. Qt's QThread::create() leaves the
+        //! thread unstarted for exactly these reasons.
         template <typename Function, typename ... Args>
-        static Thread* create( Function&& aF, Args&&... aArgs );
+        [[nodiscard]] static Thread* create( Function&& aF, Args&&... aArgs );
 
     protected:
         virtual void run();
@@ -233,7 +245,7 @@ namespace QtLikeSignal
         friend class Object;
     };
 
-    //! Creates and starts a Thread executing the specified function.
+    //! Creates a Thread that will execute the specified function, without starting it.
     //!
     //! The wrapping FuncThread subclass exists purely so create() can hand back a plain Thread*
     //! without requiring callers to declare their own subclass just to run a callable.
@@ -271,9 +283,10 @@ namespace QtLikeSignal
             std::function<void()> mFn;
         };
 
-        auto* threadObj = new FuncThread( task );
-        threadObj->start();
-        return threadObj;
+        // Deliberately NOT started here -- see the declaration. Starting it would close the only
+        // window in which the caller can connect to started, re-home Objects onto it, or set its
+        // priority.
+        return new FuncThread( task );
     }
 }
 
