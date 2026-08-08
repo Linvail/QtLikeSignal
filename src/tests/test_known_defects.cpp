@@ -6,7 +6,9 @@
 //! and *moves out of this file* into test_defect_regressions.cpp. That matters: the
 //! `-KnownDefect.*` baseline below is only trustworthy while everything here is genuinely broken.
 //!
-//! R23 was fixed on 2026-08-08 and its two tests now live in test_defect_regressions.cpp.
+//! R23 and R26 were fixed on 2026-08-08 and their tests now live in test_defect_regressions.cpp.
+//! R26's original test here asserted the wrong thing and was replaced rather than moved -- see the
+//! note in the risk register.
 //!
 //! For a green baseline while these are outstanding:
 //! @code
@@ -52,18 +54,6 @@ using namespace QtLikeSignal;
 
 namespace
 {
-    //! How long R26's blocking task stalls the event loop, in milliseconds.
-    //!
-    //! 3.4 periods of R26's 50 ms timer, so it overshoots a deadline by 20 ms -- a phase error far
-    //! larger than scheduling jitter, and deliberately not a whole multiple of the interval.
-    constexpr int kR26BlockMs = 170;
-
-    //! Blocks the calling event loop, to make it miss a timer deadline on purpose.
-    void stallTheLoop()
-    {
-        std::this_thread::sleep_for( std::chrono::milliseconds( kR26BlockMs ) );
-    }
-
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -103,69 +93,4 @@ TEST( KnownDefect, R24_TimerIdsAreNeverRecycled )
         << " distinct ids (from " << ids.front() << " to " << ids.back()
         << "). Ids are never returned to a pool, so the counter climbs until it wraps and "
         "eventually collides with the -1 failure sentinel.";
-}
-
-// ---------------------------------------------------------------------------------------------
-// R26 -- a repeating timer's schedule is permanently displaced by one late wakeup.
-//
-// EventDispatcherDefault re-arms with `t.mNextFire = now + interval`, where `now` is when the
-// dispatcher got around to noticing the timer -- not the deadline that just passed. Any lateness is
-// therefore folded into the schedule for good, rather than being caught up or skipped past. Qt
-// computes the next deadline from the previous one, so a single late pass shifts one fire, not
-// every fire thereafter.
-// ---------------------------------------------------------------------------------------------
-
-//! R26: after one deliberately-missed deadline, every later fire stays displaced by the overshoot.
-//!
-//! **Timing-sensitive by nature** -- it has to make the loop late on purpose. The blocking task
-//! overshoots a deadline by a large, deliberately non-multiple amount (70 ms on a 50 ms period) so
-//! the resulting phase error is far outside scheduling jitter.
-TEST( KnownDefect, R26_TimerScheduleStaysDisplacedAfterALateWakeup )
-{
-    CoreApplication app;
-
-    constexpr int kIntervalMs = 50;
-    constexpr size_t kFiresWanted = 5;
-
-    Object context;
-    std::vector<double> fireOffsetsMs;
-
-    Timer timer;
-    const auto started = std::chrono::steady_clock::now();
-    Object::connect( timer.timeout, &timer, [&]()
-        {
-            fireOffsetsMs.push_back(
-                std::chrono::duration<double, std::milli>(
-                    std::chrono::steady_clock::now() - started ).count() );
-            if( fireOffsetsMs.size() >= kFiresWanted )
-            {
-                CoreApplication::quit();
-            }
-        }, ConnectionType::DirectConnection );
-
-    // Stall the loop straight through the first deadline. callLater() rejects lambdas (it cannot
-    // hash them for deduplication), so this goes through a plain function.
-    Object::callLater( &context, &stallTheLoop );
-
-    timer.start( kIntervalMs );
-    ASSERT_EQ( app.exec(), 0 );
-    timer.stop();
-
-    ASSERT_GE( fireOffsetsMs.size(), kFiresWanted );
-
-    // Look only at fires well after the stall, by which point the schedule should have recovered.
-    double worstPhaseErrorMs = 0.0;
-    for( size_t i = 2; i < fireOffsetsMs.size(); ++i )
-    {
-        const double periods = fireOffsetsMs[i] / kIntervalMs;
-        const double phaseErrorMs
-            = std::abs( ( periods - std::round( periods ) ) * kIntervalMs );
-        worstPhaseErrorMs = std::max( worstPhaseErrorMs, phaseErrorMs );
-    }
-
-    EXPECT_LT( worstPhaseErrorMs, 12.0 )
-        << "one late wakeup displaced the timer's schedule by " << worstPhaseErrorMs
-        << " ms and it never recovered: fires stay off the original cadence because the next "
-        "deadline is computed from when the dispatcher woke rather than from the deadline that "
-        "elapsed.";
 }

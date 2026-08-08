@@ -1359,3 +1359,90 @@ TEST( ObjectDefectTest, QueuedCallsToAnOrphanedObjectAreDropped )
         << " kB. They are being queued into a dispatcher nothing will ever drain, instead of being "
         "dropped.";
 }
+
+// ---------------------------------------------------------------------------------------------
+// Defect (R26): a repeating timer's next deadline was computed from when the dispatcher noticed the
+// timer rather than from the deadline that had just elapsed, so any lateness was folded into the
+// cadence permanently instead of being absorbed.
+//
+// Qt's calculateNextTimeout() (qtimerinfo_unix.cpp) does both halves:
+//
+//     t->timeout += t->interval;          // advance from the previous DEADLINE
+//     if (t->timeout < now) {             // unless that is already past...
+//         t->timeout = now;
+//         t->timeout += t->interval;      // ...then resynchronise instead of building a backlog
+//     }
+//
+// Note the resynchronisation: after a stall longer than one interval Qt also gives up on the
+// original cadence. So the divergence is narrower than it first looks -- it is only lateness of
+// *less than one interval* that Qt absorbs and this code used to accumulate.
+// ---------------------------------------------------------------------------------------------
+
+//! Records when its timer fired, relative to a caller-supplied origin.
+class TimerCadenceRecorder : public Object
+{
+public:
+    //! Fire times since mOrigin, in milliseconds.
+    std::vector<double> mFireOffsetsMs;
+
+    //! Origin the offsets are measured from; set before registering the timer.
+    std::chrono::steady_clock::time_point mOrigin;
+
+protected:
+    virtual void timerEvent
+        (
+        TimerEvent* aEvent
+        ) override
+    {
+        ( void )aEvent;
+        mFireOffsetsMs.push_back(
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - mOrigin ).count() );
+    }
+};
+
+//! Verifies one late pass does not shift a repeating timer's cadence.
+//!
+//! Deliberately whitebox, driving a standalone dispatcher rather than a running loop: that is what
+//! makes "the pass is late by a controlled amount" a single precise sleep instead of a contrived
+//! load generator. The lateness (20 ms) is under one interval (50 ms), which is exactly the band
+//! where Qt preserves the schedule -- past a whole interval Qt resynchronises too, so asserting
+//! anything there would be asserting non-Qt behaviour.
+//!
+//! Second fire lands at ~100 ms if the deadline drives the schedule, or ~120 ms if the moment of
+//! noticing does. The threshold sits between them with 10 ms of margin either side.
+TEST( EventDispatcherDefaultDefectTest, LatePassDoesNotShiftARepeatingTimersCadence )
+{
+    // Declared before the dispatcher so the dispatcher is destroyed first and never holds a stale
+    // receiver pointer.
+    TimerCadenceRecorder recorder;
+    DefectTestableDispatcher dispatcher;
+
+    constexpr int kIntervalMs = 50;
+    constexpr int kLatePassMs = 70;   // 20 ms past the first deadline, still short of the second
+
+    recorder.mOrigin = std::chrono::steady_clock::now();
+    dispatcher.registerTimer( 1, kIntervalMs, &recorder );
+
+    // Leave the dispatcher unserviced straight through the first deadline.
+    std::this_thread::sleep_for( std::chrono::milliseconds( kLatePassMs ) );
+
+    dispatcher.processEvents();
+    ASSERT_EQ( recorder.mFireOffsetsMs.size(), 1u )
+        << "the overdue timer should fire on the first pass that services it";
+
+    // Drive the dispatcher until the timer fires again. Each pass blocks until the next deadline,
+    // so this does not spin.
+    while( recorder.mFireOffsetsMs.size() < 2 )
+    {
+        dispatcher.processEvents();
+    }
+
+    const double secondFireMs = recorder.mFireOffsetsMs[1];
+    EXPECT_LT( secondFireMs, 110.0 )
+        << "the second fire landed at " << secondFireMs << " ms. The first pass was "
+        << ( kLatePassMs - kIntervalMs ) << " ms late, and that lateness has been folded into the "
+        "schedule: the next deadline was computed from when the dispatcher noticed the timer ("
+        << kLatePassMs << " + " << kIntervalMs << ") instead of from the deadline that elapsed ("
+        << kIntervalMs << " + " << kIntervalMs << "). Every late pass shifts the cadence again.";
+}
