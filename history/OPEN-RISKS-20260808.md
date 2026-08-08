@@ -305,9 +305,33 @@ depends on it.**
 > allowed"). All 83 tests also now run *through* the poll()-based dispatcher, since worker threads
 > and the main thread both build it on Linux.
 >
-> **Verification asymmetry, stated plainly:** the Linux half is compiled and run here. The Windows
-> half is only **compile-verified**, via the `linux-2-win64-clang` cross toolchain (clean build, real
-> 78 KB object). Nothing has executed it. It needs a run on Windows before being trusted.
+> **Verification status.** Linux: compiled and run. Windows: **run on Windows, 89/89 passing**
+> (2026-08-08), after a first run exposed a broken measurement in the test rather than a defect in
+> the dispatcher -- see the `std::clock()` note below.
+>
+> What the Windows run actually proves, since it matters which parts are covered:
+>   - the loop **blocks** rather than spins -- `ReExecAfterQuitBlocksInsteadOfSpinning` compares real
+>     process CPU time against wall time over 300 ms, so a spinning `MsgWaitForMultipleObjectsEx`
+>     would fail it;
+>   - `PostMessage` **wakes** a blocked loop -- every cross-thread queued-delivery test depends on it
+>     (`QueuedSignalFromWorkerIsDeliveredOnTheMainThread` emits from a worker while the main thread
+>     is inside `exec()`);
+>   - the **finite-timeout** path works -- `TimerFiresOnTheMainThreadLoop` and the timer-driven quits;
+>   - `processPlatformEvents()` drains without disturbing our own queue.
+>
+> **Still not covered on Windows:** dispatching a genuine OS window message. Nothing in the suite
+> creates a real window or posts a real `WM_` message, so `TranslateMessage`/`DispatchMessage` and
+> the `WM_QUIT` branch have never executed. Mission stage 5's "I want to receive OS/platform's
+> messages" is therefore tested on Linux (`registerEventSource`) but only inferred on Windows.
+
+> **Testing note (2026-08-08), worth not relearning:** the first Windows run failed
+> `ReExecAfterQuitBlocksInsteadOfSpinning` at `cpu/wall = 0.998`, which looked exactly like a 100%
+> spin in the new Win32 dispatcher. It was not. Both spin tests measured CPU time with
+> `std::clock()`, which C specifies as processor time but **MSVC implements as wall-clock time since
+> CRT init** -- so the ratio was ~1.0 on Windows whatever the loop did, and the test could only fail.
+> Replaced with `TestSupport::processCpuSeconds()` (`GetProcessTimes` on Windows,
+> `getrusage(RUSAGE_SELF)` elsewhere) in `src/tests/TestCpuTime.h`. `std::clock()` is not usable for
+> CPU-time assertions in a cross-platform test.
 
 `EventDispatcherLinux` and `EventDispatcherWin32` are both a constructor and a destructor, both
 `= default`, deriving from `EventDispatcherDefault` and overriding nothing. No `epoll`, no
