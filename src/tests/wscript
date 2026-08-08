@@ -1,7 +1,9 @@
 def build(bld):
     kw = {}
     kw["features"] = ["cxx", "cxxprogram", "debug-info"]
-    kw["source"] = bld.path.ant_glob("*.cpp")
+    # The performance benchmarks are their own binary with their own main(), and are far too slow
+    # to belong in the correctness suite. Excluded here on both counts.
+    kw["source"] = bld.path.ant_glob("*.cpp", excl=["test_QtLikeSignal_Performance.cpp"])
     kw["includes"] = ["."]
     kw["use"] = ["QtLikeSignal", "google-test"]
 
@@ -9,3 +11,15 @@ def build(bld):
         kw["lib"] = ["user32"]
 
     bld(target="QtLikeSignal-Tests", **kw)
+
+    kw = {}
+    kw["features"] = ["cxx", "cxxprogram", "debug-info"]
+    kw["source"] = ["test_QtLikeSignal_Performance.cpp"]
+    kw["includes"] = ["."]
+    # QtMimic too: the benchmarks measure both libraries side by side in one process.
+    kw["use"] = ["QtLikeSignal", "QtMimic", "google-test"]
+
+    if bld.env.DEST_OS == "win32":
+        kw["lib"] = ["user32"]
+
+    bld(target="QtLikeSignal-Performance-Tests", **kw)

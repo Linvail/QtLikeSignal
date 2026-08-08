@@ -34,6 +34,7 @@ Ratios and scaling curves are the durable part; the nanosecond values are not.
 | P3 | Every emit builds a `std::function` on the heap, even for a direct call | Medium | Measured — +38 ns over raw boost |
 | P4 | One dispatcher mutex serialises every object on a thread | Unknown | Inspection only |
 | P5 | Timer list is scanned linearly twice per dispatch pass | Low | Inspection only |
+| P6 | Cross-thread queued dispatch is ~2.4x QtMimic's, from ~1.5 extra allocations per emit | **High** | Measured — `test_QtLikeSignal_Performance.cpp` |
 
 ---
 
@@ -184,7 +185,50 @@ for hundreds on one thread.
 
 ---
 
-## Before acting on any of this
+## P6 — cross-thread queued dispatch costs ~2.4x QtMimic's, from redundant allocations
+
+**Impact: High. Measured, with the cause isolated.**
+
+`src/tests/test_QtLikeSignal_Performance.cpp` runs the same four scenarios against both libraries in
+one process. Median of three runs, clang `-O2`, no sanitizer:
+
+| scenario | QtLikeSignal | QtMimic | ratio |
+|---|---|---|---|
+| `connect()` | 466 ns | 716 ns | **0.65x** |
+| emit → receive, direct | 82 ns | 74 ns | 1.11x |
+| emit → receive, auto same-thread | 82 ns | 107 ns | **0.79x** |
+| emit → receive, queued cross-thread | 1287 ns | 550 ns | **2.34x** |
+
+Three of four favour us or are close. `connect()` is meaningfully cheaper, and the same-thread `Auto`
+path is ~20% cheaper — QtMimic resolves `Auto` by comparing `shared_ptr<ThreadData>` values, which
+costs it two refcount round-trips, where we compare raw `Thread*`.
+
+The cross-thread queued path is the outlier, and the cause is allocation count, not syscalls:
+
+```
+QtLikeSignal queued: 3.85 allocations per emit
+QtMimic      queued: 2.33 allocations per emit
+```
+
+**The syscall hypothesis was wrong and worth recording as such.** The obvious suspect was
+`EventDispatcherLinux::wakeWaiter()` writing to its eventfd on every post, which QtMimic (condvar
+only) does not do. `strace -c` disproved it: 200k emits produced **725** writes, because the
+`mWakePending` collapsing flag is doing its job, and total syscall time was comparable between the
+two (~40 ms each).
+
+The extra allocations come from a `std::function` being copied along the queued path rather than
+moved. Each queued emit currently: builds `boundSlot`, converts it to `std::function<void()>` when
+passing it *by value* into `dispatchMetaCallTo()`, copies it *again* into the `MetaCallEvent`
+constructor's by-value parameter, and heap-allocates the `MetaCallEvent` itself.
+
+At least one of those copies is free to remove — `new MetaCallEvent( aSlot )` can be
+`new MetaCallEvent( std::move( aSlot ) )`, since `aSlot` is a by-value parameter that is dead
+afterwards — and the wrapper can `std::move( boundSlot )` into the call. That is a small, contained
+change with a directly measurable target: get allocations per emit from 3.85 toward QtMimic's 2.33.
+
+Caveat on `connect()`: that scenario connects 20 000 slots to a single signal, so it also measures
+insertion into a growing slot list. It is the same shape for both libraries, so the comparison holds,
+but the absolute number is not the cost of one connection to an empty signal.
 
 **Nothing here has been profiled against a real workload.** These are microbenchmarks with no work
 between iterations, which is the condition most favourable to making lock and allocation overhead
