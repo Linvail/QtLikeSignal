@@ -15,10 +15,10 @@ no runtime probe was written.
 | ID  | Risk | Severity | Confirmed by |
 |-----|------|----------|--------------|
 | R17 | Destroyed receivers are never disconnected — unbounded dead-slot growth | **High** | Probe (672 MB, 327 ms emit) — **Fixed 2026-08-08** |
-| R18 | `CoreApplication::exec()` after `quit()` burns 100% CPU (was R1) | **High** | Probe (cpu/wall = 100%) |
+| R18 | `CoreApplication::exec()` after `quit()` burns 100% CPU (was R1) | **High** | Probe (cpu/wall = 100%) — **Fixed 2026-08-08** |
 | R19 | Objects with no affinity get cross-thread *direct* calls; Qt drops them | Medium | Probe |
 | R20 | `~Object()`'s new warning dereferences a `Thread*` that may dangle | Low-Med | Inspection — *self-inflicted* — **Fixed 2026-08-08** |
-| R21 | `CoreApplication` has no test coverage at all | Medium | Inspection |
+| R21 | `CoreApplication` has no test coverage at all | Medium | Inspection — **Fixed 2026-08-08** (13 tests) |
 | R22 | Platform dispatchers are still empty shells (was R6) | Medium | Inspection |
 | R23 | `moveToThread(nullptr)` can leave stale `ThreadData` behind | Low | Inspection |
 | R24 | Timer ids never recycle and can wrap onto the `-1` sentinel | Low | Inspection |
@@ -83,10 +83,28 @@ Note this interacts with R20 and with the boost re-entrancy that motivated the `
 `disconnect()` from `~Object()` does not wait for an in-flight emit, which is exactly why the
 affinity read had to be moved out of the receiver in the first place.
 
-## R18 — `CoreApplication::exec()` after a `quit()` burns 100% CPU (was R1, still open)
+## R18 — `CoreApplication::exec()` after a `quit()` burns 100% CPU (was R1) *(fixed 2026-08-08)*
 
-**Severity: High. Confirmed by probe. Previously reported as R1 "by inspection"; now reproduced
-with numbers.**
+**Severity: High. Confirmed by probe. Previously reported as R1 "by inspection"; reproduced with
+numbers, then fixed.**
+
+> **Resolution (2026-08-08).** `processEvents()` now *consumes* the interrupt
+> (`mInterrupt.exchange(false)`) at both the entry check and the post-wait check, instead of only
+> testing a flag nothing ever cleared. This is exactly what Qt does, at exactly the same point:
+> `const bool wasInterrupted = d->interrupt.fetchAndStoreRelaxed(false);` at the top of
+> `QEventDispatcherWin32::processEvents()`.
+>
+> Investigating the fix turned up a **worse half of the same defect than the CPU burn**: because the
+> latched flag made `processEvents()` return before it reached the queue, a second `exec()` was
+> silently *inert* — timers never fired and queued slots never ran, while the loop looked healthy.
+> Two regression tests cover the two halves:
+> `CoreApplicationTest.ReExecAfterQuitBlocksInsteadOfSpinning` (CPU, via portable `std::clock()`)
+> and `CoreApplicationTest.LoopStillDispatchesAfterAQuitExecCycle` (dispatch still works).
+>
+> Both are stopped by a watchdog thread rather than a `Timer`, deliberately: with the defect present
+> a quitting `Timer` never fires, so a timer-driven test **hangs instead of failing**. Verified by
+> reverting the fix — both then fail with numbers attached (`0.300126s of CPU over 0.300091s of
+> wall`) rather than hanging.
 
 `EventDispatcherDefault::mInterrupt` is latched true by `interrupt()` and **never cleared
 anywhere** — `grep -n mInterrupt` finds the declaration, three reads, and exactly one write
@@ -187,9 +205,20 @@ same hazard in principle, since `QObject::thread()` also hands out a raw `QThrea
 Clean fix: mirror the running flag into `ThreadData` (already held alive by a `shared_ptr` at this
 point) and test that instead of dereferencing the `Thread`.
 
-## R21 — `CoreApplication` has no tests
+## R21 — `CoreApplication` has no tests *(fixed 2026-08-08)*
 
 **Severity: Medium. Inspection.**
+
+> **Resolution (2026-08-08).** Added `src/tests/test_gcoreapplication.cpp` — 13 tests covering
+> construction/adoption and release of the calling thread, `instance()` lifetime, both constructors,
+> the derived-class `init()/exec()/deInit()` usage from the mission, exit codes, the two R18
+> regressions, `exec()` rejection off the main thread, nested-`exec()` rejection, cross-thread queued
+> delivery onto the main loop, `deleteLater()` during and at shutdown, and main-thread timers.
+>
+> Because constructing a `CoreApplication` adopts the calling thread by setting the process-global
+> `Thread::sCurrentThread`, and gtest runs every test on that thread, each test destroys its
+> application before returning. Verified non-contaminating: the full suite passes at 79 tests under
+> three different `--gtest_shuffle` seeds as well as in declaration order.
 
 The suite has `ObjectTest`, `ObjectDefectTest`, `ThreadTest`, `ThreadDefectTest`, `ThreadPriority`,
 `TimerTest`, `TimerDefectTest` and `EventDispatcherDefaultDefectTest` — and no
@@ -283,8 +312,8 @@ self-enforcing.
 ## Suggested order
 
 1. ~~**R17**~~ — done 2026-08-08.
-2. **R18** — one-line fix (clear `mInterrupt`), and it removes a 100% CPU spin.
-3. **R21** — add `CoreApplicationTest`; it is what let R18 survive, and R9 is waiting behind it.
+2. ~~**R18**~~ — done 2026-08-08.
+3. ~~**R21**~~ — done 2026-08-08. R9 (unguarded singleton) is now warned about, not asserted.
 4. ~~**R20**~~ — done 2026-08-08.
 5. **R19** — needs the auto-adoption design decision first; do not change the rule piecemeal.
 

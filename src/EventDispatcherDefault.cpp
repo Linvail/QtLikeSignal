@@ -26,7 +26,15 @@ namespace QtLikeSignal
     //! Thread-safe. Called by thread event loop.
     bool EventDispatcherDefault::processEvents()
     {
-        if( mInterrupt )
+        // Consume the interrupt rather than merely testing it. interrupt() means "return from the
+        // pass that is running now", not "refuse to work ever again" -- but the flag used to latch
+        // true forever, since nothing anywhere cleared it. Every later call then returned instantly,
+        // so a loop driving this dispatcher (CoreApplication::exec() after a quit(), which reuses the
+        // same dispatcher instead of building a fresh one the way a restarted Thread does) spun at
+        // 100% CPU until something else stopped it. Qt consumes it in exactly the same place and for
+        // the same reason: `const bool wasInterrupted = d->interrupt.fetchAndStoreRelaxed(false);`
+        // at the top of QEventDispatcherWin32::processEvents().
+        if( mInterrupt.exchange( false ) )
         {
             return false;
         }
@@ -108,7 +116,10 @@ namespace QtLikeSignal
                 mWakeUpRequested = false;
             }
 
-            if( mInterrupt )
+            // Consumed, not just tested -- same reason as at the top of this function: an interrupt
+            // that arrived while we were waiting has now been acted on, and leaving it set would
+            // make every subsequent pass return instantly.
+            if( mInterrupt.exchange( false ) )
             {
                 // timerEventsToProcess may already hold heap-allocated TimerEvent objects collected
                 // above; they were never handed off to the dispatch loop below, so free them here to
