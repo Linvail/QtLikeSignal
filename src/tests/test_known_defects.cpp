@@ -1,96 +1,36 @@
 //! @file
 //!
-//! **These tests are EXPECTED TO FAIL.** They exist to prove that the open risks recorded in
-//! history/OPEN-RISKS-20260808.md are real defects rather than theory, and they stay red until each
-//! one is fixed. Do not "fix" a test here by weakening it -- fix the code, then the test turns green
-//! and *moves out of this file* into test_defect_regressions.cpp. That matters: the
-//! `-KnownDefect.*` baseline below is only trustworthy while everything here is genuinely broken.
+//! Tests for defects that are known, reproduced, and **not yet fixed**.
 //!
-//! R23 and R26 were fixed on 2026-08-08 and their tests now live in test_defect_regressions.cpp.
-//! R26's original test here asserted the wrong thing and was replaced rather than moved -- see the
-//! note in the risk register.
+//! Currently empty: R23, R24 and R26 were all fixed on 2026-08-08 and their tests moved to
+//! test_defect_regressions.cpp. The file is kept because the convention is worth having in place
+//! when the next defect turns up.
 //!
-//! For a green baseline while these are outstanding:
-//! @code
-//!   QtLikeSignal-Tests --gtest_filter=-KnownDefect.*
-//! @endcode
+//! **How to use it.** Prove a defect is real here first, as a test named `KnownDefect.*` that
+//! fails. Leave it red. When the defect is fixed the test turns green and *moves out* to
+//! test_defect_regressions.cpp, renamed to describe the correct behaviour rather than the bug.
+//! Moving it is not tidying: `--gtest_filter=-KnownDefect.*` is the green baseline, so a passing
+//! test left in here would be silently excluded from it. Never make a test here pass by weakening
+//! it -- that is the one change that destroys its only purpose.
 //!
-//! Why R23 was not caught by a sanitizer, which is worth remembering for the rest: the build uses
-//! -fsanitize=thread, and address/thread are mutually exclusive in tools/toolchain-linux.py, so
-//! LeakSanitizer never ran. More fundamentally its growth was not a leak -- the accumulated events
-//! stayed *reachable* from a live object, and LSan only reports unreachable blocks at exit. Verified:
-//! under -fsanitize=address with detect_leaks=1 it retained 124 MB and reported nothing.
-//!
-//! Two of the recorded risks are deliberately **not** represented here, because a runtime test
-//! would be dishonest rather than merely difficult:
+//! **What does not belong here.** A test that encodes a requirement nobody has actually stated. Two
+//! recorded risks are deliberately absent for that reason:
 //!
 //!   * **R25** (`Object::thread()` costs a mutex per call) is a documented trade-off, not a defect.
-//!     No requirement states how fast it must be, so a failing test would be inventing one, and any
-//!     wall-clock threshold would be machine-dependent. If it ever matters, benchmark it and decide
-//!     against a real budget.
+//!     No requirement says how fast it must be, so a failing test would be inventing one, and any
+//!     wall-clock threshold would be machine-dependent.
 //!   * **R27** (`Thread::create()` returns an owning raw pointer with no ownership documentation) is
-//!     an API-shape and documentation issue. Nothing observable at runtime distinguishes it from a
-//!     correct program: the caller either deletes the pointer or leaks it, and asserting the return
-//!     type were `unique_ptr` would fail to *compile* rather than fail as a test, which would break
-//!     the build for everyone instead of reporting one defect.
-
-#include <gtest/gtest.h>
-#include "CoreApplication.h"
-#include "Object.h"
-#include "Signal.h"
-#include "Thread.h"
-#include "Timer.h"
-
-#include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <cmath>
-#include <memory>
-#include <thread>
-#include <vector>
-
-
-using namespace QtLikeSignal;
-
-namespace
-{
-}
-
-// ---------------------------------------------------------------------------------------------
-// R24 -- timer ids are consumed monotonically and never returned to a pool.
-//
-// Object::sNextTimerId only ever increments. Qt explicitly releases ids
-// (QAbstractEventDispatcherPrivate::releaseTimerId) so a program that starts and stops timers
-// forever reuses a small set. Here the counter climbs until it wraps, at which point it eventually
-// hands out -1 -- the value startTimer() returns to mean failure and Timer::stop() tests against.
-// ---------------------------------------------------------------------------------------------
-
-//! R24: starting and stopping one timer repeatedly consumes a fresh id every time.
+//!     an API-shape issue with no runtime signature: the caller either deletes the pointer or leaks
+//!     it. Asserting the return type were `unique_ptr` would fail to *compile* rather than fail as a
+//!     test, breaking the build for everyone instead of reporting one defect.
 //!
-//! Tests the underlying defect -- non-recycling -- rather than the 2^31 wrap it eventually causes,
-//! which is not reachable in a test.
-TEST( KnownDefect, R24_TimerIdsAreNeverRecycled )
-{
-    Object owner;
-    ASSERT_EQ( owner.thread(), Thread::currentThread() )
-        << "startTimer() is thread-confined; this object must live here";
-
-    constexpr int kCycles = 200;
-    std::vector<int> ids;
-    ids.reserve( kCycles );
-
-    for( int i = 0; i < kCycles; ++i )
-    {
-        const int id = owner.startTimer( 1000 );
-        ASSERT_GT( id, 0 ) << "the adopted thread should have a dispatcher to register with";
-        owner.killTimer( id );
-        ids.push_back( id );
-    }
-
-    const int idSpan = ids.back() - ids.front();
-    EXPECT_LE( idSpan, 10 )
-        << kCycles << " start/kill cycles on a single timer consumed " << ( idSpan + 1 )
-        << " distinct ids (from " << ids.front() << " to " << ids.back()
-        << "). Ids are never returned to a pool, so the counter climbs until it wraps and "
-        "eventually collides with the -1 failure sentinel.";
-}
+//! R26 is the cautionary example. Its first test here asserted that a repeating timer realigns its
+//! cadence after a long stall -- which Qt does not do either, since it resynchronises past one
+//! interval. That test would have failed against Qt itself, so it was an invented requirement in
+//! exactly the sense above, and it was replaced rather than moved when the real (narrower) defect
+//! was fixed.
+//!
+//! **Sanitizers.** Address and thread sanitizers are mutually exclusive in tools/toolchain-linux.py,
+//! so only one runs at a time; switch with `./waf configure --enable-address-sanitizer-on-Linux`.
+//! Run both in turn -- they catch disjoint classes, and neither would have caught R23, whose growth
+//! was not a leak at all but reachable memory that LeakSanitizer is designed to ignore.

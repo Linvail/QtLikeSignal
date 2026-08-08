@@ -145,7 +145,25 @@ namespace QtLikeSignal
                 eventsToProcess.push_back( mEventQueue.front() );
                 mEventQueue.pop_front();
             }
+
+            // Publish the batch so unregisterTimer() can cancel entries in it while the handlers
+            // below run. Set before *any* dispatching, since a queued metacall can kill a timer just
+            // as a timer handler can.
+            mDispatchingTimerBatch = &timerEventsToProcess;
         }
+
+        // Retracts the published batch however this function leaves, so a pointer to a dead local
+        // can never outlive the pass.
+        struct BatchRetractor
+        {
+            ~BatchRetractor()
+            {
+                std::lock_guard<std::mutex> lock( mOwner->mMutex );
+                mOwner->mDispatchingTimerBatch = nullptr;
+            }
+
+            EventDispatcherDefault* mOwner;
+        } batchRetractor { this };
 
         // Drain the OS's own event source, with mMutex released so platform code may re-enter this
         // dispatcher (a native handler is free to post an event or start a timer). Done before our
@@ -187,8 +205,19 @@ namespace QtLikeSignal
         }
 
         // Dispatch timer events
-        for( const auto& ep : timerEventsToProcess )
+        for( size_t i = 0; i < timerEventsToProcess.size(); ++i )
         {
+            // Take the entry out of the batch under the lock, clearing our slot as we go. That
+            // hands ownership over in one atomic step: either unregisterTimer() got here first and
+            // we see nullptr, or we did and it sees nullptr. Neither can free the event twice, and
+            // a timer killed by an earlier handler in this same batch is simply skipped.
+            EventPair ep { nullptr, nullptr };
+            {
+                std::lock_guard<std::mutex> lock( mMutex );
+                ep = timerEventsToProcess[i];
+                timerEventsToProcess[i].mEvent = nullptr;
+            }
+
             if( !ep.mReceiver || !ep.mEvent )
             {
                 delete ep.mEvent;
@@ -313,6 +342,47 @@ namespace QtLikeSignal
         )
     {
         std::lock_guard<std::mutex> lock( mMutex );
+
+        // Drop any TimerEvent for this timer that has already been queued but not yet delivered.
+        //
+        // This became necessary when timer ids started being recycled. Previously a stale event was
+        // harmless: ids only ever climbed, so its id could never match a live timer again and
+        // Timer::timerEvent()'s id check discarded it. Now that killTimer() returns the id to a pool,
+        // a later startTimer() can be handed the same one -- and the stale event would then match the
+        // *new* timer and fire it spuriously. Purging here is what keeps recycling from trading an
+        // unreachable counter overflow for a reachable wrong-behaviour bug.
+        //
+        // Both places a TimerEvent can be waiting have to be covered, and the second one is the one
+        // that matters: TimerEvents are only ever created inside the collection loop, straight into
+        // the dispatch batch, so mEventQueue holds them only if something posts one directly. The
+        // batch is where a killTimer() from inside a sibling timer's handler actually finds them.
+        auto itQueue = std::remove_if( mEventQueue.begin(),
+            mEventQueue.end(),
+            [aTimerId]( const EventPair& aEp )
+            {
+                if( aEp.mEvent && aEp.mEvent->type() == Event::Timer
+                    && static_cast<TimerEvent*>( aEp.mEvent )->timerId() == aTimerId )
+                {
+                    delete aEp.mEvent;
+                    return true;
+                }
+                return false;
+            } );
+        mEventQueue.erase( itQueue, mEventQueue.end() );
+
+        if( mDispatchingTimerBatch )
+        {
+            for( auto& ep : *mDispatchingTimerBatch )
+            {
+                if( ep.mEvent && ep.mEvent->type() == Event::Timer
+                    && static_cast<TimerEvent*>( ep.mEvent )->timerId() == aTimerId )
+                {
+                    delete ep.mEvent;
+                    ep.mEvent = nullptr;
+                }
+            }
+        }
+
         auto it = std::remove_if( mTimers.begin(),
             mTimers.end(),
             [aTimerId]( const TimerData& aTd )

@@ -532,7 +532,21 @@ namespace QtLikeSignal
         //! the equivalent by walking cd->senders in ~QObject().
         std::vector<ConnectionHandle> mIncoming;
         mutable std::mutex mIncomingMutex;                   //!< Guards mIncoming.
-        static std::atomic<int> sNextTimerId;                //!< Process-wide timer id counter.
+
+        //! Timer ids started on this object and not yet killed.
+        //!
+        //! Exists so ~Object() can return them to the shared pool. Without it a destroyed object
+        //! with a running timer would strand its id forever, and the pool would climb exactly as
+        //! the old monotonic counter did. Qt keeps the same list in
+        //! QObjectPrivate::extraData->runningTimers for the same reason.
+        std::vector<int> mRunningTimerIds;
+
+        //! Guards mRunningTimerIds.
+        //!
+        //! startTimer()/killTimer() are thread-confined so they only ever touch it from this
+        //! object's own thread, but ~Object() may run elsewhere (it warns, but it still runs), so
+        //! the list is not single-threaded in practice.
+        mutable std::mutex mRunningTimerIdsMutex;
     };
 
     //! Connect Overload 1 definition. This is the primary overload for standard member functions.
