@@ -19,7 +19,7 @@ no runtime probe was written.
 | R19 | Objects with no affinity get cross-thread *direct* calls; Qt drops them | Medium | Probe |
 | R20 | `~Object()`'s new warning dereferences a `Thread*` that may dangle | Low-Med | Inspection — *self-inflicted* — **Fixed 2026-08-08** |
 | R21 | `CoreApplication` has no test coverage at all | Medium | Inspection — **Fixed 2026-08-08** (13 tests) |
-| R22 | Platform dispatchers are still empty shells (was R6) | Medium | Inspection |
+| R22 | Platform dispatchers are still empty shells (was R6) | Medium | Inspection — **Fixed 2026-08-08** |
 | R23 | `moveToThread(nullptr)` can leave stale `ThreadData` behind | Low | Inspection |
 | R24 | Timer ids never recycle and can wrap onto the `-1` sentinel | Low | Inspection |
 | R25 | `Object::thread()` now costs a mutex on every call | Low | Inspection |
@@ -232,10 +232,42 @@ because nothing ever calls it. R9 (unguarded singleton) is still open for the sa
 
 This is the largest coverage gap in the project, and it is where the two High findings live.
 
-## R22 — Platform dispatchers are still empty shells (was R6)
+## R22 — Platform dispatchers are still empty shells (was R6) *(fixed 2026-08-08)*
 
 **Severity: Medium. Inspection. Unchanged since 2026-08-02; restated because mission stage 5
 depends on it.**
+
+> **Resolution (2026-08-08).** Both are now real, and neither uses a helper thread.
+>
+> `EventDispatcherDefault` grew a three-method platform seam -- `waitForEvents()`, `wakeWaiter()`,
+> `processPlatformEvents()` -- while keeping the queue, the timer list, the mutex and the dispatch
+> loop shared. A platform subclass answers only "how do we block", "how does someone un-block us"
+> and "how do we drain the OS source". The wait hook is handed the `unique_lock` and must release
+> and re-acquire it, since neither `poll()` nor `MsgWaitForMultipleObjectsEx()` can hold a mutex.
+>
+> **Linux:** an `eventfd` wakeup polled together with any number of registered platform descriptors,
+> via `registerEventSource(fd, events, callback)` / `unregisterEventSource(fd)` -- the hook a
+> Wayland/X11 FD plugs into. Registering wakes a already-blocked loop so the new source is picked up
+> without waiting for unrelated activity.
+>
+> **Windows:** a hidden message-only window created on the loop's own thread; `wakeWaiter()` posts a
+> private `WM_USER + 1` to it and the loop blocks in
+> `MsgWaitForMultipleObjectsEx(0, NULL, timeout, QS_ALLINPUT, MWMO_ALERTABLE | MWMO_INPUTAVAILABLE)`,
+> so OS messages and our own events wake it by the same mechanism. Timers deliberately stay in our
+> own list feeding the wait timeout rather than going to `SetTimer`, so both platforms keep
+> identical timer behaviour.
+>
+> Both wakeups collapse a burst into one signal behind an atomic flag, as Qt's `QThreadPipe` does.
+>
+> Covered by `EventDispatcherLinuxTest` (4 tests: descriptor wakes a blocked loop and the callback
+> runs on the right thread; unregistering stops polling; registering while blocked takes effect
+> immediately; and an idle loop consumes <10% CPU, which is mission stage 5's "100% cpu-spin is not
+> allowed"). All 83 tests also now run *through* the poll()-based dispatcher, since worker threads
+> and the main thread both build it on Linux.
+>
+> **Verification asymmetry, stated plainly:** the Linux half is compiled and run here. The Windows
+> half is only **compile-verified**, via the `linux-2-win64-clang` cross toolchain (clean build, real
+> 78 KB object). Nothing has executed it. It needs a run on Windows before being trusted.
 
 `EventDispatcherLinux` and `EventDispatcherWin32` are both a constructor and a destructor, both
 `= default`, deriving from `EventDispatcherDefault` and overriding nothing. No `epoll`, no

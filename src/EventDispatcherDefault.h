@@ -65,9 +65,40 @@ namespace QtLikeSignal
             Object* aReceiver
             ) override;
 
+        // The three hooks below are the whole platform seam. Everything else -- the event queue,
+        // the timer list, the mutex that guards them, and the dispatch loop -- stays here and is
+        // shared, so a platform dispatcher only has to answer three questions: how do we block,
+        // how does someone else un-block us, and how do we drain the OS's own event source.
+
+        //! Blocks until there is work to do or @p aTimeoutMs elapses (-1 to block indefinitely).
+        //!
+        //! Called with @p aLock held. An implementation that blocks on something other than mCv
+        //! **must** release @p aLock for the duration of the block and re-acquire it before
+        //! returning -- neither poll() nor MsgWaitForMultipleObjectsEx() can hold a std::mutex, and
+        //! holding it would deadlock every thread trying to post. Re-acquiring is what keeps the
+        //! state processEvents() reads afterwards guarded.
+        //!
+        //! Missing a wakeup is not possible even though state can change while unlocked: whatever
+        //! changed it also called wakeWaiter(), and the caller re-checks the queue under the lock.
+        virtual void waitForEvents
+            (
+            std::unique_lock<std::mutex>& aLock,
+            int aTimeoutMs
+            );
+
+        //! Wakes a thread blocked in waitForEvents(). Callable from any thread, with or without
+        //! mMutex held, so it must not block. Every mutation of the queue, the timer list or the
+        //! interrupt flag ends in a call to this.
+        virtual void wakeWaiter();
+
+        //! Drains and dispatches OS/platform events. Called once per processEvents() pass with
+        //! mMutex released, so an implementation may run arbitrary platform code and re-enter this
+        //! dispatcher. The default does nothing: the cross-platform dispatcher has no OS source.
+        virtual void processPlatformEvents();
+
         friend class Object;
 
-    private:
+    protected:
         //! One queued event together with the receiver it targets.
         struct EventPair
         {
@@ -86,7 +117,7 @@ namespace QtLikeSignal
 
         std::deque<EventPair>   mEventQueue;  //!< Events waiting to be dispatched.
         std::vector<TimerData>  mTimers;      //!< Every timer currently registered.
-        std::mutex mMutex;                    //!< Guards every member below.
+        std::mutex mMutex;                    //!< Guards every other member of this class.
         std::condition_variable mCv;          //!< Wakes processEvents() out of its wait.
         std::atomic<bool>       mInterrupt { false };  //!< Set by interrupt() to stop the loop.
         // Set (under mMutex) whenever a timer is registered or unregistered, so a processEvents()

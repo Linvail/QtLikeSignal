@@ -91,25 +91,19 @@ namespace QtLikeSignal
                 // notifying) -- there is no window where a change can be lost.
                 mTimersChanged = false;
 
-                auto wakeCondition = [this]
-                    {
-                        return !mEventQueue.empty() || mInterrupt || mTimersChanged
-                               || mWakeUpRequested;
-                    };
-
-                if( mTimers.empty() )
-                {
-                    // Nothing is scheduled, so there is no deadline to poll for: block until
-                    // something actually happens rather than waking ten times a second forever.
-                    // Every state this predicate tests is changed under mMutex by a caller that
-                    // then notifies (postEvent, registerTimer, unregisterTimer, interrupt, wakeUp),
-                    // so there is no wakeup to miss.
-                    mCv.wait( lock, wakeCondition );
-                }
-                else
-                {
-                    mCv.wait_for( lock, maxWait, wakeCondition );
-                }
+                // Hand the blocking to the platform. -1 means "no deadline": nothing is scheduled,
+                // so block until something actually happens rather than waking ten times a second
+                // forever. Every state the wake condition tests is changed under mMutex by a caller
+                // that then calls wakeWaiter(), so there is no wakeup to miss.
+                //
+                // waitForEvents() is given the lock and is required to release it while it is
+                // actually blocked and to re-acquire it before returning, so everything read below
+                // is still guarded. That contract is what lets a platform subclass block in poll()
+                // or MsgWaitForMultipleObjectsEx(), neither of which can hold a std::mutex.
+                const int timeoutMs = mTimers.empty()
+                                      ? -1
+                                      : static_cast<int>( maxWait.count() );
+                waitForEvents( lock, timeoutMs );
 
                 // wakeUp() is a one-shot "return from the wait now" request; consume it so a later
                 // processEvents() call does not treat it as still pending.
@@ -138,6 +132,12 @@ namespace QtLikeSignal
                 mEventQueue.pop_front();
             }
         }
+
+        // Drain the OS's own event source, with mMutex released so platform code may re-enter this
+        // dispatcher (a native handler is free to post an event or start a timer). Done before our
+        // own dispatch below so an OS message that arrived during the wait is not held back a full
+        // pass behind the queued work it may itself have produced.
+        processPlatformEvents();
 
         bool processedAny = false;
 
@@ -194,6 +194,44 @@ namespace QtLikeSignal
         return processedAny;
     }
 
+    //! Blocks on the condition variable until there is work or @p aTimeoutMs elapses.
+    //!
+    //! The cross-platform implementation of the wait hook. Unlike the platform subclasses this one
+    //! keeps @p aLock: std::condition_variable releases and re-acquires it internally, which is the
+    //! same contract from the caller's point of view.
+    void EventDispatcherDefault::waitForEvents
+        (
+        std::unique_lock<std::mutex>& aLock,  //!< Lock on mMutex, held on entry and on return.
+        int aTimeoutMs                          //!< Milliseconds to wait, or -1 to wait indefinitely.
+        )
+    {
+        auto wakeCondition = [this]
+            {
+                return !mEventQueue.empty() || mInterrupt.load() || mTimersChanged
+                       || mWakeUpRequested;
+            };
+
+        if( aTimeoutMs < 0 )
+        {
+            mCv.wait( aLock, wakeCondition );
+        }
+        else
+        {
+            mCv.wait_for( aLock, std::chrono::milliseconds( aTimeoutMs ), wakeCondition );
+        }
+    }
+
+    //! Wakes a thread blocked in waitForEvents(). Thread-safe and non-blocking.
+    void EventDispatcherDefault::wakeWaiter()
+    {
+        mCv.notify_all();
+    }
+
+    //! Drains OS/platform events. No-op here: the cross-platform dispatcher has no OS event source.
+    void EventDispatcherDefault::processPlatformEvents()
+    {
+    }
+
     //! Registers a timer for a target object. Thread-safe.
     void EventDispatcherDefault::registerTimer
         (
@@ -221,13 +259,13 @@ namespace QtLikeSignal
             {
                 t             = td;
                 mTimersChanged = true;
-                mCv.notify_all();
+                wakeWaiter();
                 return;
             }
         }
         mTimers.push_back( td );
         mTimersChanged = true;
-        mCv.notify_all();
+        wakeWaiter();
     }
 
     //! Unregisters a timer by ID. Returns true if timer was found and removed, false otherwise.
@@ -248,7 +286,7 @@ namespace QtLikeSignal
         {
             mTimers.erase( it, mTimers.end() );
             mTimersChanged = true;
-            mCv.notify_all();
+            wakeWaiter();
             return true;
         }
         return false;
@@ -271,7 +309,7 @@ namespace QtLikeSignal
             std::lock_guard<std::mutex> lock( mMutex );
             mEventQueue.push_back( { aReceiver, aEvent } );
         }
-        mCv.notify_all();
+        wakeWaiter();
     }
 
     //! Removes and deletes all pending events for the specified receiver. Thread-safe.
@@ -342,7 +380,7 @@ namespace QtLikeSignal
             mTimers.erase( it, mTimers.end() );
             // The wait deadline was computed from a timer list that no longer holds these entries.
             mTimersChanged = true;
-            mCv.notify_all();
+            wakeWaiter();
         }
 
         return taken;
@@ -409,7 +447,7 @@ namespace QtLikeSignal
             std::lock_guard<std::mutex> lock( mMutex );
             mWakeUpRequested = true;
         }
-        mCv.notify_all();
+        wakeWaiter();
     }
 
     //! Interrupts processEvents execution. Thread-safe.
@@ -425,6 +463,6 @@ namespace QtLikeSignal
             std::lock_guard<std::mutex> lock( mMutex );
             mInterrupt = true;
         }
-        mCv.notify_all();
+        wakeWaiter();
     }
 }
