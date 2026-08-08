@@ -257,18 +257,25 @@ TEST( ThreadTest, PostFromOwnThreadStillDefers )
     auto orderFuture = orderPromise.get_future();
     std::atomic<bool> postReturnedBeforeTaskRan { false };
 
+    // Lives in the test body, not inside the outer task, and that is the whole point: the inner
+    // task runs *after* the outer one returns -- which is exactly what this test asserts -- so a
+    // variable local to the outer task would already be destroyed by the time the inner task wrote
+    // to it. It was a local, and AddressSanitizer caught the resulting stack-use-after-return.
+    // The test body outlives everything here, since quit()/wait() below stop the loop before any of
+    // these locals go out of scope.
+    std::atomic<bool> innerRan { false };
+
     // Ask the worker to post a task to itself, and observe whether post() returns before or
     // after that inner task actually executes.
     ASSERT_TRUE( worker.post(
-        [&worker, &orderPromise, &postReturnedBeforeTaskRan]()
+        [&worker, &orderPromise, &postReturnedBeforeTaskRan, &innerRan]()
         {
-            bool innerRan = false;
             worker.post( [&innerRan]()
             {
-                innerRan = true;
+                innerRan.store( true );
             } );
             // If post() deferred correctly, innerRan is still false immediately after the call.
-            postReturnedBeforeTaskRan.store( !innerRan );
+            postReturnedBeforeTaskRan.store( !innerRan.load() );
             orderPromise.set_value();
         } ) );
 
