@@ -16,7 +16,7 @@ def options(opt):
         "--enable-thread-sanitizer-on-Linux",
         dest="enable_thread_sanitizer_on_Linux",
         action="store_true",
-        default=True,
+        default=False,
         help="Enable ThreadSanitizer on Linux",
     )
     group.add_option(
