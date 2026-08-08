@@ -11,12 +11,12 @@
 #include "CoreApplication.h"
 #include "EventDispatcherLinux.h"
 #include "Object.h"
+#include "TestCpuTime.h"
 #include "Thread.h"
 #include "Timer.h"
 
 #include <atomic>
 #include <chrono>
-#include <ctime>
 #include <memory>
 #include <thread>
 
@@ -252,8 +252,8 @@ TEST( EventDispatcherLinuxTest, RegisteringWhileBlockedTakesEffectWithoutOtherAc
 
 //! Verifies an idle loop consumes essentially no CPU -- mission stage 5's "no 100% cpu-spin".
 //!
-//! With no timers and no ready descriptors, poll() must block with no timeout. Measured with
-//! std::clock() (processor time, standard C++) against wall time over a fixed interval.
+//! With no timers and no ready descriptors, poll() must block with no timeout. Measured as process
+//! CPU time against wall time; see TestCpuTime.h for why that is not std::clock().
 TEST( EventDispatcherLinuxTest, IdleLoopDoesNotSpin )
 {
     CoreApplication app;
@@ -274,12 +274,12 @@ TEST( EventDispatcherLinuxTest, IdleLoopDoesNotSpin )
             CoreApplication::quit();
         } );
 
-    const std::clock_t cpuBefore = std::clock();
+    const double cpuBefore = TestSupport::processCpuSeconds();
     const auto wallBefore = std::chrono::steady_clock::now();
 
     EXPECT_EQ( app.exec(), 0 );
 
-    const double cpuSeconds = static_cast<double>( std::clock() - cpuBefore ) / CLOCKS_PER_SEC;
+    const double cpuSeconds = TestSupport::processCpuSeconds() - cpuBefore;
     const double wallSeconds
         = std::chrono::duration<double>( std::chrono::steady_clock::now() - wallBefore ).count();
     watchdog.join();
@@ -287,7 +287,8 @@ TEST( EventDispatcherLinuxTest, IdleLoopDoesNotSpin )
     ASSERT_GT( wallSeconds, 0.1 ) << "the loop returned far too early to have blocked at all";
     EXPECT_LT( cpuSeconds / wallSeconds, 0.1 )
         << "an idle loop burned " << cpuSeconds << "s of CPU over " << wallSeconds
-        << "s of wall time; poll() is returning immediately instead of blocking.";
+        << "s of wall time (ratio " << ( cpuSeconds / wallSeconds )
+        << "); poll() is returning immediately instead of blocking.";
 
     dispatcher->unregisterEventSource( pipe.readFd() );
 }

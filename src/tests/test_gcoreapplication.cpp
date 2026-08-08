@@ -3,10 +3,10 @@
 #include "Object.h"
 #include "Signal.h"
 #include "Thread.h"
+#include "TestCpuTime.h"
 #include "Timer.h"
 #include <atomic>
 #include <chrono>
-#include <ctime>
 #include <future>
 #include <thread>
 
@@ -18,10 +18,9 @@ using namespace QtLikeSignal;
 //! how a 100% CPU spin in exec() (R18) survived unnoticed.
 //!
 //! Every test here constructs its own CoreApplication and lets it go out of scope before
-//! returning. That matters more than usual: constructing one *adopts the calling thread*, setting
-//! the process-wide Thread::sCurrentThread, and gtest runs every test on that same thread. A test
-//! that leaked an application would silently give the main thread an affinity for the rest of the
-//! binary and change how AutoConnection resolves in every test that follows.
+//! returning. That matters more than usual: gtest runs every test on one thread, and an application
+//! left alive would keep that thread's platform dispatcher -- and the singleton instance() reports
+//! -- in place for every test that follows.
 
 //! Runs the application's event loop and returns once quit() has taken effect.
 //!
@@ -135,9 +134,7 @@ TEST( CoreApplicationTest, ApplicationRunsOnTheAlreadyAdoptedThreadAndLeavesItUs
     // And it still works: a queued call must be deliverable, drained by processEvents() since no
     // loop is running here any more.
     Object receiver;
-    bool ran = false;
     Object::callLater( &receiver, &Object::setObjectName, std::string( "ok" ) );
-    ( void )ran;
     adopted->processEvents();
     EXPECT_EQ( receiver.objectName(), "ok" );
 }
@@ -169,10 +166,14 @@ TEST( CoreApplicationTest, ArgumentsAreCapturedOnlyByTheArgcArgvConstructor )
 //! thread reuses one, so its second exec() became a tight loop burning a core until something
 //! else stopped it. Measured before the fix: cpu/wall = 100%.
 //!
-//! Asserted with std::clock(), which measures processor time and is standard C++ (no /proc, no
-//! getrusage, no GetProcessTimes), so this test is portable. A correctly blocking loop consumes
-//! almost no CPU over the interval; the threshold is deliberately loose -- the regression pins the
-//! ratio at ~1.0, so anything below 0.5 distinguishes them with a wide margin.
+//! Asserted by comparing process CPU time against elapsed wall time. A correctly blocking loop
+//! consumes almost no CPU over the interval; the threshold is deliberately loose -- a spin pins the
+//! ratio at ~1.0, so anything below 0.5 separates them with a wide margin.
+//!
+//! CPU time comes from TestSupport::processCpuSeconds(), **not** std::clock(). C specifies clock()
+//! as processor time, but MSVC implements it as wall-clock time since CRT init, which makes the
+//! ratio ~1.0 on Windows whatever the loop does -- this test failed there for exactly that reason
+//! while passing on Linux, where glibc's clock() is conforming.
 //!
 //! The second loop is stopped by a plain watchdog thread rather than by a Timer, and that choice
 //! is load-bearing. With the defect present, processEvents() returns before dispatching anything,
@@ -194,13 +195,12 @@ TEST( CoreApplicationTest, ReExecAfterQuitBlocksInsteadOfSpinning )
             CoreApplication::quit();
         } );
 
-    const std::clock_t cpuBefore = std::clock();
+    const double cpuBefore = TestSupport::processCpuSeconds();
     const auto wallBefore = std::chrono::steady_clock::now();
 
     EXPECT_EQ( app.exec(), 0 );
 
-    const double cpuSeconds
-        = static_cast<double>( std::clock() - cpuBefore ) / CLOCKS_PER_SEC;
+    const double cpuSeconds = TestSupport::processCpuSeconds() - cpuBefore;
     const double wallSeconds
         = std::chrono::duration<double>( std::chrono::steady_clock::now() - wallBefore ).count();
     watchdog.join();
@@ -208,8 +208,9 @@ TEST( CoreApplicationTest, ReExecAfterQuitBlocksInsteadOfSpinning )
     ASSERT_GT( wallSeconds, 0.1 ) << "the loop returned far too early to have waited at all";
     EXPECT_LT( cpuSeconds / wallSeconds, 0.5 )
         << "exec() burned " << cpuSeconds << "s of CPU over " << wallSeconds
-        << "s of wall time -- it is spinning rather than blocking, so the dispatcher's interrupt "
-        "flag is latched again.";
+        << "s of wall time (ratio " << ( cpuSeconds / wallSeconds )
+        << ") -- it is spinning rather than blocking, so the dispatcher's interrupt flag is "
+        "latched again.";
 }
 
 //! Verifies the loop still dispatches work on a *second* exec(), not merely that it stops spinning.
