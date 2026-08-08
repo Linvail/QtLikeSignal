@@ -109,7 +109,10 @@ TEST( ThreadTest, LifecycleAndSignals )
 }
 
 //! Tests static thread factory creation. Verifies static function Thread::create()
-//! instantiates, starts, and executes a functor on a new thread.
+//! instantiates a Thread that executes a functor once started.
+//!
+//! create() deliberately does not start what it returns -- see its declaration -- so start() here
+//! is part of the contract, not boilerplate.
 TEST( ThreadTest, CreateStaticFactory )
 {
     bool funcExecuted = false;
@@ -118,8 +121,56 @@ TEST( ThreadTest, CreateStaticFactory )
             funcExecuted = true;
         } );
 
+    threadObj->start();
     threadObj->wait();
     EXPECT_TRUE( funcExecuted );
+    delete threadObj;
+}
+
+//! Verifies Thread::create() hands back an unstarted thread, and why that matters.
+//!
+//! create() used to start the thread before returning, which closed the only window in which a
+//! caller can connect to started, re-home Objects onto the thread, or set its priority --
+//! setPriority() refuses on a thread that is not running, so a self-starting thread could never be
+//! given one without a race. Qt's QThread::create() leaves it unstarted for exactly these reasons:
+//! "The new thread is not started -- it must be started by an explicit call to start(). This allows
+//! you to connect to its signals, move QObjects to the thread, choose the new thread's priority and
+//! so on."
+//!
+//! Pins the whole window, not just the flag: a started signal connected before start() must
+//! actually fire, which is the thing that was impossible before.
+TEST( ThreadTest, CreateReturnsAnUnstartedThread )
+{
+    std::atomic<bool> bodyRan { false };
+    Thread* threadObj = Thread::create( [&bodyRan]()
+        {
+            bodyRan.store( true );
+        } );
+    ASSERT_NE( threadObj, nullptr );
+
+    EXPECT_FALSE( threadObj->isRunning() ) << "create() must not start the thread";
+    EXPECT_FALSE( threadObj->isFinished() );
+
+    // The window create() exists to preserve: wire up the thread before it runs.
+    std::atomic<bool> startedFired { false };
+    Object context;
+    Object::connect( threadObj->started, &context, [&startedFired]()
+        {
+            startedFired.store( true );
+        }, ConnectionType::DirectConnection );
+
+    // Nothing should have happened yet.
+    std::this_thread::sleep_for( std::chrono::milliseconds( 20 ) );
+    EXPECT_FALSE( bodyRan.load() ) << "the body ran without start() ever being called";
+
+    threadObj->start();
+    threadObj->wait();
+
+    EXPECT_TRUE( bodyRan.load() );
+    EXPECT_TRUE( startedFired.load() )
+        << "started was connected before start() and still did not fire -- the window create() "
+        "leaves open is not usable.";
+
     delete threadObj;
 }
 
@@ -177,6 +228,7 @@ TEST( ThreadTest, MultipleThreadsExecution )
                 std::this_thread::sleep_for( std::chrono::milliseconds( 20 ) );
                 completedCount.fetch_add( 1 );
             } );
+        t->start();
         threads.push_back( t );
     }
 

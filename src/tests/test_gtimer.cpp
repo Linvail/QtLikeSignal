@@ -94,6 +94,7 @@ TEST( TimerTest, StartAndStop )
             timer.setInterval( 200 );
             EXPECT_EQ( timer.interval(), 200 );
         } );
+    thread->start();
     thread->wait();
     delete thread;
 }
@@ -282,6 +283,7 @@ TEST( TimerTest, ManualTimerEventTriggering )
             EXPECT_TRUE( timeoutSignaled );
             timer.stop();
         } );
+    thread->start();
     thread->wait();
     delete thread;
 }

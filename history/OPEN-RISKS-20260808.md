@@ -49,7 +49,7 @@ no runtime probe was written.
 | R24 | Timer ids never recycle and can wrap onto the `-1` sentinel | Low | Inspection — **Fixed 2026-08-08** |
 | R25 | `Object::thread()` now costs a mutex on every call | Low | Inspection |
 | R26 | Repeating timers drift; interval is measured from dispatch, not deadline | Low | Inspection — **Fixed 2026-08-08** |
-| R27 | `Thread::create()` returns an owning raw pointer with no ownership doc | Low | Inspection |
+| R27 | `Thread::create()` returns an owning raw pointer with no ownership doc, and auto-starts | Low | Inspection — **Fixed 2026-08-08** |
 
 ---
 
@@ -494,15 +494,45 @@ schedule.
 > three runs.
 
 
-## R27 — `Thread::create()` returns an owning raw pointer with no ownership documentation
+## R27 — `Thread::create()` ownership undocumented, and it auto-started *(fixed 2026-08-08)*
 
-**Severity: Low. Inspection.**
+**Severity: Low. Inspection. Surveying Qt's own documentation turned up a second, larger problem
+than the one originally filed.**
 
-`Thread::create()` heap-allocates a `FuncThread`, starts it, and returns `Thread*`. The caller owns
-it and must `delete` it (the tests do, after `wait()`), but neither the declaration nor the doxygen
-comment says so — the comment is just *"Creates and starts a Thread executing the specified
-function."* Easy to leak. Returning `std::unique_ptr<Thread>` would make the contract
-self-enforcing.
+`Thread::create()` heap-allocated a `FuncThread`, **started it**, and returned `Thread*`. The caller
+owns it, but neither the declaration nor the doxygen said so.
+
+Qt 6.11's `QThread::create()` specifies three things we did not:
+
+```cpp
+[[nodiscard]] static QThread *create(Function &&f, Args &&... args);
+```
+> The new thread is **not started** -- it must be started by an explicit call to start(). This
+> allows you to connect to its signals, move QObjects to the thread, choose the new thread's
+> priority and so on.
+>
+> \note the caller acquires ownership of the returned QThread instance.
+
+> **Correction to the original plan.** This entry previously suggested returning
+> `std::unique_ptr<Thread>` to make ownership self-enforcing. That is wrong, and Qt keeps a raw
+> pointer deliberately: `Thread` derives from `Object`, and the canonical idiom is self-deletion
+> (`connect(thread, finished, thread, deleteLater)`), which a `unique_ptr` turns into a double
+> delete. Raw + `[[nodiscard]]` + documented ownership is the correct shape, not a legacy one.
+
+> **Resolution (2026-08-08).** Matched Qt on all three points: ownership documented, `[[nodiscard]]`
+> added (verified to warn on a discarded call, which is what actually makes the leak hard to write),
+> and **the auto-start removed**.
+>
+> The auto-start was the substantive defect. It closed the only window in which a caller can connect
+> to `started`, re-home Objects onto the thread, or set its priority -- `setPriority()` refuses on a
+> thread that is not running, so a self-starting thread could never be given one without a race. In
+> other words `Thread::create()` could not be combined with `started` or `setPriority()` at all.
+>
+> This is a **source-breaking change with no compile error**: an existing caller gets a thread that
+> never runs and fails quietly. All five in-tree call sites were updated. Pinned by
+> `ThreadTest.CreateReturnsAnUnstartedThread`, which asserts not just the flag but that a `started`
+> connection made *before* `start()` actually fires -- the thing that was impossible before.
+
 
 ---
 
