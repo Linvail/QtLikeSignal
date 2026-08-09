@@ -329,7 +329,9 @@ namespace QtLikeSignal
                     }
                     if( fnToRun )
                     {
-                        if( auto life = weakLife.lock() )
+                        // expired(), not lock(): see objectLife(). Equally safe, and a plain
+                        // load rather than an atomic read-modify-write.
+                        if( !weakLife.expired() )
                         {
                             fnToRun();
                         }
