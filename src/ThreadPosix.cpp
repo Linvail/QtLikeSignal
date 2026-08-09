@@ -193,7 +193,7 @@ namespace QtLikeSignal
             std::unique_lock<std::mutex> lock( mWaitMutex );
             const auto hasFinished = [this]
                 {
-                    return mFinished.load();
+                    return mHasFinished.load();
                 };
 
             // The untimed overload rather than wait_for() with a huge duration: what a

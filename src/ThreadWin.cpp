@@ -129,7 +129,7 @@ namespace QtLikeSignal
         }
 
         // The OS thread object is the wait primitive, as in Qt: it is signalled by the thread
-        // ending, which is strictly later than the mFinished store at the tail of
+        // ending, which is strictly later than the mHasFinished store at the tail of
         // threadBody(), so a true return always implies isFinished().
         const DWORD timeout = ( aTime == ULONG_MAX ) ? INFINITE : static_cast<DWORD>( aTime );
         const DWORD result = WaitForSingleObject( handle, timeout );

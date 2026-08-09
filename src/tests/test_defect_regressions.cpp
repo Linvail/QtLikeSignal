@@ -307,7 +307,7 @@ TEST( EventDispatcherDefaultDefectTest, NewShorterTimerWakesPromptly )
     shortTimer.setSingleShot( true ); // configure before the object belongs to another thread
     shortTimer.moveToThread( &workerThread );
     Object::connect(
-        shortTimer.timeout,
+        shortTimer.getTimeout(),
         &context,
         [&firePromise]()
         {
@@ -1213,7 +1213,7 @@ TEST( TimerDefectTest, SingleShotIsStoppedBeforeTimeoutIsEmitted )
     timer.setSingleShot( true );
 
     Object::connect(
-        timer.timeout,
+        timer.getTimeout(),
         &timer,
         [&timer, &activePromise]()
         {

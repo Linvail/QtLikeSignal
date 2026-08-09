@@ -130,90 +130,90 @@ namespace QtLikeSignal
 
         //! Connect Overload 2: connects an overloaded void member function slot inherited from a
         //! base class.
-        template <typename ... SignalArgs, typename Receiver, typename SlotClass>
+        template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename SlotClass>
         static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
             std::is_base_of<SlotClass, Receiver>::value &&
             !std::is_same<SlotClass, Receiver>::value,
             ConnectionHandle>
-        connect( Signal<SignalArgs...>& aSignal,
+        connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             void ( SlotClass::*aSlot )( SignalArgs... ),
             ConnectionType aType = ConnectionType::Auto );
 
         //! Connect Overload 3: connects an overloaded const void member function slot inherited
         //! from a base class.
-        template <typename ... SignalArgs, typename Receiver, typename SlotClass>
+        template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename SlotClass>
         static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
             std::is_base_of<SlotClass, Receiver>::value &&
             !std::is_same<SlotClass, Receiver>::value,
             ConnectionHandle>
-        connect( Signal<SignalArgs...>& aSignal,
+        connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             void ( SlotClass::*aSlot )( SignalArgs... ) const,
             ConnectionType aType = ConnectionType::Auto );
 
         //! Connect Overload 4: connects an overloaded non-void returning member function slot
         //! inherited from a base class.
-        template <typename ... SignalArgs, typename Receiver, typename SlotClass, typename Ret>
+        template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename SlotClass, typename Ret>
         static std::enable_if_t<
             std::is_base_of<Object, Receiver>::value && std::is_base_of<SlotClass, Receiver>::
             value &&
             !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
             ConnectionHandle>
-        connect( Signal<SignalArgs...>& aSignal,
+        connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             Ret ( SlotClass::*aSlot )( SignalArgs... ),
             ConnectionType aType = ConnectionType::Auto );
 
         //! Connect Overload 5: connects an overloaded non-void returning const member function
         //! slot inherited from a base class.
-        template <typename ... SignalArgs, typename Receiver, typename SlotClass, typename Ret>
+        template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename SlotClass, typename Ret>
         static std::enable_if_t<
             std::is_base_of<Object, Receiver>::value && std::is_base_of<SlotClass, Receiver>::
             value &&
             !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
             ConnectionHandle>
-        connect( Signal<SignalArgs...>& aSignal,
+        connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             Ret ( SlotClass::*aSlot )( SignalArgs... ) const,
             ConnectionType aType = ConnectionType::Auto );
 
         //! Connect Overload 6: connects an overloaded void member function slot defined directly
         //! on the receiver.
-        template <typename ... SignalArgs, typename Receiver>
+        template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver>
         static std::enable_if_t<std::is_base_of<Object, Receiver>::value, ConnectionHandle>
-        connect( Signal<SignalArgs...>& aSignal,
+        connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             void ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ),
             ConnectionType aType = ConnectionType::Auto );
 
         //! Connect Overload 7: connects an overloaded const void member function slot defined
         //! directly on the receiver.
-        template <typename ... SignalArgs, typename Receiver>
+        template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver>
         static std::enable_if_t<std::is_base_of<Object, Receiver>::value, ConnectionHandle>
-        connect( Signal<SignalArgs...>& aSignal,
+        connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             void ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ) const,
             ConnectionType aType = ConnectionType::Auto );
 
         //! Connect Overload 8: connects an overloaded non-void returning member function slot
         //! defined directly on the receiver.
-        template <typename ... SignalArgs, typename Receiver, typename Ret>
+        template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename Ret>
         static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
             !std::is_same<Ret, void>::value,
             ConnectionHandle>
-        connect( Signal<SignalArgs...>& aSignal,
+        connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             Ret ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ),
             ConnectionType aType = ConnectionType::Auto );
 
         //! Connect Overload 9: connects an overloaded non-void returning const member function
         //! slot defined directly on the receiver.
-        template <typename ... SignalArgs, typename Receiver, typename Ret>
+        template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename Ret>
         static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
             !std::is_same<Ret, void>::value,
             ConnectionHandle>
-        connect( Signal<SignalArgs...>& aSignal,
+        connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             Ret ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ) const,
             ConnectionType aType = ConnectionType::Auto );
@@ -341,6 +341,9 @@ namespace QtLikeSignal
             );
 
         //! CallLater Overload 11: schedules a Signal emission to run deferred.
+        //!
+        //! Takes a Signal and not a SignalView, unlike the connect() overloads: this one emits,
+        //! which is exactly what a view exists to withhold.
         template <typename ... SignalArgs, typename ... Args>
         static void callLater
             (
@@ -684,13 +687,13 @@ namespace QtLikeSignal
     //! connect inherited overloaded methods seamlessly. SignalArgs are the signal's parameter
     //! types, used to select the slot overload; Receiver must derive from Object; SlotClass is
     //! the base class owning the member function slot.
-    template <typename ... SignalArgs, typename Receiver, typename SlotClass>
+    template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename SlotClass>
     std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
         std::is_base_of<SlotClass, Receiver>::value &&
         !std::is_same<SlotClass, Receiver>::value,
         ConnectionHandle>Object::connect
         (
-        Signal<SignalArgs...>& aSignal,           //!< The signal to connect.
+        SignalSource<SignalArgs...>& aSignal,           //!< The signal to connect.
         Receiver* aReceiver,                        //!< The object receiving the signal.
         void ( SlotClass::*aSlot )
         (
@@ -710,13 +713,13 @@ namespace QtLikeSignal
     //! Connect Overload 3 definition. Same as Overload 2, but specifically for const member
     //! functions; C++ requires separate template matching for const qualifiers on member
     //! function pointers.
-    template <typename ... SignalArgs, typename Receiver, typename SlotClass>
+    template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename SlotClass>
     std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
         std::is_base_of<SlotClass, Receiver>::value &&
         !std::is_same<SlotClass, Receiver>::value,
         ConnectionHandle>Object::connect
         (
-        Signal<SignalArgs...>& aSignal,     //!< The signal to connect.
+        SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
         Receiver* aReceiver,                  //!< The object receiving the signal.
         void ( SlotClass::*aSlot )( SignalArgs... ) const,  //!< The const member function pointer matching SignalArgs.
         ConnectionType aType               //!< The type of connection.
@@ -734,13 +737,13 @@ namespace QtLikeSignal
     //! it won't match the void-returning Overloads 2 and 3. This overload explicitly catches
     //! non-void slots from base classes; the return value is safely discarded during emission.
     //! Ret is that discarded return type.
-    template <typename ... SignalArgs, typename Receiver, typename SlotClass, typename Ret>
+    template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename SlotClass, typename Ret>
     std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
         std::is_base_of<SlotClass, Receiver>::value &&
         !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
         ConnectionHandle>Object::connect
         (
-        Signal<SignalArgs...>& aSignal,     //!< The signal to connect.
+        SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
         Receiver* aReceiver,                  //!< The object receiving the signal.
         Ret ( SlotClass::*aSlot )
         (
@@ -759,13 +762,13 @@ namespace QtLikeSignal
 
     //! Connect Overload 5 definition. Same as Overload 4, but specifically for const member
     //! functions.
-    template <typename ... SignalArgs, typename Receiver, typename SlotClass, typename Ret>
+    template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename SlotClass, typename Ret>
     std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
         std::is_base_of<SlotClass, Receiver>::value &&
         !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
         ConnectionHandle>Object::connect
         (
-        Signal<SignalArgs...>& aSignal,     //!< The signal to connect.
+        SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
         Receiver* aReceiver,                  //!< The object receiving the signal.
         Ret ( SlotClass::*aSlot )( SignalArgs... ) const,  //!< The const member function pointer matching SignalArgs and returning Ret.
         ConnectionType aType               //!< The type of connection.
@@ -783,10 +786,10 @@ namespace QtLikeSignal
     //! onEvent(int)), the compiler cannot deduce Slot in Overload 1. Using NonDeduced<Receiver>
     //! forces the compiler to use SignalArgs from the signal to perfectly select the right
     //! overload pointer. SignalArgs is used both to deduce and to select the slot overload.
-    template <typename ... SignalArgs, typename Receiver>
+    template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver>
     std::enable_if_t<std::is_base_of<Object, Receiver>::value, ConnectionHandle>Object::connect
         (
-        Signal<SignalArgs...>& aSignal,     //!< The signal to connect.
+        SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
         Receiver* aReceiver,                  //!< The object receiving the signal.
         void ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ),  //!< The member function pointer matching SignalArgs.
         ConnectionType aType               //!< The type of connection.
@@ -802,10 +805,10 @@ namespace QtLikeSignal
 
     //! Connect Overload 7 definition. Same as Overload 6, but specifically matches const member
     //! functions.
-    template <typename ... SignalArgs, typename Receiver>
+    template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver>
     std::enable_if_t<std::is_base_of<Object, Receiver>::value, ConnectionHandle>Object::connect
         (
-        Signal<SignalArgs...>& aSignal,     //!< The signal to connect.
+        SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
         Receiver* aReceiver,                  //!< The object receiving the signal.
         void ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ) const,  //!< The const member function pointer matching SignalArgs.
         ConnectionType aType               //!< The type of connection.
@@ -822,11 +825,11 @@ namespace QtLikeSignal
     //! Connect Overload 8 definition. If an overloaded slot returns a value (e.g. bool), it won't
     //! match the void-returning Overload 6. This overload ensures connecting an overloaded method
     //! that returns Ret compiles successfully.
-    template <typename ... SignalArgs, typename Receiver, typename Ret>
+    template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename Ret>
     std::enable_if_t<std::is_base_of<Object, Receiver>::value && !std::is_same<Ret, void>::value,
         ConnectionHandle>Object::connect
         (
-        Signal<SignalArgs...>& aSignal,     //!< The signal to connect.
+        SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
         Receiver* aReceiver,                  //!< The object receiving the signal.
         Ret ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ),  //!< The member function pointer matching SignalArgs and returning Ret.
         ConnectionType aType               //!< The type of connection.
@@ -842,11 +845,11 @@ namespace QtLikeSignal
 
     //! Connect Overload 9 definition. Same as Overload 8, but specifically for const member
     //! functions.
-    template <typename ... SignalArgs, typename Receiver, typename Ret>
+    template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename Ret>
     std::enable_if_t<std::is_base_of<Object, Receiver>::value && !std::is_same<Ret, void>::value,
         ConnectionHandle>Object::connect
         (
-        Signal<SignalArgs...>& aSignal,     //!< The signal to connect.
+        SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
         Receiver* aReceiver,                  //!< The object receiving the signal.
         Ret ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ) const,  //!< The const member function pointer matching SignalArgs and returning Ret.
         ConnectionType aType               //!< The type of connection.

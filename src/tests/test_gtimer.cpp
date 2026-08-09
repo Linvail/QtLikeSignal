@@ -454,7 +454,7 @@ namespace
         runOnThread( worker, [&]()
             {
                 timer = new Timer();
-                Object::connect( timer->timeout, &receiver, &CountingReceiver::onTimeout );
+                Object::connect( timer->getTimeout(), &receiver, &CountingReceiver::onTimeout );
                 timer->start( 5 );
             } );
 
@@ -488,7 +488,7 @@ namespace
             {
                 timer = new Timer();
                 timer->setSingleShot( true );
-                Object::connect( timer->timeout, &receiver, &CountingReceiver::onTimeout );
+                Object::connect( timer->getTimeout(), &receiver, &CountingReceiver::onTimeout );
                 timer->start( 5 );
             } );
 
@@ -524,7 +524,7 @@ namespace
         runOnThread( worker, [&]()
             {
                 timer = new Timer();
-                Object::connect( timer->timeout, &receiver, &CountingReceiver::onTimeout );
+                Object::connect( timer->getTimeout(), &receiver, &CountingReceiver::onTimeout );
                 timer->start( 5 );
             } );
 
@@ -570,7 +570,7 @@ namespace
                 Object context;
                 context.moveToThread( &worker );
                 int emitted = 0;
-                Object::connect( timer.timeout, &context, [&emitted]()
+                Object::connect( timer.getTimeout(), &context, [&emitted]()
                 {
                     ++emitted;
                 }, ConnectionType::Direct );
@@ -754,7 +754,7 @@ namespace
         runOnThread( source, [&]()
             {
                 timer = new Timer();
-                Object::connect( timer->timeout, &receiver, &CountingReceiver::onTimeout,
+                Object::connect( timer->getTimeout(), &receiver, &CountingReceiver::onTimeout,
                 ConnectionType::Direct );
                 timer->start( 5 );
             } );

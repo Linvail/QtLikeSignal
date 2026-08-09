@@ -188,7 +188,7 @@ TEST( EventDispatcherLinuxTest, UnregisteredDescriptorIsNoLongerPolled )
 
     Timer stopper;
     stopper.setSingleShot( true );
-    Object::connect( stopper.timeout, &stopper, []()
+    Object::connect( stopper.getTimeout(), &stopper, []()
         {
             CoreApplication::quit();
         }, ConnectionType::Direct );

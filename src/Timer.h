@@ -54,8 +54,8 @@ namespace QtLikeSignal
 
         void stop();
 
-        //! Signal emitted when the timer expires.
-        Signal<> timeout;
+        SignalView<>& getTimeout() const;
+
         //! Fires a single-shot timer executing a functor after specified delay. Functor is the
         //! callable slot type.
         template <typename Functor> static void singleShot
@@ -96,6 +96,11 @@ namespace QtLikeSignal
         // thread-confined because they go through Object::startTimer()/killTimer(), and timerEvent()
         // is delivered by that same thread's event loop. Adding a mutex would only paper over misuse
         // that the thread-confinement rules already forbid.
+        //! Emitted, on the timer's own thread, each time the interval elapses. Private, handed out
+        //! by getTimeout() as a view: firing a timer's timeout is the timer's job, and a caller
+        //! able to emit it directly would be reporting an expiry that never happened.
+        Signal<> mTimeout;
+
         int mInterval { 0 };        //!< The configured interval, in milliseconds.
         int mTimerId { -1 };        //!< The underlying Object timer id, or -1 if inactive.
         bool mSingleShot { false }; //!< True if the timer stops itself after firing once.

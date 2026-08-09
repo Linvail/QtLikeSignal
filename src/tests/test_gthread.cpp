@@ -84,13 +84,13 @@ TEST( ThreadTest, LifecycleAndSignals )
 
     Object context;
     Object::connect(
-        thread.started, &context, [&startedFired]()
+        thread.getStarted(), &context, [&startedFired]()
         {
             startedFired = true;
         }, ConnectionType::Direct );
 
     Object::connect(
-        thread.finished,
+        thread.getFinished(),
         &context,
         [&finishedFired]()
         {
@@ -154,7 +154,7 @@ TEST( ThreadTest, CreateReturnsAnUnstartedThread )
     // The window create() exists to preserve: wire up the thread before it runs.
     std::atomic<bool> startedFired { false };
     Object context;
-    Object::connect( threadObj->started, &context, [&startedFired]()
+    Object::connect( threadObj->getStarted(), &context, [&startedFired]()
         {
             startedFired.store( true );
         }, ConnectionType::Direct );

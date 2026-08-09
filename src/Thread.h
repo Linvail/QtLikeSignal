@@ -104,11 +104,9 @@ namespace QtLikeSignal
             std::function<void()> aTask
             );
 
-        //! Signal emitted when the thread starts running.
-        Signal<> started;
+        SignalView<>& getStarted() const;
 
-        //! Signal emitted when the thread finishes execution.
-        Signal<> finished;
+        SignalView<>& getFinished() const;
 
         //! Creates a Thread that will execute the specified function. Function is the callable
         //! type and Args its argument types. Thread-safe.
@@ -191,7 +189,14 @@ namespace QtLikeSignal
         #endif
 
         std::shared_ptr<ThreadData> mData;        //!< This thread's dispatcher-holding data.
-        std::atomic<bool> mFinished { false };     //!< True once the OS thread has finished.
+        std::atomic<bool> mHasFinished { false };  //!< True once the OS thread has finished.
+
+        //! Emitted when the event loop starts running. Private, handed out by getStarted() as a
+        //! view: only this thread may announce that it started.
+        Signal<> mStarted;
+
+        //! Emitted when the event loop has exited. Private for the same reason as mStarted.
+        Signal<> mFinished;
         std::atomic<bool> mExiting { false };      //!< Set by exit()/quit() to stop exec()'s loop.
         std::atomic<int> mExitCode { 0 };          //!< Return code passed to exit(), reported by exec().
         mutable std::mutex mWaitMutex;             //!< Guards mWaitCv's predicate.

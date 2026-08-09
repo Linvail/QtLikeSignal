@@ -64,6 +64,13 @@ namespace QtLikeSignal
         return mTimerId;
     }
 
+    //! Gets a subscription-only view of the signal emitted each time the interval elapses (Qt-like
+    //! QTimer::timeout()). A view can be connected to but not emitted.
+    SignalView<>& Timer::getTimeout() const
+    {
+        return mTimeout.view();
+    }
+
     //! Starts or restarts the timer with specified interval in milliseconds.
     void Timer::start
         (
@@ -121,6 +128,6 @@ namespace QtLikeSignal
             stop();
         }
 
-        timeout.emit();
+        mTimeout.emit();
     }
 }

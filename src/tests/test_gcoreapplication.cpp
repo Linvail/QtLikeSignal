@@ -35,7 +35,7 @@ static int execUntilQuit
 {
     Timer stopper;
     stopper.setSingleShot( true );
-    Object::connect( stopper.timeout, &stopper, []()
+    Object::connect( stopper.getTimeout(), &stopper, []()
         {
             CoreApplication::quit();
         }, ConnectionType::Direct );
@@ -78,7 +78,7 @@ TEST( CoreApplicationTest, DerivedApplicationRunsAndReturnsExitCode )
 
     Timer stopper;
     stopper.setSingleShot( true );
-    Object::connect( stopper.timeout, &stopper, []()
+    Object::connect( stopper.getTimeout(), &stopper, []()
         {
             CoreApplication::exit( 42 );
         }, ConnectionType::Direct );
@@ -240,7 +240,7 @@ TEST( CoreApplicationTest, LoopStillDispatchesAfterAQuitExecCycle )
     bool timerFired = false;
     Timer timer;
     timer.setSingleShot( true );
-    Object::connect( timer.timeout, &timer, [&timerFired]()
+    Object::connect( timer.getTimeout(), &timer, [&timerFired]()
         {
             timerFired = true;
             CoreApplication::quit();
@@ -279,7 +279,7 @@ TEST( CoreApplicationTest, NestedExecIsRejected )
     int nestedResult = 0;
     Timer stopper;
     stopper.setSingleShot( true );
-    Object::connect( stopper.timeout, &stopper, [&app, &nestedResult]()
+    Object::connect( stopper.getTimeout(), &stopper, [&app, &nestedResult]()
         {
             // Re-entering exec() from inside the running loop must be refused, not honoured.
             nestedResult = app.exec();
@@ -372,7 +372,7 @@ TEST( CoreApplicationTest, TimerFiresOnTheMainThreadLoop )
 
     int ticks = 0;
     Timer timer;
-    Object::connect( timer.timeout, &timer, [&ticks]()
+    Object::connect( timer.getTimeout(), &timer, [&ticks]()
         {
             if( ++ticks >= 3 )
             {

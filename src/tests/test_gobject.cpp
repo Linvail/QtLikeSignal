@@ -816,3 +816,65 @@ TEST( ObjectTest, ConnectConstReferenceSlot )
     EXPECT_EQ( receiver.callCount(), 1 );
     EXPECT_EQ( receiver.lastString(), "Hello, Object!" );
 }
+
+//! Detects whether T has a callable emit(), for the static assertions below.
+template <typename T, typename = void>
+struct HasEmit : std::false_type
+{
+};
+
+template <typename T>
+struct HasEmit<T, std::void_t<decltype( std::declval<T&>().emit() )> >: std::true_type
+{
+};
+
+// The whole point of handing out a view instead of the Signal: a subscriber can connect but
+// cannot fire it. Asserted here rather than trusted, because nothing else in the suite would
+// notice if emit() were ever added to SignalView -- every test would still pass.
+static_assert( HasEmit<Signal<> >::value, "Signal<> must be emittable." );
+static_assert( !HasEmit<SignalView<> >::value, "SignalView<> must not be emittable." );
+
+//! Tests Object::connect through a SignalView rather than the Signal itself.
+//!
+//! A view is what a class hands out when it wants callers to subscribe but not emit (see
+//! Thread::getStarted(), Timer::getTimeout()), so every connect() overload has to accept one.
+//! Overloads 2-9 name their source as a template-template parameter for exactly this reason;
+//! before that they spelled out Signal<Args...> and a view would not bind.
+TEST( ObjectTest, ConnectThroughSignalView )
+{
+    Signal<int>        sig;
+    ObjectTestReceiver receiver;
+
+    // Overload 1: deduced source, non-overloaded member slot.
+    Object::connect( sig.view(), &receiver, &ObjectTestReceiver::onValueNonVoidReturn );
+
+    sig.emit( 11 );
+    EXPECT_EQ( receiver.callCount(), 1 );
+    EXPECT_EQ( receiver.lastValue(), 11 );
+}
+
+//! Tests Object::connect through a SignalView with an overloaded slot and with a lambda.
+//!
+//! The overloaded slot is the case that actually exercises the template-template change: it
+//! cannot use overload 1, because the compiler needs the signal's argument types to pick which
+//! onValueReceived is meant.
+TEST( ObjectTest, ConnectThroughSignalViewWithOverloadedSlotAndLambda )
+{
+    Signal<int, int>   sig;
+    ObjectTestReceiver receiver;
+    Object context;
+    int lambdaSum = 0;
+
+    Object::connect( sig.view(), &receiver, &ObjectTestReceiver::onValueReceived );
+
+    // Overload 10: functor with a context object.
+    Object::connect( sig.view(), &context, [&lambdaSum]( int aFirst, int aSecond )
+        {
+            lambdaSum += aFirst + aSecond;
+        } );
+
+    sig.emit( 3, 4 );
+    EXPECT_EQ( receiver.callCount(), 1 );
+    EXPECT_EQ( receiver.lastValue(), 7 );
+    EXPECT_EQ( lambdaSum, 7 );
+}

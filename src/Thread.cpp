@@ -98,7 +98,7 @@ namespace QtLikeSignal
         std::lock_guard<std::mutex> startLock( mPriorityMutex );
 
         mData->setThreadRunning( true );
-        mFinished.store( false );
+        mHasFinished.store( false );
         mExiting.store( false );
         mPriorityNeedsReset = false;
         // Each run starts from what start() was given, never from what the previous run ended at: a
@@ -150,11 +150,11 @@ namespace QtLikeSignal
             createdDispatcher = true;
         }
 
-        started.emit();
+        mStarted.emit();
 
         run();
 
-        finished.emit();
+        mFinished.emit();
 
         // Drain deferred deletes before letting go of the dispatcher, mirroring Qt's
         // QThreadPrivate::finish(), which calls sendPostedEvents(nullptr, DeferredDelete) right
@@ -185,7 +185,7 @@ namespace QtLikeSignal
             std::lock_guard<std::mutex> priorityLock( mPriorityMutex );
             mData->setThreadRunning( false );
         }
-        mFinished.store( true );
+        mHasFinished.store( true );
         {
             std::lock_guard<std::mutex> lock( mWaitMutex );
             mWaitCv.notify_all();
@@ -224,7 +224,21 @@ namespace QtLikeSignal
     //! Checks if the thread has finished execution. Thread-safe.
     bool Thread::isFinished() const
     {
-        return mFinished.load();
+        return mHasFinished.load();
+    }
+
+    //! Gets a subscription-only view of the signal emitted when this thread's event loop starts
+    //! running (Qt-like QThread::started()). Thread-safe.
+    SignalView<>& Thread::getStarted() const
+    {
+        return mStarted.view();
+    }
+
+    //! Gets a subscription-only view of the signal emitted when this thread's event loop has
+    //! exited (Qt-like QThread::finished()). Thread-safe.
+    SignalView<>& Thread::getFinished() const
+    {
+        return mFinished.view();
     }
 
     //! Sets the scheduling priority of this thread. Thread-safe.
