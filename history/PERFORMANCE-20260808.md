@@ -34,6 +34,7 @@ Ratios and scaling curves are the durable part; the nanosecond values are not.
 | P3 | Every emit builds a `std::function` on the heap, even for a direct call | Medium | Measured — +38 ns over raw boost |
 | P4 | One dispatcher mutex serialises every object on a thread | Unknown | Inspection only |
 | P5 | Timer list is scanned linearly twice per dispatch pass | Low | Inspection only |
+| P6 | Dispatch is 2–3.5x Qt 6's; same-thread **fixed**, queued improved 17% but still 2x QtMimic | Medium | Measured — `test_QtLikeSignal_Performance.cpp` |
 
 ---
 
@@ -184,7 +185,143 @@ for hundreds on one thread.
 
 ---
 
-## Before acting on any of this
+## P6 — dispatch costs 2–5x Qt 6's, driven by allocations per emit
+
+**Impact: High. Measured, with the cause isolated.**
+
+`src/tests/test_QtLikeSignal_Performance.cpp` runs the same four scenarios against QtLikeSignal,
+QtMimic and Qt 6 in one process. Median of three runs, `-O2`, no sanitizer:
+
+| scenario | Qt 6 | QtLikeSignal | QtMimic | ours vs Qt 6 | ours vs QtMimic |
+|---|---|---|---|---|---|
+| `connect()` | 122 ns | 537 ns | 680 ns | 4.4x | 0.79x |
+| emit → receive, direct | 29 ns | 68 ns | 65 ns | 2.3x | 1.05x |
+| emit → receive, auto same-thread | 30 ns | 88 ns | 104 ns | 2.9x | 0.85x |
+| emit → receive, queued cross-thread | 539 ns | 1022 ns | 496 ns | **1.9x** | **2.1x** |
+
+> All rows are **after the 2026-08-09 fixes**. Before them: direct 150 ns, auto 148 ns, queued
+> 1240 ns. Same-thread dispatch is now at or ahead of QtMimic. The queued row is measured from queued-only runs, which are noticeably less noisy than
+> reading it out of a full run — it is a producer/consumer race, and the numbers spread by ±10%.
+
+Qt is faster on every row, and by a wider margin than the earlier QtMimic-only comparison suggested.
+Qt's direct emit (30 ns) even beats a bare `boost::signals2` emit (51 ns, see P3): its
+`QMetaObject::activate()` walks a preallocated connection list and calls the slot without allocating
+anything, where our path heap-allocates several times per emit. `connect()` is the one row where we
+beat QtMimic, and it is still 4.5x Qt's.
+
+### Same-thread paths: fixed (2026-08-09)
+
+We allocated on *every* emit, including a `DirectConnection` that just calls the slot and returns:
+
+```
+                            before   after
+QtLikeSignal direct           1.00    0.00   allocations per emit
+QtLikeSignal auto same-thread 1.00    0.00
+QtMimic (either)              0.00    0.00
+```
+
+The wrapper built its `boundSlot` closure and passed it *by value* as `std::function<void()>` into
+`dispatchMetaCall()`, and only inside that call was the connection discovered to be direct. The
+closure exceeds the small-object buffer, so that was a malloc and free per emit, plus a redundant
+second `weakLife.lock()` (the inner closure re-checked what the wrapper had already checked) and an
+indirect call.
+
+QtMimic never had the problem because it decides first and acts second:
+
+```cpp
+if( aType == ConnectionType::Direct ) { slot( args... ); return; }   // no closure, no affinity read
+```
+
+Fixed by splitting the decision out of the dispatch: `decideDispatch()` answers CallInline / Queue /
+Drop, and `invokeOrQueue()` takes the invocation as a *template parameter* so the inline path never
+materialises a `std::function`. Only the queued branch wraps it, because only that branch stores it.
+An explicit `DirectConnection` now never reads the affinity at all, which also skips the `Affinity`
+mutex measured in P2.
+
+It had to be a helper in the .cpp rather than inline logic in the wrapper because `Object.h` only
+forward-declares `Thread` — which is exactly why the original code deferred everything to
+`dispatchMetaCall()` in the first place.
+
+Two further same-thread costs went with it:
+
+**Arguments were copied even when the call was inline.** The wrapper captured them into a closure
+before deciding how to deliver, so every receiver paid a copy per emit for a call made synchronously
+on the next line. `invokeOrQueue()` now takes them alongside the invoker and forwards them straight
+through; only the queued path copies. Pinned by `ObjectArgumentCopyingTest`, which asserts exact
+counts — 0 for direct and same-thread auto, 1 per receiver for queued — and reports 100 copies for
+100 receivers if the change is reverted. Qt copies nothing here either: moc passes a stack array of
+`void*` pointing at the caller's own arguments.
+
+**The liveness check used `lock()` where `expired()` would do.** Measured 17.1 ns against 0.25 ns —
+`lock()` is an atomic read-modify-write on the control block, `expired()` a plain load — which was
+about 22% of a direct emit spent on nothing. They are equally safe *here*, and that is the part worth
+remembering: the token is an `int`, not the Object, so the `shared_ptr` that `lock()` returns keeps
+the token alive and does nothing to stop the Object being destroyed a moment later. Both forms answer
+only "had destruction begun at the instant of the check", and neither closes the check-then-use race
+that follows. What actually prevents a destroyed receiver being called is `~Object()` disconnecting
+its incoming connections (R17).
+
+### The queued path: partly fixed, and the rest is structural
+
+`new MetaCallEvent( aSlot )` copied a by-value parameter that was dead on the next line, at both
+call sites. Moving instead took allocations per queued emit from **3.93 to 2.78** (QtMimic: 2.42) and
+the time from ~1240 ns to ~1022 ns, about 17%.
+
+Allocation count is now close to parity, so it is no longer what separates us. The remaining
+difference is **one extra lock per emit**, and it is architectural rather than an oversight:
+
+| | mutexes taken per queued emit |
+|---|---|
+| QtLikeSignal | 3 — `Affinity::data()`, `ThreadData::dispatcher()`, `EventDispatcherDefault::postEvent()` |
+| QtMimic | 2 — `Affinity::data()`, `ThreadData::post()` |
+
+Our `ThreadData` holds a *pointer to a dispatcher object* that owns the queue, so finding the queue
+costs a guarded lookup and a `shared_ptr` copy before the queue's own lock is even taken. QtMimic's
+`ThreadData` owns its mailbox directly, so there is nothing to look up. Qt does the same as QtMimic —
+`QThreadData` owns `postEventList`.
+
+Closing it means one of:
+- making the dispatcher pointer atomically readable, which carries the same lifetime trade-off
+  discussed in P2 (the guarded `shared_ptr` is what makes R12's "dispatcher cannot die mid-call"
+  guarantee hold); or
+- moving the event queue into `ThreadData`, which is what Qt and QtMimic both do, and is the larger
+  change.
+
+Neither is worth doing on microbenchmark evidence alone. Also unmeasured: the consumer copies the
+queue into a fresh `std::vector` on every dispatch pass, where QtMimic swaps its deque, which may
+account for part of the residual 0.36 allocations per emit.
+
+**A syscall hypothesis was checked and rejected.** The obvious suspect for the queued row was
+`EventDispatcherLinux::wakeWaiter()` writing to its eventfd on every post, which QtMimic (condvar
+only) does not do. `strace -c` disproved it: 200k emits produced **725** writes, because the
+`mWakePending` collapsing flag does its job, and total syscall time was comparable (~40 ms each).
+
+> ### Correction: the first version of this table was biased
+>
+> The numbers first published here reported direct emit at 82 ns for QtLikeSignal against 74 ns for
+> QtMimic (1.11x), and same-thread `Auto` at 82 vs 107 ns — i.e. that we were *faster* on `Auto`.
+> Both were artefacts of test ordering. The real figures are 2.3x and 1.5x **slower**.
+>
+> glibc keeps a lock-free fast path for `malloc` while a process is single-threaded and abandons it
+> permanently once a second thread has existed. gtest runs tests in registration order, so
+> QtLikeSignal's direct and auto scenarios ran *before* any benchmark had started a thread, on the
+> fast path, while QtMimic's ran *after* `QtLikeSignal_QueuedEmitCrossThread` had created one. The
+> comparison was measuring allocator state as much as dispatch.
+>
+> Isolated, the effect is unambiguous: QtMimic's direct emit measured 40.3 ns alone, 63.2 ns after
+> QtLikeSignal's queued test, and 64.3 ns after Qt 6's — the same penalty whichever library spawned
+> the thread. Qt 6's own direct emit was unaffected (30.3 → 29.7 ns) because it does not allocate per
+> emit, and the penalty scaled with each library's allocations per emit, which is itself corroborating
+> evidence for the allocation finding above.
+>
+> `PerfHarness::settleAllocatorState()` now spawns and joins one thread before anything is timed, so
+> every library is measured in the same state — which is also the state any threaded application is
+> in. After the fix the ordering sensitivity is gone: QtMimic's direct emit reads 70.0 ns alone and
+> 65.6 ns after Qt 6's queued test.
+
+Caveat on `connect()`: that scenario connects 20 000 slots to a single signal, so it also measures
+insertion into a growing slot list. It is the same shape for all three libraries, so the comparison
+holds, but the absolute number is not the cost of one connection to an empty signal.
 
 **Nothing here has been profiled against a real workload.** These are microbenchmarks with no work
 between iterations, which is the condition most favourable to making lock and allocation overhead
@@ -209,3 +346,8 @@ Recorded because each cost real time and each would recur:
   over several rounds; correct code grows once and then flattens.
 - **An unused result gets optimised away.** Pin benchmark loops with a barrier, and be suspicious of
   any result reporting 0.00 ns.
+- **glibc's allocator gets permanently slower once a second thread has existed.** In one process,
+  tests that run before any thread is spawned are therefore measured on a faster `malloc` than the
+  ones after, which silently biased the first comparison table by ~2x in one library's favour. Settle
+  the process into its multi-threaded state before timing anything
+  (`PerfHarness::settleAllocatorState()`), and distrust any in-process A/B where one side runs first.
