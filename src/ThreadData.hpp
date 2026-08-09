@@ -30,6 +30,19 @@ namespace QtLikeSignal
     //! a thread's lifecycle are granted access.
     struct ThreadData
     {
+    public:
+        ThreadData() = default;
+
+        ThreadData
+            (
+            const ThreadData&
+            ) = delete;
+
+        ThreadData& operator=
+            (
+            const ThreadData&
+            ) = delete;
+
     private:
         Thread* thread() const;
 
