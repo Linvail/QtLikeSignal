@@ -1,4 +1,4 @@
-Rule: You have explicit permission to read files in H:\Projects-2026\qt-everywhere-src-5.15.19 and H:\Projects-2026\qtbase-everywhere-src-6.11.1 without asking. If you are in WSL, go to /mnt/h/... instead.
+Rule: You have explicit permission to read files in H:\Projects-2026\qt-everywhere-src-5.15.19 and /home/evan/Projects/qtbase-everywhere-src-6.11.1 without asking. If you are in WSL, go to /mnt/h/... instead.
 Rule: When asked questions about Qt, read the local Qt source code first to verify implementation details and ensure accuracy.
 Rule: You can use C++17 but not C++20. Do not use deprecated things in C++20 or later versions.
 Rule: Do not use MSVC-specific preprocessor, like #pragma once. Use #ifndef.
