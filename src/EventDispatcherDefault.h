@@ -145,6 +145,19 @@ namespace QtLikeSignal
         //! Nudges an adopted thread's own native loop when work is posted; empty if unused.
         std::function<void()> mWakeCallback;
 
+        //! True while mWakeCallback holds a callback, so wakeWaiter() can skip reading it.
+        //!
+        //! wakeWaiter() runs on every postEvent(), and reading the callback costs a mutex
+        //! acquire/release plus a std::function copy-construct and destroy -- on a path where the
+        //! callback is almost always absent, because it exists only for a thread whose own native
+        //! loop drains our queue (Thread::setWakeCallback(), used by adopted threads). Testing one
+        //! atomic first makes the common case free and leaves the callback path exactly as it was.
+        //!
+        //! Racing a concurrent setWakeCallback() can miss the wake for the post in flight, but the
+        //! mutex version could too: it could take the lock a moment before the setter did. A
+        //! callback installed concurrently with a post has never been guaranteed to see that post.
+        std::atomic<bool> mHasWakeCallback { false };
+
         //! Guards mWakeCallback -- deliberately NOT mMutex.
         //!
         //! wakeWaiter() is reached both with mMutex held (registerTimer, unregisterTimer) and
