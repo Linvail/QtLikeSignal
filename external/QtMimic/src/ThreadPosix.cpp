@@ -154,7 +154,7 @@ namespace QtMimic
     }
 
     //! @brief Entry point handed to pthread_create(). Returns nullptr always; nothing is passed
-    //! back through join().
+    //! back through wait().
     void* Thread::threadEntry
         (
         void* aArg      //!< The Thread that is starting, as a void*.
@@ -191,9 +191,9 @@ namespace QtMimic
     //! Deliberately does NOT hold mPriorityMutex across the actual pthread_join(): run()'s
     //! priority fix-up needs that same mutex to get past its very first step, and this thread
     //! cannot finish -- and so let pthread_join() return -- until it does. Holding the mutex
-    //! across the join would be a self-inflicted deadlock against a thread that has barely
+    //! across the wait would be a self-inflicted deadlock against a thread that has barely
     //! started.
-    void Thread::join()
+    void Thread::wait()
     {
         pthread_t tid;
         bool needJoin = false;

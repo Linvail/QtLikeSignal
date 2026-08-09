@@ -125,7 +125,7 @@ namespace QtLikeSignal
             Signal& aSignal,
             Receiver* aReceiver,
             Slot aSlot,
-            ConnectionType aType = ConnectionType::AutoConnection
+            ConnectionType aType = ConnectionType::Auto
             );
 
         //! Connect Overload 2: connects an overloaded void member function slot inherited from a
@@ -138,7 +138,7 @@ namespace QtLikeSignal
         connect( Signal<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             void ( SlotClass::*aSlot )( SignalArgs... ),
-            ConnectionType aType = ConnectionType::AutoConnection );
+            ConnectionType aType = ConnectionType::Auto );
 
         //! Connect Overload 3: connects an overloaded const void member function slot inherited
         //! from a base class.
@@ -150,7 +150,7 @@ namespace QtLikeSignal
         connect( Signal<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             void ( SlotClass::*aSlot )( SignalArgs... ) const,
-            ConnectionType aType = ConnectionType::AutoConnection );
+            ConnectionType aType = ConnectionType::Auto );
 
         //! Connect Overload 4: connects an overloaded non-void returning member function slot
         //! inherited from a base class.
@@ -163,7 +163,7 @@ namespace QtLikeSignal
         connect( Signal<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             Ret ( SlotClass::*aSlot )( SignalArgs... ),
-            ConnectionType aType = ConnectionType::AutoConnection );
+            ConnectionType aType = ConnectionType::Auto );
 
         //! Connect Overload 5: connects an overloaded non-void returning const member function
         //! slot inherited from a base class.
@@ -176,7 +176,7 @@ namespace QtLikeSignal
         connect( Signal<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             Ret ( SlotClass::*aSlot )( SignalArgs... ) const,
-            ConnectionType aType = ConnectionType::AutoConnection );
+            ConnectionType aType = ConnectionType::Auto );
 
         //! Connect Overload 6: connects an overloaded void member function slot defined directly
         //! on the receiver.
@@ -185,7 +185,7 @@ namespace QtLikeSignal
         connect( Signal<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             void ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ),
-            ConnectionType aType = ConnectionType::AutoConnection );
+            ConnectionType aType = ConnectionType::Auto );
 
         //! Connect Overload 7: connects an overloaded const void member function slot defined
         //! directly on the receiver.
@@ -194,7 +194,7 @@ namespace QtLikeSignal
         connect( Signal<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             void ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ) const,
-            ConnectionType aType = ConnectionType::AutoConnection );
+            ConnectionType aType = ConnectionType::Auto );
 
         //! Connect Overload 8: connects an overloaded non-void returning member function slot
         //! defined directly on the receiver.
@@ -205,7 +205,7 @@ namespace QtLikeSignal
         connect( Signal<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             Ret ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ),
-            ConnectionType aType = ConnectionType::AutoConnection );
+            ConnectionType aType = ConnectionType::Auto );
 
         //! Connect Overload 9: connects an overloaded non-void returning const member function
         //! slot defined directly on the receiver.
@@ -216,7 +216,7 @@ namespace QtLikeSignal
         connect( Signal<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             Ret ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ) const,
-            ConnectionType aType = ConnectionType::AutoConnection );
+            ConnectionType aType = ConnectionType::Auto );
         //! Connect Overload 10: connects a signal to a free function, lambda, or general functor
         //! slot.
         template <typename Signal, typename Functor>
@@ -227,7 +227,7 @@ namespace QtLikeSignal
             Signal& aSignal,
             Object* aContext,
             Functor aSlot,
-            ConnectionType aType = ConnectionType::AutoConnection
+            ConnectionType aType = ConnectionType::Auto
             );
 
         static void disconnect
@@ -532,7 +532,7 @@ namespace QtLikeSignal
             auto wrapper = [weakLife, aContext, aSlot, aType, ctxAffinity, cleanup]
                 ( auto&&... aArgs )
                 {
-                    if( aType == ConnectionType::DirectConnection )
+                    if( aType == ConnectionType::Direct )
                     {
                         // Always synchronous in the emitting thread, whatever the affinity is --
                         // Qt::DirectConnection ignores thread affinity too.
@@ -556,7 +556,7 @@ namespace QtLikeSignal
                         return;
                     }
 
-                    if( aType == ConnectionType::AutoConnection && isCurrentThread( ctxData ) )
+                    if( aType == ConnectionType::Auto && isCurrentThread( ctxData ) )
                     {
                         // Already on the receiver's thread: deliver inline, like Qt::AutoConnection.
                         aSlot( aArgs ... );

@@ -145,7 +145,7 @@ namespace QtMimic
             int aCode
             );
 
-        void join();
+        void wait();
 
         bool isCurrent() const;
 
@@ -157,7 +157,7 @@ namespace QtMimic
 
         SignalView<>& getFinished() const;
 
-        static Thread* current();
+        static Thread* currentThread();
 
         static std::shared_ptr<ThreadData> currentData();
 
@@ -206,7 +206,7 @@ namespace QtMimic
         #if defined( _WIN32 )
             //! The OS thread handle from _beginthreadex(), or nullptr when there is none to
             //! reap. Typed void* so this header does not pull in <windows.h>. Guarded by
-            //! mPriorityMutex; owned, and closed by whichever join() sees the thread finish with
+            //! mPriorityMutex; owned, and closed by whichever wait() sees the thread finish with
             //! no other waiter left inside the wait.
             void* mHandle { nullptr };
 
@@ -219,8 +219,8 @@ namespace QtMimic
             pthread_t mThreadId {};
 
             //! True while mThreadId names a thread that has been created and not yet joined.
-            //! Joining twice is undefined, so this is what makes join() a no-op once a previous
-            //! join() has already reaped it. Guarded by mPriorityMutex.
+            //! Joining twice is undefined, so this is what makes wait() a no-op once a previous
+            //! wait() has already reaped it. Guarded by mPriorityMutex.
             bool mJoinable { false };
         #endif
 
@@ -234,7 +234,7 @@ namespace QtMimic
         Signal<> mFinished;        //!< Emitted when loop exits
 
         //! Guards mPriority, mPriorityNeedsReset, and the native handle members above, including
-        //! every use of that handle (creation, priority application, join()).
+        //! every use of that handle (creation, priority application, wait()).
         //!
         //! start() holds it across thread creation, so a UNIX priority fix-up inside run() can
         //! never run before the priority meant for THIS run has been decided, and

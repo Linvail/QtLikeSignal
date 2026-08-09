@@ -126,14 +126,14 @@ private:
 //! Tests direct signal-slot connection and emission.
 //!
 //! Verifies that Object::connect() correctly binds a Signal to a Object member function slot
-//! using ConnectionType::DirectConnection, and that Signal::emit() properly invokes the receiver slot.
+//! using ConnectionType::Direct, and that Signal::emit() properly invokes the receiver slot.
 TEST( ObjectTest, DirectSignalSlotConnection )
 {
     Signal<int>        sig;
     ObjectTestReceiver receiver;
 
     Object::connect( sig, &receiver, &ObjectTestReceiver::onValueReceived, ConnectionType::
-        DirectConnection );
+        Direct );
 
     sig.emit( 42 );
     EXPECT_EQ( receiver.callCount(), 1 );
@@ -238,7 +238,7 @@ TEST( ObjectTest, LambdaSlotConnection )
             receivedValue = aVal;
             callCount++;
         },
-        ConnectionType::DirectConnection );
+        ConnectionType::Direct );
 
     sig( 100 );
     EXPECT_EQ( callCount, 1 );
@@ -259,7 +259,7 @@ TEST( ObjectTest, MultiArgumentSignal )
     ObjectTestReceiver receiver;
 
     Object::connect( sig, &receiver, &ObjectTestReceiver::onMultiArg, ConnectionType::
-        DirectConnection );
+        Direct );
 
     sig.emit( 7, "Hello Signals", 3.14159 );
     EXPECT_EQ( receiver.callCount(), 1 );
@@ -314,7 +314,7 @@ TEST( ObjectTest, TimerStartAndKill )
 
 //! Tests connect() with member function slot when receiver lives in another thread.
 //!
-//! Verifies that Object::connect() with ConnectionType::AutoConnection or ConnectionType::QueuedConnection routes signal
+//! Verifies that Object::connect() with ConnectionType::Auto or ConnectionType::Queued routes signal
 //! emissions across thread boundaries into the receiver's thread event loop for execution.
 TEST( ObjectTest, CrossThreadMemberFunctionConnection )
 {
@@ -330,12 +330,12 @@ TEST( ObjectTest, CrossThreadMemberFunctionConnection )
     receiver.moveToThread( &workerThread );
 
     Object::connect( sig, &receiver, &ObjectTestReceiver::onValueReceived, ConnectionType::
-        AutoConnection );
+        Auto );
     Object::connect(
         sig, &receiver, [&workerThread]( int )
         {
             workerThread.quit();
-        }, ConnectionType::AutoConnection );
+        }, ConnectionType::Auto );
 
     sig.emit( 100 );
 
@@ -375,7 +375,7 @@ TEST( ObjectTest, CrossThreadLambdaConnection )
             executedInThread = Thread::currentThread();
             workerThread.quit();
         },
-        ConnectionType::AutoConnection );
+        ConnectionType::Auto );
 
     sig.emit( "hello cross thread" );
 
@@ -387,7 +387,7 @@ TEST( ObjectTest, CrossThreadLambdaConnection )
 
 //! Tests signal emission when receiver is destroyed before event processing.
 //!
-//! Verifies that when a receiver object connected via ConnectionType::QueuedConnection is destroyed prior to
+//! Verifies that when a receiver object connected via ConnectionType::Queued is destroyed prior to
 //! the event dispatcher processing the pending MetaCallEvent, the event is safely removed/ignored
 //! and no slot function is invoked or use-after-free error occurs.
 TEST( ObjectTest, ReceiverDestroyedBeforeQueuedEventHandled )
@@ -416,7 +416,7 @@ TEST( ObjectTest, ReceiverDestroyedBeforeQueuedEventHandled )
             blockEnteredPromise.set_value();
             blockReleaseFuture.wait();
         },
-        ConnectionType::QueuedConnection );
+        ConnectionType::Queued );
 
     blockSig.emit();
     blockEnteredFuture.get();
@@ -429,7 +429,7 @@ TEST( ObjectTest, ReceiverDestroyedBeforeQueuedEventHandled )
 
         Object::connect(
             sig, receiver.get(), &ObjectTestReceiver::onValueReceived, ConnectionType::
-            QueuedConnection );
+            Queued );
 
         sig.emit( 55 );
         // Receiver is deleted here before workerThread event loop processes the queued event
@@ -443,7 +443,7 @@ TEST( ObjectTest, ReceiverDestroyedBeforeQueuedEventHandled )
         quitSig, &dummyContext, [&workerThread]()
         {
             workerThread.quit();
-        }, ConnectionType::QueuedConnection );
+        }, ConnectionType::Queued );
     quitSig.emit();
 
     workerThread.wait();
@@ -481,7 +481,7 @@ TEST( ObjectTest, ContextDestroyedBeforeQueuedLambdaHandled )
             blockEnteredPromise.set_value();
             blockReleaseFuture.wait();
         },
-        ConnectionType::QueuedConnection );
+        ConnectionType::Queued );
 
     blockSig.emit();
     blockEnteredFuture.get();
@@ -497,7 +497,7 @@ TEST( ObjectTest, ContextDestroyedBeforeQueuedLambdaHandled )
             sig, &context, [&lambdaExecuted]( int )
             {
                 lambdaExecuted = true;
-            }, ConnectionType::QueuedConnection );
+            }, ConnectionType::Queued );
 
         sig.emit( 77 );
         // context goes out of scope and is destroyed here
@@ -511,7 +511,7 @@ TEST( ObjectTest, ContextDestroyedBeforeQueuedLambdaHandled )
         quitSig, &dummyContext, [&workerThread]()
         {
             workerThread.quit();
-        }, ConnectionType::QueuedConnection );
+        }, ConnectionType::Queued );
     quitSig.emit();
 
     workerThread.wait();
@@ -519,9 +519,9 @@ TEST( ObjectTest, ContextDestroyedBeforeQueuedLambdaHandled )
     EXPECT_FALSE( lambdaExecuted );
 }
 
-//! Tests connect() with explicit ConnectionType::DirectConnection when receiver lives in another thread.
+//! Tests connect() with explicit ConnectionType::Direct when receiver lives in another thread.
 //!
-//! Verifies that when ConnectionType::DirectConnection is explicitly requested, the slot function is invoked
+//! Verifies that when ConnectionType::Direct is explicitly requested, the slot function is invoked
 //! synchronously on the emitting thread, even if the receiver belongs to a different thread.
 TEST( ObjectTest, CrossThreadDirectConnection )
 {
@@ -537,7 +537,7 @@ TEST( ObjectTest, CrossThreadDirectConnection )
     receiver.moveToThread( &workerThread );
 
     Object::connect( sig, &receiver, &ObjectTestReceiver::onValueReceived, ConnectionType::
-        DirectConnection );
+        Direct );
 
     sig.emit( 888 );
 
@@ -583,7 +583,7 @@ TEST( ObjectTest, CallLaterMemberFunction )
         quitSig, &receiver, [&workerThread]()
         {
             workerThread.quit();
-        }, ConnectionType::QueuedConnection );
+        }, ConnectionType::Queued );
     quitSig.emit();
 
     workerThread.wait();
@@ -627,7 +627,7 @@ TEST( ObjectTest, CallLaterDeduplicationAndLastArgs )
                 return canProceed;
             } );
         },
-        ConnectionType::QueuedConnection );
+        ConnectionType::Queued );
 
     blockSig.emit();
 
@@ -650,7 +650,7 @@ TEST( ObjectTest, CallLaterDeduplicationAndLastArgs )
         quitSig, &receiver, [&workerThread]()
         {
             workerThread.quit();
-        }, ConnectionType::QueuedConnection );
+        }, ConnectionType::Queued );
     quitSig.emit();
 
     workerThread.wait();
@@ -683,7 +683,7 @@ TEST( ObjectTest, CallLaterFreeFunction )
         quitSig, &context, [&workerThread]()
         {
             workerThread.quit();
-        }, ConnectionType::QueuedConnection );
+        }, ConnectionType::Queued );
     quitSig.emit();
 
     workerThread.wait();
@@ -707,7 +707,7 @@ TEST( ObjectTest, CallLaterSignal )
 
     Signal<int> sig;
     Object::connect( sig, &receiver, &ObjectTestReceiver::onValueReceived, ConnectionType::
-        DirectConnection );
+        Direct );
 
     Object::callLater( &receiver, sig, 777 );
 
@@ -716,7 +716,7 @@ TEST( ObjectTest, CallLaterSignal )
         quitSig, &receiver, [&workerThread]()
         {
             workerThread.quit();
-        }, ConnectionType::QueuedConnection );
+        }, ConnectionType::Queued );
     quitSig.emit();
 
     workerThread.wait();
@@ -749,7 +749,7 @@ TEST( ObjectTest, CallLaterMultipleCycles )
         syncSig1, &receiver, [&sync1Done]()
         {
             sync1Done = true;
-        }, ConnectionType::QueuedConnection );
+        }, ConnectionType::Queued );
     syncSig1.emit();
 
     while( !sync1Done )
@@ -768,7 +768,7 @@ TEST( ObjectTest, CallLaterMultipleCycles )
         quitSig, &receiver, [&workerThread]()
         {
             workerThread.quit();
-        }, ConnectionType::QueuedConnection );
+        }, ConnectionType::Queued );
     quitSig.emit();
 
     workerThread.wait();

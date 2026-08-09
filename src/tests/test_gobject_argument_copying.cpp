@@ -140,7 +140,7 @@ TEST( ObjectArgumentCopyingTest, DirectConnectionCopiesNothing )
     {
         receivers.push_back( std::make_unique<PayloadReceiver>() );
         Object::connect( sig, receivers.back().get(), &PayloadReceiver::onPayload,
-            ConnectionType::DirectConnection );
+            ConnectionType::Direct );
     }
 
     CopyCountingPayload payload;
@@ -156,7 +156,7 @@ TEST( ObjectArgumentCopyingTest, DirectConnectionCopiesNothing )
     }
 }
 
-//! An AutoConnection resolving to a same-thread call must not copy either.
+//! An Auto connection resolving to a same-thread call must not copy either.
 //!
 //! Same delivery as the direct case once the affinity check says "same thread", so the same
 //! contract applies.
@@ -169,7 +169,7 @@ TEST( ObjectArgumentCopyingTest, SameThreadAutoConnectionCopiesNothing )
     {
         receivers.push_back( std::make_unique<PayloadReceiver>() );
         Object::connect( sig, receivers.back().get(), &PayloadReceiver::onPayload,
-            ConnectionType::AutoConnection );
+            ConnectionType::Auto );
     }
 
     CopyCountingPayload payload;
@@ -202,7 +202,7 @@ TEST( ObjectArgumentCopyingTest, QueuedConnectionCopiesOncePerReceiver )
         receivers.push_back( std::make_unique<PayloadReceiver>() );
         ASSERT_TRUE( receivers.back()->moveToThread( &worker ) );
         Object::connect( sig, receivers.back().get(), &PayloadReceiver::onPayload,
-            ConnectionType::QueuedConnection );
+            ConnectionType::Queued );
     }
 
     CopyCountingPayload payload;
@@ -246,7 +246,7 @@ TEST( ObjectArgumentCopyingTest, UnprocessedEventsReleaseTheirArguments )
 
         Signal<const CopyCountingPayload&> sig;
         Object::connect( sig, receiver.get(), &PayloadReceiver::onPayload,
-            ConnectionType::QueuedConnection );
+            ConnectionType::Queued );
 
         // Flood the queue so most of these cannot possibly have been dispatched yet.
         CopyCountingPayload payload;

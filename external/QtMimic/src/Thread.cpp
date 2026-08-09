@@ -75,7 +75,7 @@ namespace QtMimic
     Thread::~Thread()
     {
         quit();
-        join();
+        wait();
 
         // Refuse any further posts now that this Thread is gone: nothing will ever drain the mailbox
         // again, so post() must return false (letting deleteLater() fall back to a synchronous
@@ -93,7 +93,7 @@ namespace QtMimic
 
     //! @brief Start the event loop on a new native OS thread, running at @p aPriority.
     //!
-    //! If already running or previously started without join(), this is a no-op or joins the
+    //! If already running or previously started without wait(), this is a no-op or waits for the
     //! previous run first. Safe to call multiple times.
     //!
     //! The thread is already at aPriority before it executes its first instruction, as in Qt: on
@@ -125,7 +125,7 @@ namespace QtMimic
             #endif
             if( haveThread && mData->mAccepting )
             {
-                // The native handle stays live throughout an active run (only join() clears it),
+                // The native handle stays live throughout an active run (only wait() clears it),
                 // so that alone can't tell "still running" apart from "finished, just never
                 // joined". mAccepting is what makes that distinction: still true here means the
                 // previous run's loop() has not committed to stopping yet, i.e. it's genuinely
@@ -137,10 +137,10 @@ namespace QtMimic
             mData->mAccepting = true;
         }
 
-        // A previous run may have finished (loop() returned) without ever being join()ed: its
+        // A previous run may have finished (loop() returned) without ever being waited for: its
         // handle is then still outstanding, and overwriting it below would leak the OS thread
         // instead of reaping it.
-        join();
+        wait();
 
         // Held across thread creation so a UNIX priority fix-up inside run() can never run
         // before the priority meant for THIS run has been decided, and so setPriority()/
@@ -273,7 +273,7 @@ namespace QtMimic
         quit();
     }
 
-    // join() is platform-specific: see ThreadWin.cpp / ThreadPosix.cpp.
+    // wait() is platform-specific: see ThreadWin.cpp / ThreadPosix.cpp.
 
     //! @brief Set the scheduling priority of the running OS thread. Thread-safe.
     //!
@@ -351,7 +351,7 @@ namespace QtMimic
     //! auto-adopted dummy that is only until the adopting native thread exits. Store the ThreadData
     //! from currentData()/data() instead, which stays valid and reports nullptr once its Thread is
     //! gone.
-    Thread* Thread::current()
+    Thread* Thread::currentThread()
     {
         if( tCurrentThread == nullptr )
         {
@@ -368,7 +368,7 @@ namespace QtMimic
     {
         // Reuse current()'s auto-adopt logic, then hand back that Thread's data rather than the
         // Thread itself. The data survives the Thread, so callers may hold it indefinitely.
-        return current()->data();
+        return currentThread()->data();
     }
 
     //! @brief Worker function that runs the event loop on a newly-created thread.
@@ -406,7 +406,7 @@ namespace QtMimic
     {
         bool stop = false;
 
-        // Register this thread so objects constructed on it (via Thread::current())
+        // Register this thread so objects constructed on it (via Thread::currentThread())
         // and Objects default-bound to it resolve to this Thread. This runs on
         // this thread, so the thread_local naturally scopes to us.
         tCurrentThread = this;

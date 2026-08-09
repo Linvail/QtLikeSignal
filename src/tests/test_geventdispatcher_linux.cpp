@@ -191,7 +191,7 @@ TEST( EventDispatcherLinuxTest, UnregisteredDescriptorIsNoLongerPolled )
     Object::connect( stopper.timeout, &stopper, []()
         {
             CoreApplication::quit();
-        }, ConnectionType::DirectConnection );
+        }, ConnectionType::Direct );
     stopper.start( 60 );
 
     EXPECT_EQ( app.exec(), 0 );

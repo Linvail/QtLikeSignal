@@ -423,7 +423,7 @@ namespace
         EXPECT_EQ( receiver.executionCount.load(), totalExpected );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //------------------------------------------------------------------------------------------------------
@@ -537,7 +537,7 @@ namespace
         EXPECT_EQ( HeavyPayload::copyCount.load(), numReceivers + 2 );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     TEST( ObjectTest, DeepArgumentCopying_QueuedEventsMinimizeCopiesWithConstRefSignal )
@@ -587,7 +587,7 @@ namespace
         EXPECT_EQ( HeavyPayload::copyCount.load(), numReceivers );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //------------------------------------------------------------------------------------------------------
@@ -680,7 +680,7 @@ namespace
             // IMMEDIATELY quit and destroy the thread.
             // It likely hasn't had time to process even a fraction of the 10,000 events.
             worker->quit();
-            worker->join();
+            worker->wait();
             worker.reset();
         } // payload goes out of scope here
 

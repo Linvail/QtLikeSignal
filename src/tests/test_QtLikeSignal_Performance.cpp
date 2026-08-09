@@ -67,7 +67,7 @@ TEST( Performance, QtLikeSignal_Connect )
         {
             Object::connect( sig, &receiver, []( int )
                 {
-                }, ConnectionType::DirectConnection );
+                }, ConnectionType::Direct );
         } );
     record( "connect()", "QtLikeSignal", ns );
 }
@@ -83,7 +83,7 @@ TEST( Performance, QtLikeSignal_DirectEmit )
     Object::connect( sig, &receiver, [&received]( int aValue )
         {
             received += aValue;
-        }, ConnectionType::DirectConnection );
+        }, ConnectionType::Direct );
 
     sig.emit( 1 );   // warm up
     const double ns = timeLoop( kDirectOps, [&]( int )
@@ -95,7 +95,7 @@ TEST( Performance, QtLikeSignal_DirectEmit )
     EXPECT_GT( received, 0 );
 }
 
-//! Measures emit -> receive on one thread through AutoConnection.
+//! Measures emit -> receive on one thread through ConnectionType::Auto.
 //!
 //! Same delivery as the direct case, but Auto has to resolve the receiver's thread affinity on every
 //! emit, so the difference against the row above is the cost of that resolution.
@@ -109,7 +109,7 @@ TEST( Performance, QtLikeSignal_AutoEmitSameThread )
     Object::connect( sig, &receiver, [&received]( int aValue )
         {
             received += aValue;
-        }, ConnectionType::AutoConnection );
+        }, ConnectionType::Auto );
 
     sig.emit( 1 );
     const double ns = timeLoop( kDirectOps, [&]( int )
@@ -153,7 +153,7 @@ TEST( Performance, QtLikeSignal_QueuedEmitCrossThread )
     Object::connect( sig, &receiver, [&received]( int )
         {
             received.fetch_add( 1, std::memory_order_relaxed );
-        }, ConnectionType::QueuedConnection );
+        }, ConnectionType::Queued );
 
     const auto start = std::chrono::steady_clock::now();
     for( int i = 0; i < kQueuedOps; ++i )
@@ -277,7 +277,7 @@ TEST( Performance, QtMimic_QueuedEmitCrossThread )
 
     EXPECT_EQ( received.load(), kQueuedOps );
     worker.quit();
-    worker.join();
+    worker.wait();
 }
 
 // =================================================================================================

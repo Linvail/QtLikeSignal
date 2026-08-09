@@ -8,23 +8,27 @@
 namespace QtLikeSignal
 {
     //! Specifies the type of a signal-slot connection.
+    //!
+    //! The enumerators are not suffixed with "Connection" the way Qt's are: this is a scoped enum,
+    //! so every use already reads ConnectionType::Direct and the suffix only repeated the type
+    //! name. Qt::DirectConnection predates scoped enums and had no such luxury.
     enum class ConnectionType
     {
         //! Automatically determines the connection type based on thread affinity.
         //!
-        //! If the receiver lives in the thread that emits the signal, DirectConnection is used.
-        //! Otherwise, QueuedConnection is used.
-        AutoConnection,
+        //! If the receiver lives in the thread that emits the signal, Direct is used. Otherwise,
+        //! Queued is used.
+        Auto,
 
         //! The slot is invoked immediately when the signal is emitted.
         //!
         //! The slot is executed in the signaling thread.
-        DirectConnection,
+        Direct,
 
         //! The slot is invoked when control returns to the event loop of the receiver's thread.
         //!
         //! The slot is executed in the receiver's thread.
-        QueuedConnection
+        Queued
     };
 
     //! A handle representing a signal-slot connection.

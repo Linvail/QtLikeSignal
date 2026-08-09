@@ -74,7 +74,7 @@ namespace
             << "a priority set before start() must not leak into the run";
 
         thread.quit();
-        thread.join();
+        thread.wait();
     }
 
     //! Every settable priority round-trips through the getter on a running thread.
@@ -102,7 +102,7 @@ namespace
         }
 
         thread.quit();
-        thread.join();
+        thread.wait();
     }
 
     //! InheritPriority is rejected by the setter and does not disturb the current value.
@@ -120,7 +120,7 @@ namespace
             << "a rejected setPriority() must not clear the priority already in effect";
 
         thread.quit();
-        thread.join();
+        thread.wait();
     }
 
     //! Once the thread has finished, the priority reverts to InheritPriority.
@@ -133,7 +133,7 @@ namespace
         ASSERT_EQ( thread.priority(), Thread::HighPriority );
 
         thread.quit();
-        thread.join();
+        thread.wait();
 
         EXPECT_EQ( thread.priority(), Thread::InheritPriority );
     }
@@ -147,7 +147,7 @@ namespace
         thread.setPriority( Thread::HighestPriority );
         ASSERT_EQ( thread.priority(), Thread::HighestPriority );
         thread.quit();
-        thread.join();
+        thread.wait();
 
         thread.start();
         ASSERT_TRUE( waitUntilRunning( thread ) );
@@ -155,7 +155,7 @@ namespace
             << "the previous run's priority said nothing about this one";
 
         thread.quit();
-        thread.join();
+        thread.wait();
     }
 
     //! start( Priority ) gives the thread its priority without a separate setter call.
@@ -168,7 +168,7 @@ namespace
         EXPECT_EQ( thread.priority(), Thread::HighPriority );
 
         thread.quit();
-        thread.join();
+        thread.wait();
     }
 
     //! start() with no argument still means InheritPriority, as it always did.
@@ -181,7 +181,7 @@ namespace
         EXPECT_EQ( thread.priority(), Thread::InheritPriority );
 
         thread.quit();
-        thread.join();
+        thread.wait();
     }
 
     //! A restart with no argument clears a priority the previous run was started with.
@@ -192,14 +192,14 @@ namespace
         ASSERT_TRUE( waitUntilRunning( thread ) );
         ASSERT_EQ( thread.priority(), Thread::TimeCriticalPriority );
         thread.quit();
-        thread.join();
+        thread.wait();
 
         thread.start();
         ASSERT_TRUE( waitUntilRunning( thread ) );
         EXPECT_EQ( thread.priority(), Thread::InheritPriority );
 
         thread.quit();
-        thread.join();
+        thread.wait();
     }
 
     //! The priority is in effect before the loop's started signal fires, not merely by the time
@@ -249,9 +249,9 @@ namespace
             << "the loop started before the requested priority was in effect";
 
         thread.quit();
-        thread.join();
+        thread.wait();
         localThread.quit();
-        localThread.join();
+        localThread.wait();
     }
 
     //! setPriority() racing the thread's own exit must not crash or touch a dead handle.
@@ -280,7 +280,7 @@ namespace
                 } );
 
             thread.quit();
-            thread.join();
+            thread.wait();
 
             stop.store( true );
             hammer.join();
@@ -319,7 +319,7 @@ namespace
         ;
 
         thread.quit();
-        thread.join();
+        thread.wait();
     }
 
     #if defined( _WIN32 )

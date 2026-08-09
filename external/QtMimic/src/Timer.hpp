@@ -285,7 +285,7 @@ namespace QtMimic
         // current thread and posting to start it there otherwise.
         auto* helper = new SingleShotContextHelper( contextThread, aMsec, aFunctor );
 
-        if( Thread::current() == contextThread )
+        if( Thread::currentThread() == contextThread )
         {
             helper->arm();  // may delete itself; do not touch `helper` afterwards
         }

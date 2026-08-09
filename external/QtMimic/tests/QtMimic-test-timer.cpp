@@ -112,7 +112,7 @@ namespace
         //! Slot for Timer::timeout, and target for the singleShot member-function overload.
         void onTimeout()
         {
-            mFiringThread.store( Thread::current() );
+            mFiringThread.store( Thread::currentThread() );
             mFireCount.fetch_add( 1 );
         }
 
@@ -317,7 +317,7 @@ namespace
                 {
                     mOwner.mOverlapped.store( true );
                 }
-                if( Thread::current() != mOwner.mExpectedThread )
+                if( Thread::currentThread() != mOwner.mExpectedThread )
                 {
                     mOwner.mWrongThread.store( true );
                 }
@@ -418,7 +418,7 @@ namespace
             } );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //! A repeating timer keeps emitting timeout until it is stopped.
@@ -451,7 +451,7 @@ namespace
             } );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //! A single-shot timer fires exactly once and reports itself inactive afterwards.
@@ -488,7 +488,7 @@ namespace
             } );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //! stop() actually stops it: no further timeout is emitted.
@@ -529,7 +529,7 @@ namespace
             } );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //! timerEvent() emits timeout for its own id and ignores any other, without an event loop
@@ -566,7 +566,7 @@ namespace
             } );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //================================================================
@@ -606,7 +606,7 @@ namespace
             } );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //! startTimer() from a thread other than the object's own is refused, as in Qt.
@@ -626,7 +626,7 @@ namespace
         EXPECT_EQ( receiver.total(), 0u ) << "a refused timer was delivered anyway.";
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //! An object detached with moveToThread(nullptr) has no mailbox to schedule against.
@@ -677,7 +677,7 @@ namespace
             << "the killed sibling was delivered anyway (" << receiver.total() << " deliveries).";
 
         worker.quit();
-        worker.join();
+        worker.wait();
 
         // Cleared only once the loop is joined, so nothing can be reading it.
         receiver.mOnTimer = nullptr;
@@ -713,7 +713,7 @@ namespace
         std::this_thread::sleep_for( 60ms );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //! moveToThread() carries a running timer to the destination, keeping its id, and stops
@@ -766,9 +766,9 @@ namespace
             } );
 
         source.quit();
-        source.join();
+        source.wait();
         destination.quit();
-        destination.join();
+        destination.wait();
     }
 
     //================================================================
@@ -789,7 +789,7 @@ namespace
             {
                 Timer::singleShot( 5, [&fired]()
                 {
-                    fired.set_value( Thread::current() );
+                    fired.set_value( Thread::currentThread() );
                 } );
             } ) );
 
@@ -799,7 +799,7 @@ namespace
 
         drainQueuedTasks( worker );
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //! singleShot(int, context, Functor) hops to the context's thread and runs there exactly once.
@@ -820,7 +820,7 @@ namespace
             {
                 if( runs.fetch_add( 1 ) == 0 )
                 {
-                    fired.set_value( Thread::current() );
+                    fired.set_value( Thread::currentThread() );
                 }
             } );
 
@@ -838,7 +838,7 @@ namespace
 
         drainQueuedTasks( worker );
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //! singleShot(int, receiver, MemberFunc) calls the member function once, on the receiver's
@@ -867,7 +867,7 @@ namespace
 
         drainQueuedTasks( worker );
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //! A single shot aimed at a thread whose loop has already stopped is dropped, not leaked and
@@ -881,7 +881,7 @@ namespace
         Object context( &worker );
 
         worker.quit();
-        worker.join();
+        worker.wait();
 
         std::atomic<int> runs { 0 };
         Timer::singleShot( 5, &context, [&runs]()
@@ -927,7 +927,7 @@ namespace
             } );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //! A timer registered while the loop is already asleep on a longer wait still fires on time.
@@ -966,7 +966,7 @@ namespace
             } );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //! Thread::processEvents() services timers too, so an adopted thread pumping from its own loop
@@ -974,7 +974,7 @@ namespace
     TEST( ThreadTimerTest, ProcessEventsDeliversTimers )
     {
         // Adopts this test's thread; no loop of its own, we pump it by hand below.
-        Thread* self = Thread::current();
+        Thread* self = Thread::currentThread();
         ASSERT_NE( self, nullptr );
 
         RecordingObject receiver( self );
@@ -1076,7 +1076,7 @@ namespace
             } );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //! Timers keep firing while the mailbox never empties, not only once it has drained.
@@ -1149,7 +1149,7 @@ namespace
             } );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //! A timer due on every pass of the loop still leaves the mailbox drained.
@@ -1197,7 +1197,7 @@ namespace
             } );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     //! A timer handler may post tasks and touch the timer list without deadlocking.
@@ -1264,7 +1264,7 @@ namespace
         EXPECT_GT( secondTimerId.load(), 0 );
 
         worker.quit();
-        worker.join();
+        worker.wait();
 
         // Cleared only once the loop is joined, so nothing can be reading it.
         receiver.mOnTimer = nullptr;

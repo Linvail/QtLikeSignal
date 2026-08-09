@@ -220,7 +220,7 @@ TEST( EventDispatcherDefaultDefectTest, DeferredDeleteFollowedByQueuedEventInSam
             blockEnteredPromise.set_value();
             blockReleaseFuture.wait();
         },
-        ConnectionType::QueuedConnection );
+        ConnectionType::Queued );
 
     blockSig.emit();
     blockEnteredFuture.get();
@@ -236,7 +236,7 @@ TEST( EventDispatcherDefaultDefectTest, DeferredDeleteFollowedByQueuedEventInSam
 
     // ... then a second, unrelated queued event for the SAME (about-to-be-deleted) receiver.
     Signal<int> sig;
-    Object::connect( sig, victim, &DefectUafTestReceiver::onValue, ConnectionType::QueuedConnection
+    Object::connect( sig, victim, &DefectUafTestReceiver::onValue, ConnectionType::Queued
                    );
     sig.emit( 123 );
 
@@ -253,7 +253,7 @@ TEST( EventDispatcherDefaultDefectTest, DeferredDeleteFollowedByQueuedEventInSam
         quitSig, &dummyContext, [&workerThread]()
         {
             workerThread.quit();
-        }, ConnectionType::QueuedConnection );
+        }, ConnectionType::Queued );
     quitSig.emit();
 
     workerThread.wait();
@@ -313,7 +313,7 @@ TEST( EventDispatcherDefaultDefectTest, NewShorterTimerWakesPromptly )
         {
             firePromise.set_value( std::chrono::steady_clock::now() );
         },
-        ConnectionType::DirectConnection );
+        ConnectionType::Direct );
 
     auto shortTimerStart = std::chrono::steady_clock::now();
     Object::callLater( &shortTimer, &Timer::start, 50 );
@@ -345,7 +345,7 @@ TEST( EventDispatcherDefaultDefectTest, NewShorterTimerWakesPromptly )
             longTimer.stop();
             stoppedPromise.set_value();
         },
-        ConnectionType::QueuedConnection );
+        ConnectionType::Queued );
     stopSignal.emit();
     EXPECT_EQ( stoppedFuture.wait_for( std::chrono::seconds( 5 ) ), std::future_status::ready );
 
@@ -598,7 +598,7 @@ TEST( ObjectDefectTest, ConcurrentMoveToThreadAndThreadDataAccessStress )
             Signal<> sig;
             Object::connect( sig, &toggler.mSubject, []()
                 {
-                }, ConnectionType::QueuedConnection );
+                }, ConnectionType::Queued );
             while( !stopReading.load( std::memory_order_acquire ) )
             {
                 ( void ) toggler.mSubject.thread();
@@ -667,7 +667,7 @@ TEST( ObjectDefectTest, DestroyedReceiverIsDisconnectedFromItsSender )
         Object receiver;
         Object::connect( longLivedSignal, &receiver, []( int )
             {
-            }, ConnectionType::DirectConnection );
+            }, ConnectionType::Direct );
         EXPECT_EQ( longLivedSignal.receivers(), 1u );
     }
     EXPECT_EQ( longLivedSignal.receivers(), 0u )
@@ -680,7 +680,7 @@ TEST( ObjectDefectTest, DestroyedReceiverIsDisconnectedFromItsSender )
         Object receiver;
         Object::connect( longLivedSignal, &receiver, []( int )
             {
-            }, ConnectionType::DirectConnection );
+            }, ConnectionType::Direct );
     }
     EXPECT_EQ( longLivedSignal.receivers(), 0u )
         << "dead slots accumulated on the sender across many short-lived receivers.";
@@ -691,7 +691,7 @@ TEST( ObjectDefectTest, DestroyedReceiverIsDisconnectedFromItsSender )
         Object receiver;
         ConnectionHandle handle = Object::connect( longLivedSignal, &receiver, []( int )
             {
-            }, ConnectionType::DirectConnection );
+            }, ConnectionType::Direct );
         EXPECT_EQ( longLivedSignal.receivers(), 1u );
 
         Object::disconnect( handle );
@@ -701,7 +701,7 @@ TEST( ObjectDefectTest, DestroyedReceiverIsDisconnectedFromItsSender )
         // must still clean up -- i.e. the pruning above did not corrupt mIncoming.
         Object::connect( longLivedSignal, &receiver, []( int )
             {
-            }, ConnectionType::DirectConnection );
+            }, ConnectionType::Direct );
         EXPECT_EQ( longLivedSignal.receivers(), 1u );
     }
     EXPECT_EQ( longLivedSignal.receivers(), 0u );
@@ -712,7 +712,7 @@ TEST( ObjectDefectTest, DestroyedReceiverIsDisconnectedFromItsSender )
     Object::connect( longLivedSignal, &liveReceiver, [&calls]( int )
         {
             ++calls;
-        }, ConnectionType::DirectConnection );
+        }, ConnectionType::Direct );
     longLivedSignal.emit( 1 );
     EXPECT_EQ( calls, 1 );
 }
@@ -912,7 +912,7 @@ TEST( ThreadDefectTest, DispatcherUseDuringThreadShutdownStress )
         Signal<>         sig;
         Object::connect( sig, &subject, []()
             {
-            }, ConnectionType::QueuedConnection );
+            }, ConnectionType::Queued );
 
         std::atomic<bool> stop { false };
         std::thread hammer(
@@ -979,7 +979,7 @@ TEST( ObjectDefectTest, PendingDeleteLaterIsProcessedWhenThreadStops )
             blockEnteredPromise.set_value();
             blockReleaseFuture.wait();
         },
-        ConnectionType::QueuedConnection );
+        ConnectionType::Queued );
 
     blockSig.emit();
     blockEnteredFuture.get();
@@ -1059,7 +1059,7 @@ TEST( ObjectDefectTest, DeleteLaterIsDebounced )
             blockEnteredPromise.set_value();
             blockReleaseFuture.wait();
         },
-        ConnectionType::QueuedConnection );
+        ConnectionType::Queued );
 
     blockSig.emit();
     blockEnteredFuture.get();
@@ -1222,7 +1222,7 @@ TEST( TimerDefectTest, SingleShotIsStoppedBeforeTimeoutIsEmitted )
             timer.stop();
             activePromise.set_value( active );
         },
-        ConnectionType::DirectConnection );
+        ConnectionType::Direct );
 
     // start() must run on the worker thread so the timer registers against its dispatcher.
     Object::callLater( &timer, &Timer::start, 10 );
@@ -1328,7 +1328,7 @@ TEST( ObjectDefectTest, QueuedCallsToAnOrphanedObjectAreDropped )
     Signal<> sig;
     Object::connect( sig, orphan, []()
         {
-        }, ConnectionType::QueuedConnection );
+        }, ConnectionType::Queued );
 
     constexpr int kRounds = 4;
     constexpr int kEmitsPerRound = 200000;

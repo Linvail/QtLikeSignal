@@ -71,7 +71,7 @@ namespace
                 const bool secondRan = secondRanFuture.wait_for( 5s ) == std::future_status::ready;
 
                 thread.quit();
-                thread.join();
+                thread.wait();
 
                 return secondRan;
             };
@@ -89,7 +89,7 @@ namespace
      * std::thread) or deadlock.
      *
      * The previous run's std::thread object is deliberately left unjoined by the caller (no
-     * thread.join() between quit() and the second start()) to reach the exact state start() must
+     * thread.wait() between quit() and the second start()) to reach the exact state start() must
      * handle: a finished-but-still-joinable mThread.
      */
     TEST( ThreadDefectTest, RestartAfterQuitWithoutExplicitJoinDoesNotTerminate )
@@ -109,9 +109,9 @@ namespace
 
         thread.quit();
 
-        // Deliberately no thread.join() here -- give the loop a moment to actually finish so mThread
+        // Deliberately no thread.wait() here -- give the loop a moment to actually finish so mThread
         // is in the "finished but unjoined" state start() must handle, without relying on start()'s
-        // own internal join to also cover the "still mid-shutdown" case (that path is exercised by
+        // own internal wait to also cover the "still mid-shutdown" case (that path is exercised by
         // start() unconditionally regardless).
         std::this_thread::sleep_for( 50ms );
 
@@ -131,7 +131,7 @@ namespace
             << "restarted thread never processed the posted task.";
 
         thread.quit();
-        thread.join();
+        thread.wait();
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -178,7 +178,7 @@ namespace
         ASSERT_EQ( ranFuture.wait_for( 5s ), std::future_status::ready );
 
         thread.quit();
-        thread.join(); // blocks until loop() has actually returned -- mLoopFinished is now true.
+        thread.wait(); // blocks until loop() has actually returned -- mLoopFinished is now true.
 
         bool ran = false;
         EXPECT_FALSE( thread.post( [&ran]()
@@ -198,7 +198,7 @@ namespace
         Thread thread( "deletelater-after-stop" );
         thread.start();
         thread.quit();
-        thread.join(); // fully stopped before the probe is even constructed on it.
+        thread.wait(); // fully stopped before the probe is even constructed on it.
 
         std::atomic<int> dtorCount { 0 };
         auto* probe = new DefectDeleteLaterProbe( dtorCount );
@@ -239,7 +239,7 @@ namespace
                 } );
             thread.quit(); // races the deleter thread's post() from the outside
             deleter.join();
-            thread.join();
+            thread.wait();
         }
 
         EXPECT_EQ( dtorCount.load(), kIterations )
@@ -330,7 +330,7 @@ namespace
         ASSERT_EQ( obj->thread(), worker );
 
         worker->quit();
-        worker->join();
+        worker->wait();
         delete worker; // destroyed while obj still has affinity to it
 
         EXPECT_EQ( obj->thread(), nullptr )
@@ -463,7 +463,7 @@ namespace
 
         // Destroy the worker Thread while the emit still holds it as a raw ctxThread pointer.
         worker->quit();
-        worker->join();
+        worker->wait();
         delete worker;
 
         // Let the emit proceed. Pre-fix, it now calls post() on the freed Thread -- a heap-use-

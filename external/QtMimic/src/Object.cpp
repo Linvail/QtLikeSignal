@@ -78,7 +78,7 @@ namespace QtMimic
 
     //! @brief Constructor - creates an Object bound to a thread with thread affinity.
     //! @param aThread The Thread this object lives in. If null (the default), the object
-    //!        lives in the current thread (Thread::current()). If no thread is current,
+    //!        lives in the current thread (Thread::currentThread()). If no thread is current,
     //!        connections to this object behave as direct connections.
     Object::Object
         (
@@ -126,7 +126,7 @@ namespace QtMimic
         }
 
         // Push-only, with Qt's one exception: a thread-less object may be pulled to the caller.
-        Thread* const callingThread = Thread::current();
+        Thread* const callingThread = Thread::currentThread();
         const bool pullNoAffinityToCaller = ( currentAffinity == nullptr )
             && ( aThread == callingThread );
         if( !pullNoAffinityToCaller && currentAffinity != callingThread )
@@ -205,7 +205,7 @@ namespace QtMimic
             return -1;
         }
 
-        if( thread() != Thread::current() )
+        if( thread() != Thread::currentThread() )
         {
             std::fprintf( stderr,
                 "Object::startTimer: timers cannot be started from another thread\n" );
@@ -249,7 +249,7 @@ namespace QtMimic
         int aTimerId  //!< Id returned by startTimer().
         )
     {
-        if( thread() != Thread::current() )
+        if( thread() != Thread::currentThread() )
         {
             std::fprintf( stderr,
                 "Object::killTimer: timers cannot be stopped from another thread\n" );

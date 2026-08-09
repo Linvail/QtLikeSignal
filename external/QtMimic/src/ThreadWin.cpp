@@ -50,7 +50,7 @@ namespace QtMimic
     }
 
     //! @brief Entry point handed to _beginthreadex(). Returns 0 always; nothing reads a
-    //! per-thread exit code back through join().
+    //! per-thread exit code back through wait().
     unsigned int __stdcall Thread::threadEntry
         (
         void* aArg      //!< The Thread that is starting, as a void*.
@@ -125,7 +125,7 @@ namespace QtMimic
     //! mutex to get past its very first step, and this thread cannot finish -- and so signal the
     //! handle -- until it does. Holding the mutex across the wait would be a self-inflicted
     //! deadlock against a thread that has barely started.
-    void Thread::join()
+    void Thread::wait()
     {
         HANDLE handle = nullptr;
         {
@@ -133,7 +133,7 @@ namespace QtMimic
             handle = static_cast<HANDLE>( mHandle );
             if( !handle )
             {
-                // Never started, or already reaped by an earlier join().
+                // Never started, or already reaped by an earlier wait().
                 return;
             }
             // Registered before the lock is dropped so no other caller can close the handle

@@ -24,7 +24,7 @@ namespace
        ----------------------------------------------------------*/
     TEST( ObjectTest, CurrentThreadIsAvailable )
     {
-        EXPECT_NE( nullptr, Thread::current() );
+        EXPECT_NE( nullptr, Thread::currentThread() );
     }
 
     /*----------------------------------------------------------
@@ -81,7 +81,7 @@ namespace
         EXPECT_NE( c.mSlotThread, std::this_thread::get_id() );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     /*----------------------------------------------------------
@@ -150,7 +150,7 @@ namespace
         EXPECT_EQ( invocations.load(), 0 );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     /*----------------------------------------------------------
@@ -359,7 +359,7 @@ namespace
         EXPECT_EQ( dtorThread, workerId );
 
         worker.quit();
-        worker.join();
+        worker.wait();
 
         std::mutex mainDtorMutex;
         std::condition_variable mainDtorCv;
@@ -375,10 +375,10 @@ namespace
 
         // mainObj was constructed with a null thread, so its affinity resolved to the
         // Thread of the thread that built it - i.e. this test thread's adopted
-        // Thread (the same object Thread::current() returns here). That thread has
+        // Thread (the same object Thread::currentThread() returns here). That thread has
         // no running exec() loop, so nothing drains its queue automatically; we pump
         // it by hand, which is where the deferred delete actually runs.
-        Thread::current()->processEvents();
+        Thread::currentThread()->processEvents();
 
         EXPECT_TRUE( mainDtorDone );
         EXPECT_EQ( mainDtorCount.load(), 1 );
@@ -442,7 +442,7 @@ namespace
         EXPECT_NE( c.mSlotThread, std::this_thread::get_id() );
 
         worker.quit();
-        worker.join();
+        worker.wait();
     }
 
     /*----------------------------------------------------------
@@ -453,8 +453,8 @@ namespace
     {
         Consumer c; // lives in this thread
 
-        EXPECT_TRUE( c.moveToThread( Thread::current() ) );
-        EXPECT_EQ( c.thread(), Thread::current() );
+        EXPECT_TRUE( c.moveToThread( Thread::currentThread() ) );
+        EXPECT_EQ( c.thread(), Thread::currentThread() );
     }
 
     /*----------------------------------------------------------
@@ -479,9 +479,9 @@ namespace
         EXPECT_EQ( c.thread(), &worker );
 
         worker.quit();
-        worker.join();
+        worker.wait();
         other.quit();
-        other.join();
+        other.wait();
     }
 
     /*----------------------------------------------------------
@@ -497,8 +497,8 @@ namespace
         EXPECT_EQ( c.thread(), nullptr );
 
         // Now thread-less: pulling it to the calling thread is the allowed exception.
-        EXPECT_TRUE( c.moveToThread( Thread::current() ) );
-        EXPECT_EQ( c.thread(), Thread::current() );
+        EXPECT_TRUE( c.moveToThread( Thread::currentThread() ) );
+        EXPECT_EQ( c.thread(), Thread::currentThread() );
     }
 
     /*----------------------------------------------------------
@@ -518,7 +518,7 @@ namespace
         EXPECT_EQ( c.thread(), nullptr );
 
         other.quit();
-        other.join();
+        other.wait();
     }
 
     /*----------------------------------------------------------
@@ -601,9 +601,9 @@ namespace
         EXPECT_NE( c.mSlotThread, workerB.id() );
 
         workerB.quit();
-        workerB.join();
+        workerB.wait();
         workerC.quit();
-        workerC.join();
+        workerC.wait();
     }
 
     /*----------------------------------------------------------
@@ -678,7 +678,7 @@ namespace
         }
 
         worker.quit();
-        worker.join();
+        worker.wait();
 
         {
             std::unique_lock<std::mutex> locker( mutex );
@@ -692,7 +692,7 @@ namespace
         finishedConnection.disconnect();
 
         localThread.quit();
-        localThread.join();
+        localThread.wait();
     }
 
 } // namespace

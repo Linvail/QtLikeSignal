@@ -59,7 +59,7 @@ TEST( ThreadAdoptionTest, ObjectsAlwaysHaveAThreadAffinity )
 // ---------------------------------------------------------------------------------------------
 // Defect (R19): an Object with no thread affinity received cross-thread *direct* calls.
 //
-// dispatchMetaCall() resolves AutoConnection by comparing the receiver's thread with the emitting
+// dispatchMetaCall() resolves ConnectionType::Auto by comparing the receiver's thread with the emitting
 // thread. When neither had been started through Thread, both sides were nullptr, compared equal,
 // and the slot ran synchronously **on the emitting thread** -- an unsynchronised cross-thread call.
 // Qt is explicit that this must not happen: "If a QObject has no thread affinity (that is, if
@@ -86,7 +86,7 @@ TEST( ThreadAdoptionTest, EmitFromAnotherThreadDoesNotRunTheSlotThere )
         {
             ranOn.store( Thread::currentThread() );
             value.store( aValue );
-        }, ConnectionType::AutoConnection );
+        }, ConnectionType::Auto );
 
     std::thread emitter( [&sig]()
         {
@@ -121,7 +121,7 @@ TEST( ThreadAdoptionTest, ProcessEventsDrainsQueuedWorkWithoutAnExecLoop )
     Object::connect( sig, &receiver, [&calls]()
         {
             calls.fetch_add( 1 );
-        }, ConnectionType::QueuedConnection );
+        }, ConnectionType::Queued );
 
     std::thread emitter( [&sig]()
         {
@@ -146,7 +146,7 @@ TEST( ThreadAdoptionTest, ProcessEventsFromAnotherThreadIsRejected )
     Object::connect( sig, &receiver, [&calls]()
         {
             calls.fetch_add( 1 );
-        }, ConnectionType::QueuedConnection );
+        }, ConnectionType::Queued );
 
     std::thread emitter( [&sig]()
         {
@@ -194,7 +194,7 @@ TEST( ThreadAdoptionTest, WakeCallbackFiresWhenWorkIsPosted )
     Object::connect( sig, &receiver, [&calls]()
         {
             calls.fetch_add( 1 );
-        }, ConnectionType::QueuedConnection );
+        }, ConnectionType::Queued );
 
     std::thread emitter( [&sig]()
         {
