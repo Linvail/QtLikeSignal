@@ -102,7 +102,7 @@ namespace QtLikeSignal
         // object's affinity can never become a dangling pointer. Held in an Affinity box read at
         // emit time, so a later moveToThread() redirects existing connections too.
         , mAffinity( std::make_shared<Affinity>(
-              Thread::currentThread() ? Thread::currentThread()->threadData() : nullptr ) )
+            Thread::currentThread() ? Thread::currentThread()->threadData() : nullptr ) )
     {
     }
 
@@ -228,33 +228,6 @@ namespace QtLikeSignal
         }
     }
 
-    //! Records a freshly-made connection on its receiver, so ~Object() can disconnect it.
-    //!
-    //! The receiver is recovered from the Cleanup rather than passed separately, which keeps the
-    //! call identical in all ten connect() overloads. Returns the handle so call sites can simply
-    //! wrap their existing return expression. Thread-safe.
-    ConnectionHandle Object::trackIncoming
-        (
-        const std::shared_ptr<Cleanup>& aCleanup,  //!< Cleanup token created for this connection.
-        ConnectionHandle aHandle                    //!< The connection just established.
-        )
-    {
-        if( !aCleanup || !aCleanup->mOwner )
-        {
-            return aHandle;
-        }
-
-        // Publish the handle into the Cleanup before registering it, so that if the connection is
-        // torn down concurrently the destructor below has something to match on rather than the
-        // default-constructed handle.
-        aCleanup->mHandle = aHandle;
-
-        Object* receiver = aCleanup->mOwner;
-        std::lock_guard<std::mutex> lock( receiver->mIncomingMutex );
-        receiver->mIncoming.push_back( aHandle );
-        return aHandle;
-    }
-
     //! Removes this connection from its receiver's mIncoming as the connection is destroyed.
     //!
     //! Runs when boost destroys the slot holding this token -- a manual disconnect(), the sender
@@ -351,6 +324,17 @@ namespace QtLikeSignal
                 CallLaterRegistry::sPending.erase( aKey );
             }
         }
+    }
+
+
+    //! Return true if the specified aData belongs to the calling thread.
+    //! We need this helper function because we cannot include Thread.h in Object.h.
+    bool Object::isCurrentThread
+        (
+        const std::shared_ptr<ThreadData>& aData
+        )
+    {
+        return aData == Thread::currentThread()->threadData();
     }
 
     //! Gets the thread affinity of this object. Thread-safe. Never returns a dangling pointer: the
@@ -736,103 +720,36 @@ namespace QtLikeSignal
         return true;
     }
 
-    //! Decides how an emit should be delivered, and resolves the receiver's thread on the way.
-    //!
-    //! Thread-safe. @p aTargetData is set only when the answer is Queue or Drop; an inline call has
-    //! no use for it, and an explicit DirectConnection deliberately never reads the affinity at all,
-    //! which also skips the Affinity mutex.
-    Object::DispatchDecision Object::decideDispatch
-        (
-        const std::shared_ptr<Affinity>& aAffinity,   //!< Receiver's affinity box.
-        ConnectionType aType,                           //!< Requested connection type.
-        std::shared_ptr<ThreadData>& aTargetData        //!< Receives the receiver's thread data.
-        )
-    {
-        // DirectConnection means "run now regardless of affinity", so there is nothing to resolve.
-        if( aType == ConnectionType::DirectConnection )
-        {
-            return DispatchDecision::CallInline;
-        }
-
-        aTargetData = aAffinity ? aAffinity->data() : nullptr;
-        Thread* const targetThread = aTargetData ? aTargetData->thread() : nullptr;
-
-        if( aType == ConnectionType::AutoConnection && Thread::currentThread() == targetThread )
-        {
-            return DispatchDecision::CallInline;
-        }
-
-        // No live thread to deliver on, so queueing would only accumulate work nothing will run.
-        // Same rule dispatchMetaCallTo() applies; see the comment there.
-        if( targetThread == nullptr )
-        {
-            return DispatchDecision::Drop;
-        }
-
-        return DispatchDecision::Queue;
-    }
-
     //! Dispatches a metacall to an explicitly named thread, ignoring the receiver's affinity.
     //!
-    //! Thread-safe. @p aReceiver is only the dispatcher's queue key here (for postEvent() and
-    //! removeEventsForReceiver() bookkeeping) and is never dereferenced. Returns true if the slot
-    //! ran (direct) or was queued; false if @p aData is null or its thread has no dispatcher, in
-    //! which case the call is dropped.
+    //! Thread-safe. @p aReceiver is not dereferenced *by this function*: it is handed to
+    //! postEvent() purely as the key that removeEventsForReceiver() later matches on. It is
+    //! dereferenced afterwards, though -- when the dispatcher drains the queue it calls
+    //! aReceiver->event() (EventDispatcherDefault::processEvents()), so the receiver has to still
+    //! be alive at that point. Nothing here establishes that; what does is ~Object(), which calls
+    //! removeEventsForReceiver() and deletes every event still queued for the object before it
+    //! goes away.
+    //!
+    //! Returns true if the call was queued; false if @p aData is null or its thread has no
+    //! dispatcher, in which case the call is dropped.
+    //!
+    //! @TODO Consideing moving this function to ThreadData.
     bool Object::dispatchMetaCallTo
         (
         const std::shared_ptr<ThreadData>& aData,  //!< Thread to deliver on; null means nowhere.
-        Object* aReceiver,                           //!< Receiver; used only as the queue key.
-        std::function<void()> aSlot,                 //!< Callback function.
-        ConnectionType aType                       //!< Connection type.
+        Object* aReceiver,                           //!< Receiver; the queue key here, dereferenced later by the dispatcher.
+        std::function<void()> aSlot                 //!< Callback function.
         )
     {
-        Thread* const targetThread = aData ? aData->thread() : nullptr;
-
-        ConnectionType activeType = aType;
-        if( activeType == ConnectionType::AutoConnection )
+        // Moved, not copied: aSlot is a by-value parameter and is dead after this line, and
+        // MetaCallEvent's constructor also takes by value and moves, so copying here bought a
+        // second heap allocation on every queued emit for nothing.
+        if( auto disp = aData ? aData->dispatcher() : nullptr )
         {
-            Thread* currentThread = Thread::currentThread();
-            activeType = ( currentThread == targetThread )
-                ? ConnectionType::DirectConnection
-                : ConnectionType::QueuedConnection;
-        }
-
-        if( activeType == ConnectionType::QueuedConnection )
-        {
-            // The receiver's thread is gone, so nothing will ever drain what we queue. Drop the
-            // call instead of accepting it.
-            //
-            // This is checked separately from the dispatcher below because the two can disagree: a
-            // destroyed Thread leaves its ThreadData behind (deliberately -- that is what stops
-            // affinity from dangling), and that ThreadData still owns a perfectly functional
-            // dispatcher. Queueing into it looks like success and accumulates without bound; the
-            // measured cost was ~30 MB per 200k emits, climbing forever, and invisible to
-            // LeakSanitizer because every byte of it stays reachable.
-            //
-            // Deliberately after the Auto resolution above and outside the Direct path: a
-            // DirectConnection means "run this now regardless of affinity", so it must still run
-            // even for an object with no thread. Qt describes the queued behaviour we are matching:
-            // "if a QObject has no thread affinity ... it cannot receive queued signals or posted
-            // events". QtMimic places the same guard at the same point.
-            if( targetThread == nullptr )
-            {
-                return false;
-            }
-
-            // Moved, not copied: aSlot is a by-value parameter and is dead after this line, and
-            // MetaCallEvent's constructor also takes by value and moves, so copying here bought a
-            // second heap allocation on every queued emit for nothing.
             auto* event = new MetaCallEvent( std::move( aSlot ) );
-            if( auto disp = aData ? aData->dispatcher() : nullptr )
-            {
-                disp->postEvent( aReceiver, static_cast<Event*>( event ) );
-                return true;
-            }
-            delete event;
-            return false;
+            disp->postEvent( aReceiver, static_cast<Event*>( event ) );
+            return true;
         }
-
-        aSlot();
-        return true;
+        return false;
     }
 }

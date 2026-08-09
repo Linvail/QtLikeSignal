@@ -437,20 +437,12 @@ namespace QtLikeSignal
         std::function<void()> aTask  //!< The callable to run on this thread. Ignored (returns false) if empty.
         )
     {
-        if( !aTask )
+        // Basic sanity check. Usually ThreadData should outlive Thread.
+        if( !aTask || mData == nullptr || mData->thread() == nullptr )
         {
             return false;
         }
-        // Explicit QueuedConnection (not Auto): post() must always defer, even when called from this
-        // thread itself -- Auto would resolve to a same-thread call and run inline instead.
-        //
-        // Targeted at mData, this thread's own queue, rather than at this Thread *as an Object*. The
-        // two are not the same: a Thread is constructed on one thread and runs on another, so its
-        // Object affinity points at its creator until its loop starts and re-points it. Routing
-        // post() through the affinity therefore delivered to the creating thread for any task posted
-        // before start(), which is not what "post to this thread" can possibly mean.
-        return dispatchMetaCallTo( mData, this, std::move( aTask ),
-            ConnectionType::QueuedConnection );
+        return dispatchMetaCallTo( mData, this, std::move( aTask ) );
     }
 
     //! Starting point for thread execution. Can be overridden. Default calls exec().
