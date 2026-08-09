@@ -34,7 +34,7 @@ Ratios and scaling curves are the durable part; the nanosecond values are not.
 | P3 | Every emit builds a `std::function` on the heap, even for a direct call | Medium | Measured — +38 ns over raw boost |
 | P4 | One dispatcher mutex serialises every object on a thread | Unknown | Inspection only |
 | P5 | Timer list is scanned linearly twice per dispatch pass | Low | Inspection only |
-| P6 | Dispatch is 2–5x Qt 6's and 1.5–2.4x QtMimic's, driven by allocations per emit | **High** | Measured — `test_QtLikeSignal_Performance.cpp` |
+| P6 | Dispatch is 2.5–4x Qt 6's; same-thread paths **fixed 2026-08-09**, queued still 2.4x QtMimic | **High** | Measured — `test_QtLikeSignal_Performance.cpp` |
 
 ---
 
@@ -194,16 +194,55 @@ QtMimic and Qt 6 in one process. Median of three runs, `-O2`, no sanitizer:
 
 | scenario | Qt 6 | QtLikeSignal | QtMimic | ours vs Qt 6 | ours vs QtMimic |
 |---|---|---|---|---|---|
-| `connect()` | 134 ns | 597 ns | 683 ns | 4.5x | 0.87x |
-| emit → receive, direct | 30 ns | 150 ns | 66 ns | **5.0x** | **2.3x** |
-| emit → receive, auto same-thread | 30 ns | 148 ns | 99 ns | **4.9x** | **1.5x** |
-| emit → receive, queued cross-thread | 495 ns | 1187 ns | 505 ns | **2.4x** | **2.4x** |
+| `connect()` | 122 ns | 537 ns | 680 ns | 4.4x | 0.79x |
+| emit → receive, direct | 29 ns | 76 ns | 64 ns | 2.6x | 1.18x |
+| emit → receive, auto same-thread | 28 ns | 98 ns | 99 ns | 3.5x | 0.99x |
+| emit → receive, queued cross-thread | 478 ns | 1240 ns | 504 ns | **2.6x** | **2.5x** |
+
+> Same-thread rows above are **after the fix landed on 2026-08-09**; before it they were 150 ns
+> (direct) and 148 ns. See *Same-thread paths: fixed* below. The queued row is unchanged and remains
+> the outstanding item.
 
 Qt is faster on every row, and by a wider margin than the earlier QtMimic-only comparison suggested.
 Qt's direct emit (30 ns) even beats a bare `boost::signals2` emit (51 ns, see P3): its
 `QMetaObject::activate()` walks a preallocated connection list and calls the slot without allocating
 anything, where our path heap-allocates several times per emit. `connect()` is the one row where we
 beat QtMimic, and it is still 4.5x Qt's.
+
+### Same-thread paths: fixed (2026-08-09)
+
+We allocated on *every* emit, including a `DirectConnection` that just calls the slot and returns:
+
+```
+                            before   after
+QtLikeSignal direct           1.00    0.00   allocations per emit
+QtLikeSignal auto same-thread 1.00    0.00
+QtMimic (either)              0.00    0.00
+```
+
+The wrapper built its `boundSlot` closure and passed it *by value* as `std::function<void()>` into
+`dispatchMetaCall()`, and only inside that call was the connection discovered to be direct. The
+closure exceeds the small-object buffer, so that was a malloc and free per emit, plus a redundant
+second `weakLife.lock()` (the inner closure re-checked what the wrapper had already checked) and an
+indirect call.
+
+QtMimic never had the problem because it decides first and acts second:
+
+```cpp
+if( aType == ConnectionType::Direct ) { slot( args... ); return; }   // no closure, no affinity read
+```
+
+Fixed by splitting the decision out of the dispatch: `decideDispatch()` answers CallInline / Queue /
+Drop, and `invokeOrQueue()` takes the invocation as a *template parameter* so the inline path never
+materialises a `std::function`. Only the queued branch wraps it, because only that branch stores it.
+An explicit `DirectConnection` now never reads the affinity at all, which also skips the `Affinity`
+mutex measured in P2.
+
+It had to be a helper in the .cpp rather than inline logic in the wrapper because `Object.h` only
+forward-declares `Thread` — which is exactly why the original code deferred everything to
+`dispatchMetaCall()` in the first place.
+
+### The queued path still allocates
 
 The cause is allocation count, confirmed with a counting `operator new`:
 

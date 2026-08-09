@@ -420,29 +420,71 @@ namespace QtLikeSignal
             ConnectionType aType
             );
 
-        //! Dispatches a metacall callback based on connection type, resolving the target's thread
-        //! affinity from a previously-captured Affinity box instead of dereferencing the target
-        //! Object.
+        //! What one emit should do, decided before any closure exists.
+        enum class DispatchDecision
+        {
+            CallInline,   //!< Run the slot here and now.
+            Queue,        //!< Post it to the thread handed back alongside this.
+            Drop          //!< The receiver's thread is gone; nothing would ever run it.
+        };
+
+        //! Decides how an emit should be delivered, and resolves the receiver's thread on the way.
         //!
-        //! Used exclusively by the connect() wrappers below: their closures run at EMIT time, which
-        //! may be much later and on a different thread than connect() itself, so they cannot safely
-        //! read the receiver's own thread()/threadData() the way a direct, synchronous call can --
-        //! boost::signals2's disconnect() (invoked from ~Object()) does not block for an in-flight
-        //! emit, so a life-token check performed right before touching the receiver narrows but does
-        //! not close that race. Resolving through the Affinity box instead removes the dependency on
-        //! the receiver's own memory entirely: the box is captured by each wrapper when connect() is
-        //! called (while the receiver is definitely still alive) and is independently heap-allocated
-        //! and ref-counted, so it stays valid to read no matter what has happened to the receiver by
-        //! the time this call happens. @p aReceiver is passed through only as the dispatcher's queue
-        //! key (for postEvent()/removeEventsForReceiver() bookkeeping); it is never dereferenced here.
-        static bool
-        dispatchMetaCall
+        //! Split out of dispatchMetaCallTo() so a connection can find out whether it is about to
+        //! make a plain synchronous call *before* it commits to building anything. That ordering is
+        //! the whole point: a std::function big enough to hold the bound slot and its arguments
+        //! heap-allocates, and paying that on a DirectConnection -- which just calls the slot and
+        //! returns -- was costing an allocation on every single emit.
+        //!
+        //! Defined in the .cpp because Object.h only forward-declares Thread.
+        static DispatchDecision
+        decideDispatch
             (
             const std::shared_ptr<Affinity>& aAffinity,
-            Object* aReceiver,
-            std::function<void()> aSlot,
-            ConnectionType aType
+            ConnectionType aType,
+            std::shared_ptr<ThreadData>& aTargetData
             );
+
+        //! Invokes @p aInvoke now, or queues it for the receiver's thread, as the connection needs.
+        //!
+        //! @p aInvoke is a template parameter rather than a std::function precisely so the inline
+        //! path never materialises one. Only the queued branch wraps it, because only that branch
+        //! has to store it.
+        template <typename Invoke>
+        static void invokeOrQueue
+            (
+            const std::shared_ptr<Affinity>& aAffinity,   //!< Receiver's affinity box.
+            Object* aReceiver,                              //!< Receiver, used only as a queue key.
+            ConnectionType aType,                           //!< Requested connection type.
+            const std::weak_ptr<int>& aLife,                //!< Receiver's life token.
+            Invoke aInvoke                                  //!< Callable that performs the call.
+            )
+        {
+            std::shared_ptr<ThreadData> targetData;
+            const DispatchDecision decision = decideDispatch( aAffinity, aType, targetData );
+
+            if( decision == DispatchDecision::Drop )
+            {
+                return;
+            }
+            if( decision == DispatchDecision::CallInline )
+            {
+                aInvoke();
+                return;
+            }
+
+            // Re-check the life token when the queued call finally runs: it was only checked at
+            // emit time, and the receiver may be destroyed before the loop gets to it.
+            dispatchMetaCallTo( targetData, aReceiver,
+                [aLife, aInvoke]()
+                {
+                    if( auto lifeCheck = aLife.lock() )
+                    {
+                        aInvoke();
+                    }
+                },
+                ConnectionType::QueuedConnection );
+        }
 
         //! Dispatches a metacall to an explicitly named thread, ignoring the receiver's affinity.
         //!
@@ -588,15 +630,11 @@ namespace QtLikeSignal
                     return;
                 }
 
-                auto boundSlot = [weakLife, aReceiver, aSlot, aArgs ...]()
+                invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
+                    [aReceiver, aSlot, aArgs ...]()
                     {
-                        if( auto lifeCheck = weakLife.lock() )
-                        {
-                            ( aReceiver->*aSlot )( aArgs ... );
-                        }
-                    };
-
-                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
+                        ( aReceiver->*aSlot )( aArgs ... );
+                    } );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -640,15 +678,11 @@ namespace QtLikeSignal
                     return;
                 }
 
-                auto boundSlot = [weakLife, aReceiver, aSlot, aArgs ...]()
+                invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
+                    [aReceiver, aSlot, aArgs ...]()
                     {
-                        if( auto lifeCheck = weakLife.lock() )
-                        {
-                            ( aReceiver->*aSlot )( aArgs ... );
-                        }
-                    };
-
-                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
+                        ( aReceiver->*aSlot )( aArgs ... );
+                    } );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -686,15 +720,11 @@ namespace QtLikeSignal
                     return;
                 }
 
-                auto boundSlot = [weakLife, aReceiver, aSlot, aArgs ...]()
+                invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
+                    [aReceiver, aSlot, aArgs ...]()
                     {
-                        if( auto lifeCheck = weakLife.lock() )
-                        {
-                            ( aReceiver->*aSlot )( aArgs ... );
-                        }
-                    };
-
-                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
+                        ( aReceiver->*aSlot )( aArgs ... );
+                    } );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -736,15 +766,11 @@ namespace QtLikeSignal
                     return;
                 }
 
-                auto boundSlot = [weakLife, aReceiver, aSlot, aArgs ...]()
+                invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
+                    [aReceiver, aSlot, aArgs ...]()
                     {
-                        if( auto lifeCheck = weakLife.lock() )
-                        {
-                            ( aReceiver->*aSlot )( aArgs ... );
-                        }
-                    };
-
-                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
+                        ( aReceiver->*aSlot )( aArgs ... );
+                    } );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -781,15 +807,11 @@ namespace QtLikeSignal
                     return;
                 }
 
-                auto boundSlot = [weakLife, aReceiver, aSlot, aArgs ...]()
+                invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
+                    [aReceiver, aSlot, aArgs ...]()
                     {
-                        if( auto lifeCheck = weakLife.lock() )
-                        {
-                            ( aReceiver->*aSlot )( aArgs ... );
-                        }
-                    };
-
-                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
+                        ( aReceiver->*aSlot )( aArgs ... );
+                    } );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -825,15 +847,11 @@ namespace QtLikeSignal
                     return;
                 }
 
-                auto boundSlot = [weakLife, aReceiver, aSlot, aArgs ...]()
+                invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
+                    [aReceiver, aSlot, aArgs ...]()
                     {
-                        if( auto lifeCheck = weakLife.lock() )
-                        {
-                            ( aReceiver->*aSlot )( aArgs ... );
-                        }
-                    };
-
-                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
+                        ( aReceiver->*aSlot )( aArgs ... );
+                    } );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -867,15 +885,11 @@ namespace QtLikeSignal
                     return;
                 }
 
-                auto boundSlot = [weakLife, aReceiver, aSlot, aArgs ...]()
+                invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
+                    [aReceiver, aSlot, aArgs ...]()
                     {
-                        if( auto lifeCheck = weakLife.lock() )
-                        {
-                            ( aReceiver->*aSlot )( aArgs ... );
-                        }
-                    };
-
-                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
+                        ( aReceiver->*aSlot )( aArgs ... );
+                    } );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -911,15 +925,11 @@ namespace QtLikeSignal
                     return;
                 }
 
-                auto boundSlot = [weakLife, aReceiver, aSlot, aArgs ...]()
+                invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
+                    [aReceiver, aSlot, aArgs ...]()
                     {
-                        if( auto lifeCheck = weakLife.lock() )
-                        {
-                            ( aReceiver->*aSlot )( aArgs ... );
-                        }
-                    };
-
-                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
+                        ( aReceiver->*aSlot )( aArgs ... );
+                    } );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -954,15 +964,11 @@ namespace QtLikeSignal
                     return;
                 }
 
-                auto boundSlot = [weakLife, aReceiver, aSlot, aArgs ...]()
+                invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
+                    [aReceiver, aSlot, aArgs ...]()
                     {
-                        if( auto lifeCheck = weakLife.lock() )
-                        {
-                            ( aReceiver->*aSlot )( aArgs ... );
-                        }
-                    };
-
-                dispatchMetaCall( ctxAffinity, aReceiver, boundSlot, aType );
+                        ( aReceiver->*aSlot )( aArgs ... );
+                    } );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -998,15 +1004,11 @@ namespace QtLikeSignal
                     return;
                 }
 
-                auto boundSlot = [weakLife, aSlot, aArgs ...]()
+                invokeOrQueue( ctxAffinity, aContext, aType, weakLife,
+                    [aSlot, aArgs ...]()
                     {
-                        if( auto lifeCheck = weakLife.lock() )
-                        {
-                            aSlot( aArgs ... );
-                        }
-                    };
-
-                dispatchMetaCall( ctxAffinity, aContext, boundSlot, aType );
+                        aSlot( aArgs ... );
+                    } );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );

@@ -731,31 +731,40 @@ namespace QtLikeSignal
         return true;
     }
 
-    //! Dispatches a metacall callback based on connection type, resolving affinity from a
-    //! previously-captured Affinity box rather than dereferencing the receiver Object. Thread-safe.
+    //! Decides how an emit should be delivered, and resolves the receiver's thread on the way.
     //!
-    //! Used exclusively by the connect() wrapper closures, which run at emit time -- possibly much
-    //! later, and on a different thread, than connect() itself. boost::signals2's disconnect()
-    //! (invoked from ~Object()) does not block for an in-flight emit, so by the time this call
-    //! happens the receiver may already be under (or past) destruction; reading its own
-    //! thread()/threadData() directly, as the plain Object* overload above does, would then be a
-    //! use-after-free. aAffinity was captured by the wrapper when connect() was called, while the
-    //! receiver was still definitely alive, and is independently heap-allocated and ref-counted, so
-    //! it remains safe to read regardless. @p aReceiver is passed through purely as the dispatcher's
-    //! queue key (postEvent()/removeEventsForReceiver() bookkeeping) and is never dereferenced here.
-    //! Returns true if the slot ran (direct) or was queued successfully; false if it could not be
-    //! delivered, which happens when the receiver has no thread affinity or its thread has no event
-    //! dispatcher yet.
-    bool Object::dispatchMetaCall
+    //! Thread-safe. @p aTargetData is set only when the answer is Queue or Drop; an inline call has
+    //! no use for it, and an explicit DirectConnection deliberately never reads the affinity at all,
+    //! which also skips the Affinity mutex.
+    Object::DispatchDecision Object::decideDispatch
         (
-        const std::shared_ptr<Affinity>& aAffinity,  //!< Affinity box captured at connect() time.
-        Object* aReceiver,                             //!< Receiver; used only as the dispatcher's queue key.
-        std::function<void()> aSlot,                   //!< Callback function.
-        ConnectionType aType                         //!< Connection type.
+        const std::shared_ptr<Affinity>& aAffinity,   //!< Receiver's affinity box.
+        ConnectionType aType,                           //!< Requested connection type.
+        std::shared_ptr<ThreadData>& aTargetData        //!< Receives the receiver's thread data.
         )
     {
-        return dispatchMetaCallTo( aAffinity ? aAffinity->data() : nullptr, aReceiver,
-            std::move( aSlot ), aType );
+        // DirectConnection means "run now regardless of affinity", so there is nothing to resolve.
+        if( aType == ConnectionType::DirectConnection )
+        {
+            return DispatchDecision::CallInline;
+        }
+
+        aTargetData = aAffinity ? aAffinity->data() : nullptr;
+        Thread* const targetThread = aTargetData ? aTargetData->thread() : nullptr;
+
+        if( aType == ConnectionType::AutoConnection && Thread::currentThread() == targetThread )
+        {
+            return DispatchDecision::CallInline;
+        }
+
+        // No live thread to deliver on, so queueing would only accumulate work nothing will run.
+        // Same rule dispatchMetaCallTo() applies; see the comment there.
+        if( targetThread == nullptr )
+        {
+            return DispatchDecision::Drop;
+        }
+
+        return DispatchDecision::Queue;
     }
 
     //! Dispatches a metacall to an explicitly named thread, ignoring the receiver's affinity.
