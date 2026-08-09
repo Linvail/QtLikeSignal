@@ -223,13 +223,18 @@ namespace
 
         localThread.start();
 
+        // Direct, and not by preference: it is what makes this test test anything. Auto would
+        // resolve to Queued here (local lives on localThread, started is emitted on thread), so the
+        // sample would be taken by localThread's loop some time after mStarted had already fired --
+        // the "checking after the fact" the comment above rules out. It would still pass with a
+        // late-arriving priority.
         auto connection = Object::connect( thread.getStarted(), &local, [&]()
             {
                 std::lock_guard<std::mutex> locker( mutex );
                 sampledPriority = thread.priority();
                 sampled = true;
                 cv.notify_all();
-            } );
+            }, ConnectionType::Direct );
 
         thread.start( Thread::HighestPriority );
 
@@ -418,13 +423,17 @@ namespace
 
             localThread.start();
 
+            // Direct is mandatory here: GetCurrentThread() samples whichever thread runs the slot,
+            // so the delivery thread *is* the measurement. Under Auto this resolves to Queued and
+            // the sample comes from localThread, which sits at NormalPriority -- a wrong answer
+            // rather than a timeout.
             auto connection = Object::connect( thread.getStarted(), &local, [&]()
                 {
                     std::lock_guard<std::mutex> locker( mutex );
                     sampledNativePriority = GetThreadPriority( GetCurrentThread() );
                     sampled = true;
                     cv.notify_all();
-                } );
+                }, ConnectionType::Direct );
 
             thread.start( Thread::HighestPriority );
 
@@ -468,13 +477,17 @@ namespace
             Object local( &localThread );
             localThread.start();
 
+            // Direct is mandatory here: GetCurrentThread() samples whichever thread runs the slot,
+            // so the delivery thread *is* the measurement. Under Auto this resolves to Queued and
+            // the sample comes from localThread, which sits at NormalPriority -- a wrong answer
+            // rather than a timeout.
             auto connection = Object::connect( thread.getStarted(), &local, [&]()
                 {
                     std::lock_guard<std::mutex> locker( mutex );
                     sampledNativePriority = GetThreadPriority( GetCurrentThread() );
                     sampled = true;
                     cv.notify_all();
-                } );
+                }, ConnectionType::Direct );
 
             thread.start();
 
