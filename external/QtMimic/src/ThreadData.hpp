@@ -14,19 +14,28 @@
 //! shared_ptr -- and never dereferences a Thread* that a concurrent ~Thread()
 //! could free.
 //!
+//! The timer list lives here too, for the same reason and next to the mailbox on purpose: the
+//! loop's wait has to end at whichever comes first, a posted task or a timer deadline, so both
+//! have to be visible under one mutex and one condition variable. Qt splits these -- the queue is
+//! in QThreadData, the timers in the QAbstractEventDispatcher -- but Qt has a dispatcher object to
+//! put them in, and QtMimic does not.
+//!
 //! Copyright 2026 by Garmin Ltd. or its subsidiaries.
 
 #ifndef QT_MIMIC_THREADDATA_HPP
 #define QT_MIMIC_THREADDATA_HPP
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <vector>
 
 namespace QtMimic
 {
+    class Object;
     class Thread;
 
     //----------------------------------------------------------------
@@ -80,11 +89,56 @@ namespace QtMimic
             std::function<void()> aTask
             );
 
+        //! One timer's schedule and target, as handed back by takeTimersForReceiver() so that
+        //! Object::moveToThread() can re-register it on the destination thread.
+        struct TimerRegistration
+        {
+            int mTimerId;     //!< The timer's id, preserved across the move.
+            int mIntervalMs;  //!< The interval it was registered with, in milliseconds.
+        };
+
     private:
         void setThread
             (
             Thread* aThread
             );
+
+        // The timer operations below all name a *specific* receiver, so they are private to
+        // Object's own internals (startTimer(), killTimer(), moveToThread(), ~Object()) rather
+        // than public alongside post(): post() cannot be aimed at another object, and these can.
+        void registerTimer
+            (
+            int aTimerId,
+            int aIntervalMs,
+            Object* aReceiver
+            );
+
+        bool unregisterTimer
+            (
+            int aTimerId
+            );
+
+        void removeTimersForReceiver
+            (
+            Object* aReceiver
+            );
+
+        std::vector<TimerRegistration> takeTimersForReceiver
+            (
+            Object* aReceiver
+            );
+
+        void dispatchExpiredTimers();
+
+        bool hasExpiredTimers
+            (
+            std::chrono::steady_clock::time_point aNow
+            ) const;
+
+        int nextTimerTimeoutMs
+            (
+            std::chrono::steady_clock::time_point aNow
+            ) const;
 
         void requestStop();
 
@@ -112,6 +166,49 @@ namespace QtMimic
         bool mAccepting { true };                    //!< post() accepts tasks (false once finished)
         std::function<void()> mWakeCb;              //!< Wakes an external loop on post (optional)
 
+        //! One registered timer's schedule and target. The receiver is a raw Object*, kept valid
+        //! by ~Object() calling removeTimersForReceiver() before it goes away.
+        struct TimerData
+        {
+            int mTimerId;                                   //!< Id handed out by Object::startTimer().
+            int mIntervalMs;                                //!< Interval in milliseconds.
+            Object* mReceiver;                             //!< Object whose timerEvent() is called.
+            std::chrono::steady_clock::time_point mNextFire; //!< When it next comes due.
+        };
+
+        //! One expired timer waiting to be delivered, i.e. an entry of the batch below.
+        struct ExpiredTimer
+        {
+            Object* mReceiver;  //!< Cleared to nullptr once claimed, or when cancelled.
+            int mTimerId;        //!< Id to report to timerEvent().
+        };
+
+        std::vector<TimerData> mTimers;  //!< Every timer currently registered on this thread.
+
+        //! Set (under mMutex) by registerTimer(), so a loop already blocked in wait_for() wakes and
+        //! re-evaluates its deadline instead of sleeping out the longer one it computed before the
+        //! new timer existed. Cleared by the loop immediately before it waits.
+        //!
+        //! Only registerTimer() sets it, because registering is the only timer operation that can
+        //! bring the next deadline *forward*. Unregistering can only push it out or remove it, and
+        //! a loop sleeping on a deadline that is now too early is self-correcting: it wakes at the
+        //! stale time, finds nothing due, recomputes and sleeps again -- one wakeup either way. The
+        //! one branch where an un-woken sleep would be unbounded (mWake.wait() in Thread::loop())
+        //! is only reachable when mTimers is empty, in which case there is nothing to unregister.
+        bool mTimersChanged { false };
+
+        //! The expired-timer batch currently being delivered, or nullptr outside a delivery pass.
+        //!
+        //! Timers that come due together are collected into one batch and then delivered with
+        //! mMutex released, because a handler is free to start or kill timers -- including the
+        //! siblings queued behind it in this very batch. Publishing the batch is what lets
+        //! unregisterTimer() and removeTimersForReceiver() reach into it and cancel those entries,
+        //! so a killed timer cannot still fire and a destroyed receiver cannot still be called.
+        //! Guarded by mMutex, and every entry is read under mMutex too, so cancelling races
+        //! nothing.
+        std::vector<ExpiredTimer>* mDispatchingTimerBatch { nullptr };
+
+        friend class Object;
         friend class Thread;
     };
 

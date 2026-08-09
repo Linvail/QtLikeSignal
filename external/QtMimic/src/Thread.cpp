@@ -35,6 +35,26 @@ namespace QtMimic
         //! ThreadData model (heap-use-after-free in isCurrent(), confirmed under
         //! AddressSanitizer) can no longer happen.
         thread_local std::unique_ptr<Thread> tAdoptedThread;
+
+        //! Combine two "milliseconds to wait, or -1 for no deadline at all" budgets into the
+        //! earlier of the two. Used to fold a timer deadline into whatever the loop was already
+        //! going to wait for, so adding a timer can only ever shorten a wait, never lengthen one.
+        int earlierTimeout
+            (
+            int aFirst,
+            int aSecond
+            )
+        {
+            if( aFirst < 0 )
+            {
+                return aSecond;
+            }
+            if( aSecond < 0 )
+            {
+                return aFirst;
+            }
+            return aFirst < aSecond ? aFirst : aSecond;
+        }
     }         // namespace
 
     //! @brief Constructor - initialize a Thread with an optional name.
@@ -197,6 +217,12 @@ namespace QtMimic
                 task();
             }
         }
+
+        // Timers get serviced on every pump too, otherwise an adopted thread driving us from its
+        // own loop would be the one kind of thread where Timer silently never fires. Nothing here
+        // controls how often the external loop calls us, so the resolution a timer actually gets is
+        // that loop's pump rate; see setWakeCallback() for nudging it.
+        mData->dispatchExpiredTimers();
     }
 
     //! @brief Set a callback invoked (from any thread) whenever a task is posted, so an
@@ -400,9 +426,31 @@ namespace QtMimic
             {
                 std::unique_lock<std::mutex> locker( mData->mMutex );
 
-                // Nothing to run yet: block until work is posted or a quit/OS event.
-                if( mData->mTasks.empty() && mData->mRunning )
+                // Nothing to run yet: block until work is posted, a timer comes due, or a quit/OS
+                // event arrives.
+                const auto now = std::chrono::steady_clock::now();
+                if( mData->mTasks.empty() && !mData->hasExpiredTimers( now ) && mData->mRunning )
                 {
+                    // How long we may sleep before the earliest timer deadline, or -1 if no timer
+                    // is registered and there is therefore no deadline to respect.
+                    const int timerTimeoutMs = mData->nextTimerTimeoutMs( now );
+
+                    // Cleared right before waiting, still holding mMutex, so a concurrent
+                    // register/unregister either lands before this point (already reflected in the
+                    // deadline above) or after it (blocked on mMutex until the wait releases it,
+                    // then setting the flag and notifying). There is no window where a change to
+                    // the deadline can be lost.
+                    mData->mTimersChanged = false;
+
+                    // A quit, a posted task or a timer change ends the wait early; a timer deadline
+                    // ends it on time. Nothing else needs to be in the predicate, because a timer
+                    // coming due is not a state change anyone signals -- it is just the clock.
+                    auto wakeCondition = [this]
+                        {
+                            return !mData->mTasks.empty() || !mData->mRunning
+                                   || mData->mTimersChanged;
+                        };
+
                     if( mWaiter )
                     {
                         // Platform-provided blocking wait (e.g. the Win32 message
@@ -410,22 +458,24 @@ namespace QtMimic
                         // via the wake callback on post()/quit(). Run it without the
                         // lock so other threads can post() while we wait.
                         locker.unlock();
-                        mWaiter( mWaiterTimeoutMs );
+                        mWaiter( earlierTimeout( mWaiterTimeoutMs, timerTimeoutMs ) );
                         locker.lock();
                     }
                     else if( mDispatcher )
                     {
-                        mData->mWake.wait_for( locker, kPollSlice, [this]
-                            {
-                                return !mData->mTasks.empty() || !mData->mRunning;
-                            } );
+                        const int sliceMs = static_cast<int>( kPollSlice.count() );
+                        mData->mWake.wait_for( locker,
+                            std::chrono::milliseconds( earlierTimeout( sliceMs, timerTimeoutMs ) ),
+                            wakeCondition );
+                    }
+                    else if( timerTimeoutMs < 0 )
+                    {
+                        mData->mWake.wait( locker, wakeCondition );
                     }
                     else
                     {
-                        mData->mWake.wait( locker, [this]
-                            {
-                                return !mData->mTasks.empty() || !mData->mRunning;
-                            } );
+                        mData->mWake.wait_for( locker,
+                            std::chrono::milliseconds( timerTimeoutMs ), wakeCondition );
                     }
                 }
 
@@ -456,6 +506,15 @@ namespace QtMimic
                 {
                     task();
                 }
+            }
+
+            // Deliver whatever came due, after the posted tasks and outside the lock. Skipped once
+            // we have committed to stopping: quit() drains the tasks already queued, but a timer is
+            // a standing schedule rather than queued work, so there is nothing owed to it -- and
+            // firing one here would run user code after the loop has decided it is finished.
+            if( !stop )
+            {
+                mData->dispatchExpiredTimers();
             }
 
             // Pump OS-level events; don't block since Object tasks may be pending.

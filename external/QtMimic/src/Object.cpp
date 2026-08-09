@@ -7,8 +7,70 @@
 
 #include "Object.hpp"
 
+#include <cstdio>
+#include <deque>
+
 namespace QtMimic
 {
+
+    namespace
+    {
+        //! Process-wide pool of timer ids, handing out reusable ids rather than an ever-rising
+        //! count. Qt does the same with a lock-free QFreeList capped at 2^24 simultaneous timers; a
+        //! mutex and a deque is the proportionate equivalent here, since an id is taken once per
+        //! startTimer() rather than on any hot path.
+        //!
+        //! Reuse is FIFO, deliberately. A freed id going straight back out (LIFO) would make the
+        //! narrowest recycling hazard trivially reachable: a handler that kills one timer and
+        //! starts another would get the same id back immediately, and any delivery for the old
+        //! timer still in flight would then match the new one. Taking the oldest free id instead
+        //! means an id is only reused after every other freed id has been.
+        struct TimerIdPool
+        {
+            //! Takes an id, reusing the oldest freed one if there is any.
+            //! @return the id, or -1 if the space of ids is exhausted.
+            static int allocate()
+            {
+                std::lock_guard<std::mutex> locker( sMutex );
+                if( !sFree.empty() )
+                {
+                    const int id = sFree.front();
+                    sFree.pop_front();
+                    return id;
+                }
+                // Never hand out 0 or a negative value: -1 is startTimer()'s failure sentinel and
+                // the value Timer::stop() tests against, so an id colliding with it would be
+                // indistinguishable from "no timer".
+                if( sNextFresh <= 0 )
+                {
+                    return -1;
+                }
+                return sNextFresh++;
+            }
+
+            //! Returns an id to the pool.
+            static void release
+                (
+                int aTimerId
+                )
+            {
+                if( aTimerId <= 0 )
+                {
+                    return;
+                }
+                std::lock_guard<std::mutex> locker( sMutex );
+                sFree.push_back( aTimerId );
+            }
+
+            static std::mutex sMutex;      //!< Guards both members below.
+            static std::deque<int> sFree;  //!< Freed ids, oldest first.
+            static int sNextFresh;         //!< Next never-yet-issued id.
+        };
+
+        std::mutex TimerIdPool::sMutex;
+        std::deque<int> TimerIdPool::sFree;
+        int TimerIdPool::sNextFresh = 1;
+    }  // namespace
 
     //================================================================
     // Object
@@ -72,7 +134,159 @@ namespace QtMimic
             return false;
         }
 
+        // Take any running timers off the outgoing thread before the affinity changes. Qt documents
+        // this behaviour ("all active timers for the object will be reset ... stopped in the current
+        // thread and restarted, with the same interval, in the targetThread"); without it the timers
+        // would keep firing on the thread the object just left, delivering timerEvent() somewhere it
+        // must not run. The caller is on that outgoing thread (push-only, checked above), so this
+        // cannot race its loop's own delivery pass.
+        std::vector<ThreadData::TimerRegistration> timersToMove;
+        if( const std::shared_ptr<ThreadData> oldData = threadDataRef() )
+        {
+            timersToMove = oldData->takeTimersForReceiver( this );
+        }
+
         mAffinity->setData( aThread ? aThread->data() : std::shared_ptr<ThreadData>() );
+
+        if( !timersToMove.empty() )
+        {
+            // Registered directly rather than posted to the destination: registerTimer() takes the
+            // destination's mutex and wakes its loop, so it is already safe from here, and posting
+            // would leave a window in which the timers exist on neither thread.
+            const std::shared_ptr<ThreadData> newData = threadDataRef();
+            for( const auto& timer : timersToMove )
+            {
+                if( newData )
+                {
+                    newData->registerTimer( timer.mTimerId, timer.mIntervalMs, this );
+                }
+                else
+                {
+                    // moveToThread(nullptr) leaves nothing to service the timers, so they are gone
+                    // rather than merely paused, and their ids go back to the pool. The object's own
+                    // record has to be cleared too, or a later killTimer() would double-release.
+                    forgetTimerId( timer.mTimerId );
+                    TimerIdPool::release( timer.mTimerId );
+                }
+            }
+        }
+
+        return true;
+    }
+
+    //! @brief Called when one of this object's timers comes due. Does nothing by default.
+    void Object::timerEvent
+        (
+        TimerEvent* aEvent
+        )
+    {
+        ( void )aEvent;
+    }
+
+    //! @brief Start a repeating timer delivering timerEvent() to this object every @p aIntervalMs.
+    //!
+    //! **Not thread-safe: must be called from this object's own thread.** The timer is owned by
+    //! that thread's mailbox and only that thread's event loop can deliver it, so registering from
+    //! elsewhere would install a timer whose events the caller is not positioned to receive.
+    //! Rejected with a warning on stderr instead, matching Qt, whose QObject::startTimer() likewise
+    //! refuses ("Timers cannot be started from another thread"). To start a timer for an object
+    //! living in another thread, get onto that thread first.
+    //!
+    //! An interval of 0 means "fire on every pass of the event loop", as in Qt.
+    //! @return the new timer's id, or -1 if the timer could not be started.
+    int Object::startTimer
+        (
+        int aIntervalMs  //!< Interval in milliseconds; 0 fires on every loop pass.
+        )
+    {
+        if( aIntervalMs < 0 )
+        {
+            std::fprintf( stderr, "Object::startTimer: interval cannot be negative\n" );
+            return -1;
+        }
+
+        if( thread() != Thread::current() )
+        {
+            std::fprintf( stderr,
+                "Object::startTimer: timers cannot be started from another thread\n" );
+            return -1;
+        }
+
+        const std::shared_ptr<ThreadData> data = threadDataRef();
+        if( !data )
+        {
+            // Detached by moveToThread(nullptr): there is no mailbox to schedule against, and no
+            // loop that would ever drain one.
+            std::fprintf( stderr,
+                "Object::startTimer: object has no thread, so the timer cannot be started\n" );
+            return -1;
+        }
+
+        // Only consume an id once the timer is actually going to be registered.
+        const int timerId = TimerIdPool::allocate();
+        if( timerId < 0 )
+        {
+            std::fprintf( stderr, "Object::startTimer: no timer ids left\n" );
+            return -1;
+        }
+
+        data->registerTimer( timerId, aIntervalMs, this );
+        {
+            // Recorded so ~Object() can hand the id back even if the timer is never killed.
+            std::lock_guard<std::mutex> locker( mRunningTimerIdsMutex );
+            mRunningTimerIds.push_back( timerId );
+        }
+        return timerId;
+    }
+
+    //! @brief Stop the timer with id @p aTimerId.
+    //!
+    //! **Not thread-safe: must be called from this object's own thread**, for the same reason as
+    //! startTimer(). Calls from another thread are rejected with a warning and do nothing. An id
+    //! this object does not own is ignored.
+    void Object::killTimer
+        (
+        int aTimerId  //!< Id returned by startTimer().
+        )
+    {
+        if( thread() != Thread::current() )
+        {
+            std::fprintf( stderr,
+                "Object::killTimer: timers cannot be stopped from another thread\n" );
+            return;
+        }
+
+        const bool wasOurs = forgetTimerId( aTimerId );
+
+        if( const std::shared_ptr<ThreadData> data = threadDataRef() )
+        {
+            data->unregisterTimer( aTimerId );
+        }
+
+        // Released only after unregisterTimer() has both dropped the timer and cancelled anything
+        // it had already collected for delivery, so the id cannot be reissued while something still
+        // naming it is in flight. Only ids this object actually owns go back, so a bogus or
+        // repeated killTimer() cannot inject a duplicate into the pool.
+        if( wasOurs )
+        {
+            TimerIdPool::release( aTimerId );
+        }
+    }
+
+    //! @brief Drop @p aTimerId from this object's running-timer record.
+    //! @return true if the id was there, i.e. this object owns it and the caller may release it.
+    bool Object::forgetTimerId
+        (
+        int aTimerId
+        )
+    {
+        std::lock_guard<std::mutex> locker( mRunningTimerIdsMutex );
+        auto it = std::find( mRunningTimerIds.begin(), mRunningTimerIds.end(), aTimerId );
+        if( it == mRunningTimerIds.end() )
+        {
+            return false;
+        }
+        mRunningTimerIds.erase( it );
         return true;
     }
 
@@ -136,6 +350,24 @@ namespace QtMimic
         // also makes each connection's Cleanup destructor a no-op (it sees the life
         // token expired), so disconnect() below won't re-enter mIncomingMutex.
         mLife.reset();
+
+        // Strip this object's timers before it goes away. Unlike a queued slot, a timer carries no
+        // life token to check -- the mailbox holds a raw Object* and the loop calls timerEvent() on
+        // it directly -- so this is the only thing standing between a still-running timer and a call
+        // into freed memory. It cancels anything already collected for delivery, too.
+        std::vector<int> outstandingTimerIds;
+        {
+            std::lock_guard<std::mutex> locker( mRunningTimerIdsMutex );
+            outstandingTimerIds.swap( mRunningTimerIds );
+        }
+        if( const std::shared_ptr<ThreadData> data = threadDataRef() )
+        {
+            data->removeTimersForReceiver( this );
+        }
+        for( const int timerId : outstandingTimerIds )
+        {
+            TimerIdPool::release( timerId );
+        }
 
         // Disconnect every connection where this object is the receiver so the
         // signal no longer references this (soon to be destroyed) object.

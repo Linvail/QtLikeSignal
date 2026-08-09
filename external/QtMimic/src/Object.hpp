@@ -27,6 +27,7 @@
 #include "Global.hpp"
 #include "Signal.hpp"
 #include "Thread.hpp"
+#include "TimerEvent.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -83,7 +84,9 @@ namespace QtMimic
             (
             Thread* aThread = nullptr
             );
+
         virtual ~Object();
+
         Object
             (
             const Object&
@@ -93,13 +96,38 @@ namespace QtMimic
             (
             const Object&
             ) = delete;
+
         Thread* thread() const;
+
         bool moveToThread
             (
             Thread* aThread
             );
+
         void deleteLater();
+
         std::size_t incomingConnectionCount() const;
+
+        //! Called when one of this object's timers comes due. Override to react to it; the default
+        //! does nothing. Delivered by the event loop of the thread the object lives in, so an
+        //! override runs there and needs no locking of its own.
+        //!
+        //! An object may run several timers, so an override that cares which one fired must check
+        //! aEvent->timerId() -- see Timer::timerEvent().
+        virtual void timerEvent
+            (
+            TimerEvent* aEvent
+            );
+
+        int startTimer
+            (
+            int aIntervalMs
+            );
+
+        void killTimer
+            (
+            int aTimerId
+            );
 
         //! [Connect Overload 1]: Connects a signal to a non-overloaded member function slot.
         //!
@@ -544,12 +572,18 @@ namespace QtMimic
                 Object* aOwner,
                 std::weak_ptr<int> aLife
                 );
+
             ~Cleanup();
 
             Object* mOwner;
             std::weak_ptr<int> mLife;
             Connection mHandle;
         };
+        bool forgetTimerId
+            (
+            int aTimerId
+            );
+
         std::shared_ptr<ThreadData> threadDataRef() const;
 
         const std::shared_ptr<Affinity> mAffinity;     //!< Affinity holder; never reassigned after ctor
@@ -557,6 +591,21 @@ namespace QtMimic
         std::atomic<bool> mDeleteLaterPosted { false }; //!< true once deleteLater() has posted delete
         mutable std::mutex mIncomingMutex;       //!< Protects mIncoming
         std::vector<Connection> mIncoming;       //!< Connections where this is the receiver
+
+        //! Ids of timers started on this object and not yet killed.
+        //!
+        //! Exists so ~Object() can hand them back to the shared pool: a destroyed object with a
+        //! running timer would otherwise strand its id forever and the pool would climb without
+        //! bound. Qt keeps the same list in QObjectPrivate::extraData->runningTimers for the same
+        //! reason.
+        std::vector<int> mRunningTimerIds;
+
+        //! Guards mRunningTimerIds.
+        //!
+        //! startTimer()/killTimer() are thread-confined so they only ever touch it from this
+        //! object's own thread, but ~Object() and moveToThread() need it too and neither is bound
+        //! quite that tightly, so the list is not single-threaded in practice.
+        mutable std::mutex mRunningTimerIdsMutex;
     };
 
 } // namespace QtMimic
