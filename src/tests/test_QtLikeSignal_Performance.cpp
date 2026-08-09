@@ -1,24 +1,30 @@
 //! @file
 //!
-//! Dispatch-overhead benchmarks for QtLikeSignal, measured against QtMimic as a reference.
+//! Dispatch-overhead benchmarks for QtLikeSignal, measured against QtMimic and, where Qt 6 is
+//! installed, against Qt itself.
 //!
 //! Covers the whole path a signal travels -- connect, emit, receive -- rather than any one function,
 //! so the numbers say what a user actually pays. Both libraries run the same scenarios with the same
 //! slot bodies in the same process, which is the only way to make the comparison mean anything: same
 //! machine, same build flags, same cache state, interleaved in time.
 //!
-//! **Build this in release with no sanitizer before believing any number.** The default test
-//! configuration is `-O0` plus ThreadSanitizer, which inflates everything here by roughly an order of
-//! magnitude and does not inflate the two libraries equally:
+//! **Build this in release with no sanitizer before believing any number.** A `-O0` build, or one
+//! with a sanitizer enabled, inflates everything here by roughly an order of magnitude and does not
+//! inflate the libraries equally. `--mode` belongs on the build command, not on configure:
 //!
 //! @code
-//!   ./waf configure --mode=release
+//!   ./waf configure                       # no --enable-*-sanitizer-on-Linux
 //!   ./waf install --project=Tests --mode=release
 //! @endcode
+//!
+//! The Qt 6 rows come from test_Qt6_Performance.cpp, which is compiled into this same binary when
+//! Qt 6 is found, so all three libraries are measured in one process on one machine.
 //!
 //! These are microbenchmarks with no work between iterations, which is the condition most flattering
 //! to fixed per-emit overhead. Treat the ratios as meaningful and the absolute nanoseconds as
 //! indicative. See history/PERFORMANCE-20260808.md for where the overhead goes.
+
+#include "PerfHarness.h"
 
 #include <gtest/gtest.h>
 
@@ -36,76 +42,15 @@
 
 #include <atomic>
 #include <chrono>
-#include <cstdio>
-#include <functional>
 #include <future>
-#include <string>
 #include <thread>
-#include <vector>
 
-namespace
-{
-    //! One measurement: what was measured, for which library, and what it cost.
-    struct Result
-    {
-        std::string mScenario;   //!< Scenario name, identical across libraries so rows pair up.
-        std::string mLibrary;    //!< "QtLikeSignal" or "QtMimic".
-        double mNsPerOp;         //!< Nanoseconds per operation.
-    };
-
-    std::vector<Result> gResults;
-
-    //! Records a measurement and echoes it, so a truncated run still shows its progress.
-    void record
-        (
-        const std::string& aScenario,
-        const std::string& aLibrary,
-        double aNsPerOp
-        )
-    {
-        gResults.push_back( { aScenario, aLibrary, aNsPerOp } );
-        std::printf( "  %-34s %-13s %10.1f ns/op\n", aScenario.c_str(), aLibrary.c_str(), aNsPerOp );
-        std::fflush( stdout );
-    }
-
-    //! Times @p aBody run @p aCount times and returns nanoseconds per iteration.
-    template <typename Body>
-    double timeLoop
-        (
-        int aCount,
-        Body aBody
-        )
-    {
-        const auto start = std::chrono::steady_clock::now();
-        for( int i = 0; i < aCount; ++i )
-        {
-            aBody( i );
-        }
-        const auto elapsed = std::chrono::steady_clock::now() - start;
-        return std::chrono::duration<double, std::nano>( elapsed ).count() / aCount;
-    }
-
-    //! Stops the optimiser deleting a loop whose result is never read.
-    //!
-    //! Without this the same-thread emit loops can be removed wholesale, which shows up as a
-    //! suspiciously round 0.0 ns/op rather than as an error.
-    template <typename T> inline void keep( T&& aValue )
-    {
-        #if defined( _MSC_VER )
-            volatile auto sink = aValue;
-            ( void )sink;
-        #else
-            asm volatile ( "" : : "r,m"( aValue ) : "memory" );
-        #endif
-    }
-
-    // Iteration counts. The queued scenarios are smaller because each in-flight emit holds a heap
-    // allocation until the receiving loop drains it, so a large count measures allocator behaviour
-    // as much as dispatch.
-    constexpr int kConnectOps = 20000;
-    constexpr int kDirectOps  = 1000000;
-    constexpr int kQueuedOps  = 200000;
-}
+using PerfHarness::keep;
+using PerfHarness::kConnectOps;
+using PerfHarness::kDirectOps;
+using PerfHarness::kQueuedOps;
+using PerfHarness::record;
+using PerfHarness::timeLoop;
 
 // =================================================================================================
 // QtLikeSignal
@@ -337,40 +282,16 @@ TEST( Performance, QtMimic_QueuedEmitCrossThread )
 
 // =================================================================================================
 
-//! Prints the paired comparison once every scenario has run.
+//! Prints the comparison table once every scenario has run.
 //!
-//! Registered as a gtest environment rather than a test so it runs after all of them regardless of
-//! ordering or filtering.
+//! A gtest environment rather than a test, so it runs after all of them regardless of ordering or
+//! filtering, and regardless of which libraries were compiled in.
 class SummaryPrinter : public ::testing::Environment
 {
 public:
     virtual void TearDown() override
     {
-        if( gResults.empty() )
-        {
-            return;
-        }
-
-        std::printf( "\n%-34s %14s %14s %10s\n", "scenario", "QtLikeSignal", "QtMimic", "ratio" );
-        std::printf( "%s\n", std::string( 76, '-' ).c_str() );
-
-        for( const auto& lhs : gResults )
-        {
-            if( lhs.mLibrary != "QtLikeSignal" )
-            {
-                continue;
-            }
-            for( const auto& rhs : gResults )
-            {
-                if( rhs.mLibrary == "QtMimic" && rhs.mScenario == lhs.mScenario )
-                {
-                    std::printf( "%-34s %11.1f ns %11.1f ns %9.2fx\n", lhs.mScenario.c_str(),
-                        lhs.mNsPerOp, rhs.mNsPerOp, lhs.mNsPerOp / rhs.mNsPerOp );
-                    break;
-                }
-            }
-        }
-        std::printf( "\nratio > 1 means QtLikeSignal is slower.\n" );
+        PerfHarness::printSummary();
     }
 };
 
@@ -382,6 +303,11 @@ int main
     )
 {
     ::testing::InitGoogleTest( &aArgc, aArgv );
+
+    // Before anything is timed, not between tests: the allocator state it settles is process-wide
+    // and one-way, so it has to be established while every library is still unmeasured.
+    PerfHarness::settleAllocatorState();
+
     ::testing::AddGlobalTestEnvironment( new SummaryPrinter() );
     return RUN_ALL_TESTS();
 }
