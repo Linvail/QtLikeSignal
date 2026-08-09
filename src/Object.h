@@ -447,17 +447,25 @@ namespace QtLikeSignal
 
         //! Invokes @p aInvoke now, or queues it for the receiver's thread, as the connection needs.
         //!
-        //! @p aInvoke is a template parameter rather than a std::function precisely so the inline
-        //! path never materialises one. Only the queued branch wraps it, because only that branch
-        //! has to store it.
-        template <typename Invoke>
+        //! The emitted arguments are passed *alongside* the invoker rather than already captured in
+        //! it, and that separation is the point: on the inline path they are forwarded straight
+        //! through to the slot, so nothing is copied. Only the queued path has to store them, and
+        //! only it pays for a copy. Capturing them before deciding -- which is what this used to do
+        //! -- copied every argument on every emit even when the call was about to be made
+        //! synchronously three lines later. Qt never copies on this path at all; it passes a stack
+        //! array of `void*` pointing at the caller's own arguments.
+        //!
+        //! @p aInvoke is a template parameter rather than a std::function so the inline path never
+        //! materialises one. It captures only the receiver and the slot, so it stays small.
+        template <typename Invoke, typename ... Args>
         static void invokeOrQueue
             (
             const std::shared_ptr<Affinity>& aAffinity,   //!< Receiver's affinity box.
             Object* aReceiver,                              //!< Receiver, used only as a queue key.
             ConnectionType aType,                           //!< Requested connection type.
             const std::weak_ptr<int>& aLife,                //!< Receiver's life token.
-            Invoke aInvoke                                  //!< Callable that performs the call.
+            Invoke aInvoke,                                 //!< Performs the call, given the arguments.
+            Args&&... aArgs                                 //!< The emitted arguments.
             )
         {
             std::shared_ptr<ThreadData> targetData;
@@ -469,18 +477,19 @@ namespace QtLikeSignal
             }
             if( decision == DispatchDecision::CallInline )
             {
-                aInvoke();
+                aInvoke( std::forward<Args>( aArgs )... );
                 return;
             }
 
-            // Re-check the life token when the queued call finally runs: it was only checked at
-            // emit time, and the receiver may be destroyed before the loop gets to it.
+            // Queued: the arguments have to outlive this call, so copy them once into a tuple that
+            // the closure owns. Re-check the life token when it finally runs, since it was only
+            // checked at emit time and the receiver may be destroyed before the loop reaches it.
             dispatchMetaCallTo( targetData, aReceiver,
-                [aLife, aInvoke]()
+                [aLife, aInvoke, argTuple = std::make_tuple( std::forward<Args>( aArgs )... )]()
                 {
                     if( auto lifeCheck = aLife.lock() )
                     {
-                        aInvoke();
+                        std::apply( aInvoke, argTuple );
                     }
                 },
                 ConnectionType::QueuedConnection );
@@ -631,10 +640,11 @@ namespace QtLikeSignal
                 }
 
                 invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
-                    [aReceiver, aSlot, aArgs ...]()
+                    [aReceiver, aSlot]( auto&&... aCallArgs )
                     {
-                        ( aReceiver->*aSlot )( aArgs ... );
-                    } );
+                        ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                    },
+                    aArgs ... );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -679,10 +689,11 @@ namespace QtLikeSignal
                 }
 
                 invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
-                    [aReceiver, aSlot, aArgs ...]()
+                    [aReceiver, aSlot]( auto&&... aCallArgs )
                     {
-                        ( aReceiver->*aSlot )( aArgs ... );
-                    } );
+                        ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                    },
+                    aArgs ... );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -721,10 +732,11 @@ namespace QtLikeSignal
                 }
 
                 invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
-                    [aReceiver, aSlot, aArgs ...]()
+                    [aReceiver, aSlot]( auto&&... aCallArgs )
                     {
-                        ( aReceiver->*aSlot )( aArgs ... );
-                    } );
+                        ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                    },
+                    aArgs ... );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -767,10 +779,11 @@ namespace QtLikeSignal
                 }
 
                 invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
-                    [aReceiver, aSlot, aArgs ...]()
+                    [aReceiver, aSlot]( auto&&... aCallArgs )
                     {
-                        ( aReceiver->*aSlot )( aArgs ... );
-                    } );
+                        ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                    },
+                    aArgs ... );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -808,10 +821,11 @@ namespace QtLikeSignal
                 }
 
                 invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
-                    [aReceiver, aSlot, aArgs ...]()
+                    [aReceiver, aSlot]( auto&&... aCallArgs )
                     {
-                        ( aReceiver->*aSlot )( aArgs ... );
-                    } );
+                        ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                    },
+                    aArgs ... );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -848,10 +862,11 @@ namespace QtLikeSignal
                 }
 
                 invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
-                    [aReceiver, aSlot, aArgs ...]()
+                    [aReceiver, aSlot]( auto&&... aCallArgs )
                     {
-                        ( aReceiver->*aSlot )( aArgs ... );
-                    } );
+                        ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                    },
+                    aArgs ... );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -886,10 +901,11 @@ namespace QtLikeSignal
                 }
 
                 invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
-                    [aReceiver, aSlot, aArgs ...]()
+                    [aReceiver, aSlot]( auto&&... aCallArgs )
                     {
-                        ( aReceiver->*aSlot )( aArgs ... );
-                    } );
+                        ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                    },
+                    aArgs ... );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -926,10 +942,11 @@ namespace QtLikeSignal
                 }
 
                 invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
-                    [aReceiver, aSlot, aArgs ...]()
+                    [aReceiver, aSlot]( auto&&... aCallArgs )
                     {
-                        ( aReceiver->*aSlot )( aArgs ... );
-                    } );
+                        ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                    },
+                    aArgs ... );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -965,10 +982,11 @@ namespace QtLikeSignal
                 }
 
                 invokeOrQueue( ctxAffinity, aReceiver, aType, weakLife,
-                    [aReceiver, aSlot, aArgs ...]()
+                    [aReceiver, aSlot]( auto&&... aCallArgs )
                     {
-                        ( aReceiver->*aSlot )( aArgs ... );
-                    } );
+                        ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                    },
+                    aArgs ... );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
@@ -1005,10 +1023,11 @@ namespace QtLikeSignal
                 }
 
                 invokeOrQueue( ctxAffinity, aContext, aType, weakLife,
-                    [aSlot, aArgs ...]()
+                    [aSlot]( auto&&... aCallArgs )
                     {
-                        aSlot( aArgs ... );
-                    } );
+                        aSlot( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                    },
+                    aArgs ... );
             };
 
         return trackIncoming( cleanup, aSignal.connect( wrapper ) );
