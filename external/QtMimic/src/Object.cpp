@@ -110,7 +110,7 @@ namespace QtMimic
         const bool queued = targetData && targetData->post( [life, self]()
             {
                 // Skip if the object was already destroyed another way.
-                if( life.lock() )
+                if( !life.expired() )
                 {
                     delete self;
                 }

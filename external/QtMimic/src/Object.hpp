@@ -518,7 +518,7 @@ namespace QtMimic
                         std::forward<decltype( args )>( args )... );
                     ctxData->post( [slot, life, sharedArgs]()
                     {
-                        if( auto keepAlive = life.lock() )
+                        if( !life.expired() )
                         {
                             std::apply( slot, *sharedArgs );
                         }
