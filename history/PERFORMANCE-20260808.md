@@ -195,12 +195,12 @@ QtMimic and Qt 6 in one process. Median of three runs, `-O2`, no sanitizer:
 | scenario | Qt 6 | QtLikeSignal | QtMimic | ours vs Qt 6 | ours vs QtMimic |
 |---|---|---|---|---|---|
 | `connect()` | 122 ns | 537 ns | 680 ns | 4.4x | 0.79x |
-| emit → receive, direct | 29 ns | 76 ns | 64 ns | 2.6x | 1.18x |
-| emit → receive, auto same-thread | 28 ns | 98 ns | 99 ns | 3.5x | 0.99x |
+| emit → receive, direct | 29 ns | 68 ns | 65 ns | 2.3x | 1.05x |
+| emit → receive, auto same-thread | 30 ns | 88 ns | 104 ns | 2.9x | 0.85x |
 | emit → receive, queued cross-thread | 539 ns | 1022 ns | 496 ns | **1.9x** | **2.1x** |
 
 > All rows are **after the 2026-08-09 fixes**. Before them: direct 150 ns, auto 148 ns, queued
-> 1240 ns. The queued row is measured from queued-only runs, which are noticeably less noisy than
+> 1240 ns. Same-thread dispatch is now at or ahead of QtMimic. The queued row is measured from queued-only runs, which are noticeably less noisy than
 > reading it out of a full run — it is a producer/consumer race, and the numbers spread by ±10%.
 
 Qt is faster on every row, and by a wider margin than the earlier QtMimic-only comparison suggested.
@@ -241,6 +241,25 @@ mutex measured in P2.
 It had to be a helper in the .cpp rather than inline logic in the wrapper because `Object.h` only
 forward-declares `Thread` — which is exactly why the original code deferred everything to
 `dispatchMetaCall()` in the first place.
+
+Two further same-thread costs went with it:
+
+**Arguments were copied even when the call was inline.** The wrapper captured them into a closure
+before deciding how to deliver, so every receiver paid a copy per emit for a call made synchronously
+on the next line. `invokeOrQueue()` now takes them alongside the invoker and forwards them straight
+through; only the queued path copies. Pinned by `ObjectArgumentCopyingTest`, which asserts exact
+counts — 0 for direct and same-thread auto, 1 per receiver for queued — and reports 100 copies for
+100 receivers if the change is reverted. Qt copies nothing here either: moc passes a stack array of
+`void*` pointing at the caller's own arguments.
+
+**The liveness check used `lock()` where `expired()` would do.** Measured 17.1 ns against 0.25 ns —
+`lock()` is an atomic read-modify-write on the control block, `expired()` a plain load — which was
+about 22% of a direct emit spent on nothing. They are equally safe *here*, and that is the part worth
+remembering: the token is an `int`, not the Object, so the `shared_ptr` that `lock()` returns keeps
+the token alive and does nothing to stop the Object being destroyed a moment later. Both forms answer
+only "had destruction begun at the instant of the check", and neither closes the check-then-use race
+that follows. What actually prevents a destroyed receiver being called is `~Object()` disconnecting
+its incoming connections (R17).
 
 ### The queued path: partly fixed, and the rest is structural
 
