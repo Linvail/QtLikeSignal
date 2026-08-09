@@ -714,7 +714,10 @@ namespace QtLikeSignal
 
         if( activeType == ConnectionType::QueuedConnection )
         {
-            auto* event = new MetaCallEvent( aSlot );
+            // Moved, not copied: aSlot is a by-value parameter and is dead after this line, and
+            // MetaCallEvent's constructor also takes by value and moves, so copying here bought a
+            // second heap allocation on every queued emit for nothing.
+            auto* event = new MetaCallEvent( std::move( aSlot ) );
             if( auto tData = aTarget->threadData() )
             {
                 if( auto disp = tData->dispatcher() )
@@ -814,7 +817,10 @@ namespace QtLikeSignal
                 return false;
             }
 
-            auto* event = new MetaCallEvent( aSlot );
+            // Moved, not copied: aSlot is a by-value parameter and is dead after this line, and
+            // MetaCallEvent's constructor also takes by value and moves, so copying here bought a
+            // second heap allocation on every queued emit for nothing.
+            auto* event = new MetaCallEvent( std::move( aSlot ) );
             if( auto disp = aData ? aData->dispatcher() : nullptr )
             {
                 disp->postEvent( aReceiver, static_cast<Event*>( event ) );
