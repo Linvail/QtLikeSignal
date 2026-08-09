@@ -39,7 +39,9 @@ namespace QtLikeSignal
             return false;
         }
 
-        std::vector<EventPair>    eventsToProcess;
+        // A deque, matching mEventQueue, so the whole batch can be taken with a swap below rather
+        // than copied out entry by entry.
+        std::deque<EventPair>     eventsToProcess;
         std::vector<EventPair>    timerEventsToProcess;
         std::chrono::milliseconds maxWait { 100 };
 
@@ -139,12 +141,12 @@ namespace QtLikeSignal
                 return false;
             }
 
-            // Drain current queued events
-            while( !mEventQueue.empty() )
-            {
-                eventsToProcess.push_back( mEventQueue.front() );
-                mEventQueue.pop_front();
-            }
+            // Take the whole queue in one move rather than copying it out entry by entry. The old
+            // loop cost a copy per event plus the growth reallocations of the destination, all of
+            // it under mMutex and therefore in the way of every thread trying to post. Qt walks its
+            // postEventList in place and QtMimic swaps its deque; this is the same idea. mEventQueue
+            // is left empty, which is exactly what the drain loop left behind too.
+            eventsToProcess.swap( mEventQueue );
 
             // Publish the batch so unregisterTimer() can cancel entries in it while the handlers
             // below run. Set before *any* dispatching, since a queued metacall can kill a timer just
@@ -269,6 +271,15 @@ namespace QtLikeSignal
     {
         mCv.notify_all();
 
+        // Almost always false, and this runs on every postEvent(), so the whole read below -- a
+        // mutex acquire/release and a std::function copy-construct and destroy -- is skipped for
+        // any thread that is not draining our queue from its own native loop. See
+        // mHasWakeCallback.
+        if( !mHasWakeCallback.load( std::memory_order_acquire ) )
+        {
+            return;
+        }
+
         // Copy under its own lock, then invoke released: this is reached both with and without
         // mMutex held, and the callback is user code that must not be run while holding a lock we
         // might not even own.
@@ -291,6 +302,11 @@ namespace QtLikeSignal
     {
         std::lock_guard<std::mutex> lock( mWakeCallbackMutex );
         mWakeCallback = std::move( aCallback );
+
+        // Published after the callback itself, and read with acquire in wakeWaiter(), so a waker
+        // that sees the flag is guaranteed to see the callback behind it. Still inside the lock so
+        // two concurrent setters cannot leave the flag disagreeing with the callback.
+        mHasWakeCallback.store( static_cast<bool>( mWakeCallback ), std::memory_order_release );
     }
 
     //! Drains OS/platform events. No-op here: the cross-platform dispatcher has no OS event source.
