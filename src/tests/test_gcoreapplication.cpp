@@ -38,7 +38,7 @@ static int execUntilQuit
     Object::connect( stopper.timeout, &stopper, []()
         {
             CoreApplication::quit();
-        }, ConnectionType::DirectConnection );
+        }, ConnectionType::Direct );
     stopper.start( aDelayMs );
     return aApp.exec();
 }
@@ -81,7 +81,7 @@ TEST( CoreApplicationTest, DerivedApplicationRunsAndReturnsExitCode )
     Object::connect( stopper.timeout, &stopper, []()
         {
             CoreApplication::exit( 42 );
-        }, ConnectionType::DirectConnection );
+        }, ConnectionType::Direct );
     stopper.start( 10 );
 
     EXPECT_EQ( app.exec(), 42 );
@@ -244,7 +244,7 @@ TEST( CoreApplicationTest, LoopStillDispatchesAfterAQuitExecCycle )
         {
             timerFired = true;
             CoreApplication::quit();
-        }, ConnectionType::DirectConnection );
+        }, ConnectionType::Direct );
     timer.start( 10 );
 
     EXPECT_EQ( app.exec(), 0 );
@@ -284,7 +284,7 @@ TEST( CoreApplicationTest, NestedExecIsRejected )
             // Re-entering exec() from inside the running loop must be refused, not honoured.
             nestedResult = app.exec();
             CoreApplication::quit();
-        }, ConnectionType::DirectConnection );
+        }, ConnectionType::Direct );
     stopper.start( 10 );
 
     EXPECT_EQ( app.exec(), 0 );
@@ -307,7 +307,7 @@ TEST( CoreApplicationTest, QueuedSignalFromWorkerIsDeliveredOnTheMainThread )
             received.store( aValue );
             ranOn.store( Thread::currentThread() );
             CoreApplication::quit();
-        }, ConnectionType::QueuedConnection );
+        }, ConnectionType::Queued );
 
     std::thread emitter( [&sig]()
         {
@@ -378,7 +378,7 @@ TEST( CoreApplicationTest, TimerFiresOnTheMainThreadLoop )
             {
                 CoreApplication::quit();
             }
-        }, ConnectionType::DirectConnection );
+        }, ConnectionType::Direct );
     timer.start( 5 );
 
     EXPECT_EQ( app.exec(), 0 );

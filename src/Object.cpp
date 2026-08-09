@@ -311,7 +311,7 @@ namespace QtLikeSignal
                     }
                 };
 
-            if( !dispatchMetaCall( aContext, metaCall, ConnectionType::QueuedConnection ) )
+            if( !dispatchMetaCall( aContext, metaCall, ConnectionType::Queued ) )
             {
                 // The target has no dispatcher yet, so this call can never run. Drop the registry
                 // entry we just created: leaving it behind is what made this failure permanent, since
@@ -444,7 +444,7 @@ namespace QtLikeSignal
                         }
                     }
                 },
-                ConnectionType::QueuedConnection );
+                ConnectionType::Queued );
         }
 
         return true;
@@ -685,20 +685,20 @@ namespace QtLikeSignal
 
         Thread* targetThread = aTarget->thread();
         ConnectionType activeType = aType;
-        if( activeType == ConnectionType::AutoConnection )
+        if( activeType == ConnectionType::Auto )
         {
             Thread* currentThread = Thread::currentThread();
             if( currentThread == targetThread )
             {
-                activeType = ConnectionType::DirectConnection;
+                activeType = ConnectionType::Direct;
             }
             else
             {
-                activeType = ConnectionType::QueuedConnection;
+                activeType = ConnectionType::Queued;
             }
         }
 
-        if( activeType == ConnectionType::QueuedConnection )
+        if( activeType == ConnectionType::Queued )
         {
             // Moved, not copied: aSlot is a by-value parameter and is dead after this line, and
             // MetaCallEvent's constructor also takes by value and moves, so copying here bought a

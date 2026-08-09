@@ -87,7 +87,7 @@ TEST( ThreadTest, LifecycleAndSignals )
         thread.started, &context, [&startedFired]()
         {
             startedFired = true;
-        }, ConnectionType::DirectConnection );
+        }, ConnectionType::Direct );
 
     Object::connect(
         thread.finished,
@@ -96,7 +96,7 @@ TEST( ThreadTest, LifecycleAndSignals )
         {
             finishedFired = true;
         },
-        ConnectionType::DirectConnection );
+        ConnectionType::Direct );
 
     thread.start();
     thread.wait();
@@ -157,7 +157,7 @@ TEST( ThreadTest, CreateReturnsAnUnstartedThread )
     Object::connect( threadObj->started, &context, [&startedFired]()
         {
             startedFired.store( true );
-        }, ConnectionType::DirectConnection );
+        }, ConnectionType::Direct );
 
     // Nothing should have happened yet.
     std::this_thread::sleep_for( std::chrono::milliseconds( 20 ) );
@@ -293,8 +293,8 @@ TEST( ThreadTest, PostRunsTaskOnTargetThread )
 }
 
 //! Tests Thread::post() always defers, even when called from the target thread itself.
-//! Regression coverage for the reason post() explicitly requests ConnectionType::QueuedConnection rather
-//! than ConnectionType::AutoConnection: Auto would resolve to a same-thread direct call and run the task
+//! Regression coverage for the reason post() explicitly requests ConnectionType::Queued rather
+//! than ConnectionType::Auto: Auto would resolve to a same-thread direct call and run the task
 //! inline, before post() returns, instead of on a later loop iteration.
 TEST( ThreadTest, PostFromOwnThreadStillDefers )
 {
