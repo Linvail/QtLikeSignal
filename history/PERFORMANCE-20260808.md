@@ -34,7 +34,7 @@ Ratios and scaling curves are the durable part; the nanosecond values are not.
 | P3 | Every emit builds a `std::function` on the heap, even for a direct call | Medium | Measured — +38 ns over raw boost |
 | P4 | One dispatcher mutex serialises every object on a thread | Unknown | Inspection only |
 | P5 | Timer list is scanned linearly twice per dispatch pass | Low | Inspection only |
-| P6 | Dispatch is 2.5–4x Qt 6's; same-thread paths **fixed 2026-08-09**, queued still 2.4x QtMimic | **High** | Measured — `test_QtLikeSignal_Performance.cpp` |
+| P6 | Dispatch is 2–3.5x Qt 6's; same-thread **fixed**, queued improved 17% but still 2x QtMimic | Medium | Measured — `test_QtLikeSignal_Performance.cpp` |
 
 ---
 
@@ -197,11 +197,11 @@ QtMimic and Qt 6 in one process. Median of three runs, `-O2`, no sanitizer:
 | `connect()` | 122 ns | 537 ns | 680 ns | 4.4x | 0.79x |
 | emit → receive, direct | 29 ns | 76 ns | 64 ns | 2.6x | 1.18x |
 | emit → receive, auto same-thread | 28 ns | 98 ns | 99 ns | 3.5x | 0.99x |
-| emit → receive, queued cross-thread | 478 ns | 1240 ns | 504 ns | **2.6x** | **2.5x** |
+| emit → receive, queued cross-thread | 539 ns | 1022 ns | 496 ns | **1.9x** | **2.1x** |
 
-> Same-thread rows above are **after the fix landed on 2026-08-09**; before it they were 150 ns
-> (direct) and 148 ns. See *Same-thread paths: fixed* below. The queued row is unchanged and remains
-> the outstanding item.
+> All rows are **after the 2026-08-09 fixes**. Before them: direct 150 ns, auto 148 ns, queued
+> 1240 ns. The queued row is measured from queued-only runs, which are noticeably less noisy than
+> reading it out of a full run — it is a producer/consumer race, and the numbers spread by ±10%.
 
 Qt is faster on every row, and by a wider margin than the earlier QtMimic-only comparison suggested.
 Qt's direct emit (30 ns) even beats a bare `boost::signals2` emit (51 ns, see P3): its
@@ -242,20 +242,35 @@ It had to be a helper in the .cpp rather than inline logic in the wrapper becaus
 forward-declares `Thread` — which is exactly why the original code deferred everything to
 `dispatchMetaCall()` in the first place.
 
-### The queued path still allocates
+### The queued path: partly fixed, and the rest is structural
 
-The cause is allocation count, confirmed with a counting `operator new`:
+`new MetaCallEvent( aSlot )` copied a by-value parameter that was dead on the next line, at both
+call sites. Moving instead took allocations per queued emit from **3.93 to 2.78** (QtMimic: 2.42) and
+the time from ~1240 ns to ~1022 ns, about 17%.
 
-```
-QtLikeSignal queued: 3.85 allocations per emit
-QtMimic      queued: 2.33 allocations per emit
-```
+Allocation count is now close to parity, so it is no longer what separates us. The remaining
+difference is **one extra lock per emit**, and it is architectural rather than an oversight:
 
-A `std::function` is copied rather than moved along the queued path: `boundSlot` is converted to
-`std::function<void()>` when passed *by value* into `dispatchMetaCallTo()`, copied *again* into
-`MetaCallEvent`'s by-value parameter, and the event itself is heap-allocated. At least one copy is
-free to remove — `new MetaCallEvent( std::move( aSlot ) )`, since `aSlot` is a by-value parameter
-that is dead afterwards — and the wrapper can `std::move( boundSlot )` into the call.
+| | mutexes taken per queued emit |
+|---|---|
+| QtLikeSignal | 3 — `Affinity::data()`, `ThreadData::dispatcher()`, `EventDispatcherDefault::postEvent()` |
+| QtMimic | 2 — `Affinity::data()`, `ThreadData::post()` |
+
+Our `ThreadData` holds a *pointer to a dispatcher object* that owns the queue, so finding the queue
+costs a guarded lookup and a `shared_ptr` copy before the queue's own lock is even taken. QtMimic's
+`ThreadData` owns its mailbox directly, so there is nothing to look up. Qt does the same as QtMimic —
+`QThreadData` owns `postEventList`.
+
+Closing it means one of:
+- making the dispatcher pointer atomically readable, which carries the same lifetime trade-off
+  discussed in P2 (the guarded `shared_ptr` is what makes R12's "dispatcher cannot die mid-call"
+  guarantee hold); or
+- moving the event queue into `ThreadData`, which is what Qt and QtMimic both do, and is the larger
+  change.
+
+Neither is worth doing on microbenchmark evidence alone. Also unmeasured: the consumer copies the
+queue into a fresh `std::vector` on every dispatch pass, where QtMimic swaps its deque, which may
+account for part of the residual 0.36 allocations per emit.
 
 **A syscall hypothesis was checked and rejected.** The obvious suspect for the queued row was
 `EventDispatcherLinux::wakeWaiter()` writing to its eventfd on every post, which QtMimic (condvar
