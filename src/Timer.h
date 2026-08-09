@@ -1,5 +1,5 @@
-#ifndef TIMER_H
-#define TIMER_H
+#ifndef QT_LIKE_SIGNAL_TIMER_H
+#define QT_LIKE_SIGNAL_TIMER_H
 
 #include "Object.h"
 #include "Signal.h"
@@ -254,4 +254,4 @@ namespace QtLikeSignal
     }
 }
 
-#endif // TIMER_H
+#endif // QT_LIKE_SIGNAL_TIMER_H

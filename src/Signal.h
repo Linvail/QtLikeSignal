@@ -1,5 +1,5 @@
-#ifndef SIGNAL_H
-#define SIGNAL_H
+#ifndef QT_LIKE_SIGNAL_SIGNAL_H
+#define QT_LIKE_SIGNAL_SIGNAL_H
 
 #include "Global.h"
 #include <boost/signals2.hpp>
@@ -74,4 +74,4 @@ namespace QtLikeSignal
     };
 }
 
-#endif // SIGNAL_H
+#endif // QT_LIKE_SIGNAL_SIGNAL_H

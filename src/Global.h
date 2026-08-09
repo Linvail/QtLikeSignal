@@ -1,5 +1,5 @@
-#ifndef GLOBAL_H
-#define GLOBAL_H
+#ifndef QT_LIKE_SIGNAL_GLOBAL_H
+#define QT_LIKE_SIGNAL_GLOBAL_H
 
 #include <memory>
 #include <type_traits>
@@ -157,4 +157,4 @@ namespace QtLikeSignal
     #endif
 }
 
-#endif // GLOBAL_H
+#endif // QT_LIKE_SIGNAL_GLOBAL_H
