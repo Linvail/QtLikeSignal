@@ -453,6 +453,14 @@ namespace QtMimic
             return connectImpl( aSignal, aContext, std::forward<Func>( aSlot ), aType );
         }
 
+    protected:
+        //! Construct an Object directly on stable thread data. Used by internal helpers that must
+        //! remain safe if the public Thread object is destroyed concurrently.
+        explicit Object
+            (
+            std::shared_ptr<ThreadData> aThreadData
+            );
+
     private:
         //! Internal implementation of the connect() overloads. Handles thread affinity,
         //! queued/direct invocation, and lifetime management.
@@ -606,6 +614,8 @@ namespace QtMimic
         //! object's own thread, but ~Object() and moveToThread() need it too and neither is bound
         //! quite that tightly, so the list is not single-threaded in practice.
         mutable std::mutex mRunningTimerIdsMutex;
+
+        friend class Timer;
     };
 
 } // namespace QtMimic

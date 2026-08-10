@@ -421,6 +421,40 @@ namespace
         worker.wait();
     }
 
+    //! QTimer restarts an active timer when setInterval() is called, even for the same interval.
+    TEST( TimerTest, SetIntervalRestartsActiveTimerWithNewId )
+    {
+        Thread worker( "timer-change-interval" );
+        worker.start();
+        ASSERT_TRUE( waitUntilRunning( worker ) );
+
+        runOnThread( worker, [&worker]()
+            {
+                Timer timer( &worker );
+                timer.start( 1000 );
+                const int oldId = timer.timerId();
+
+                timer.setInterval( 1000 );
+
+                EXPECT_EQ( timer.interval(), 1000 );
+                EXPECT_TRUE( timer.isActive() );
+                EXPECT_GT( timer.timerId(), 0 );
+                EXPECT_NE( timer.timerId(), oldId );
+                timer.stop();
+            } );
+
+        worker.quit();
+        worker.wait();
+    }
+
+    //! Qt 6.10 and later clamp negative timer intervals to one millisecond.
+    TEST( TimerTest, NegativeIntervalIsClampedToOneMillisecond )
+    {
+        Timer timer;
+        timer.setInterval( -1 );
+        EXPECT_EQ( timer.interval(), 1 );
+    }
+
     //! A repeating timer keeps emitting timeout until it is stopped.
     TEST( TimerTest, RepeatingTimerFiresRepeatedly )
     {
@@ -893,6 +927,33 @@ namespace
         EXPECT_EQ( runs.load(), 0 ) << "the functor ran even though its thread had stopped.";
     }
 
+    //! A context-bound single shot is cancelled when its context is destroyed before expiry.
+    TEST( TimerSingleShotTest, DestroyedContextCancelsMemberCall )
+    {
+        Thread worker( "single-destroyed-context" );
+        worker.start();
+        ASSERT_TRUE( waitUntilRunning( worker ) );
+
+        CountingReceiver* receiver = nullptr;
+        runOnThread( worker, [&]()
+            {
+                receiver = new CountingReceiver( &worker );
+            } );
+
+        Timer::singleShot( 100, receiver, &CountingReceiver::onTimeout );
+
+        runOnThread( worker, [&]()
+            {
+                delete receiver;
+                receiver = nullptr;
+            } );
+
+        std::this_thread::sleep_for( 150ms );
+        drainQueuedTasks( worker );
+        worker.quit();
+        worker.wait();
+    }
+
     //================================================================
     // Event loop interaction
     //================================================================
@@ -1037,7 +1098,7 @@ namespace
         std::vector<std::thread> emitters;
         for( int sender = 0; sender < kEmitters; ++sender )
         {
-            emitters.emplace_back( [&metaCall, sender]()
+            emitters.emplace_back( [&metaCall, sender, kPerEmitter]()
                 {
                     for( int sequence = 0; sequence < kPerEmitter; ++sequence )
                     {
@@ -1050,7 +1111,7 @@ namespace
             emitter.join();
         }
 
-        EXPECT_TRUE( waitFor( [&receiver]()
+        EXPECT_TRUE( waitFor( [&receiver, kExpectedMetaCalls]()
             {
                 return receiver.metaCalls() >= kExpectedMetaCalls;
             } ) ) << "only " << receiver.metaCalls() << " of " << kExpectedMetaCalls
@@ -1127,7 +1188,7 @@ namespace
             std::this_thread::sleep_for( 1ms );
         }
 
-        ASSERT_TRUE( waitFor( [&receiver]()
+        ASSERT_TRUE( waitFor( [&receiver, kRounds, kPerRound]()
             {
                 return receiver.metaCalls() >= kRounds * kPerRound;
             } ) ) << "the timer starved the mailbox: only " << receiver.metaCalls() << " of "
@@ -1182,7 +1243,7 @@ namespace
             metaCall.emit( 0, sequence );
         }
 
-        EXPECT_TRUE( waitFor( [&receiver]()
+        EXPECT_TRUE( waitFor( [&receiver, kPosts]()
             {
                 return receiver.metaCalls() >= kPosts;
             } ) ) << "a zero-interval timer starved the mailbox: only " << receiver.metaCalls()

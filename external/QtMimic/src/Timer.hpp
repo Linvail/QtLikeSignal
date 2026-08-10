@@ -216,10 +216,9 @@ namespace QtMimic
             return;
         }
 
-        // Read once: the context is alive for the duration of this call (the caller handed it to
-        // us), and everything below goes through the Thread's own thread-safe entry points.
-        Thread* const contextThread = aContext->thread();
-        if( !contextThread )
+        const std::shared_ptr<ThreadData> contextData = aContext->threadDataRef();
+        const std::weak_ptr<int> contextLife = aContext->mLife;
+        if( !contextData || contextData->thread() == nullptr || contextLife.expired() )
         {
             // Detached object: no loop would ever deliver the timer, so there is nothing to arm.
             return;
@@ -231,11 +230,13 @@ namespace QtMimic
         public:
             SingleShotContextHelper
                 (
-                Thread* aOwner,
+                std::shared_ptr<ThreadData> aOwnerData,
+                std::weak_ptr<int> aContextLife,
                 int aMs,
                 Functor aFn
                 )
-                : Object( aOwner )
+                : Object( std::move( aOwnerData ) )
+                , mContextLife( std::move( aContextLife ) )
                 , mFn( std::move( aFn ) )
                 , mInterval( aMs )
             {
@@ -246,6 +247,11 @@ namespace QtMimic
             //! Public only so the posted task below can target it; it is not part of any API.
             void arm()
             {
+                if( mContextLife.expired() )
+                {
+                    delete this;
+                    return;
+                }
                 mId = startTimer( mInterval );
                 if( mId == -1 )
                 {
@@ -268,11 +274,15 @@ namespace QtMimic
                 killTimer( mId );  // see SingleShotHelper::timerEvent() for why this is not deferred
                 mId = -1;
 
-                mFn();
+                if( !mContextLife.expired() )
+                {
+                    mFn();
+                }
                 deleteLater();
             }
 
         private:
+            std::weak_ptr<int> mContextLife;
             Functor mFn;
             int mInterval { 0 };
             int mId { -1 };
@@ -283,13 +293,13 @@ namespace QtMimic
         // which is what the hop below is for -- Qt does the same in
         // QSingleShotTimer::startTimerForReceiver(), arming directly when the receiver is on the
         // current thread and posting to start it there otherwise.
-        auto* helper = new SingleShotContextHelper( contextThread, aMsec, aFunctor );
+        auto* helper = new SingleShotContextHelper( contextData, contextLife, aMsec, aFunctor );
 
-        if( Thread::currentThread() == contextThread )
+        if( Thread::currentData() == contextData )
         {
             helper->arm();  // may delete itself; do not touch `helper` afterwards
         }
-        else if( !contextThread->post( [helper]()
+        else if( !contextData->post( [helper]()
             {
                 helper->arm();
             } ) )

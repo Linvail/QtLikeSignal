@@ -6,6 +6,8 @@
 
 #include "Timer.hpp"
 
+#include <cstdio>
+
 namespace QtMimic
 {
 
@@ -40,14 +42,25 @@ namespace QtMimic
         return mInterval;
     }
 
-    //! @brief Set the interval. Takes effect on the next start(); it does not reschedule a running
-    //! timer, matching QTimer.
+    //! @brief Set the interval. A running timer is stopped and restarted with a new timer id,
+    //! matching QTimer.
     void Timer::setInterval
         (
         int aMsec  //!< Interval in milliseconds.
         )
     {
+        if( aMsec < 0 )
+        {
+            std::fprintf( stderr,
+                "Timer::setInterval: negative intervals are not allowed; using 1 ms\n" );
+            aMsec = 1;
+        }
+
         mInterval = aMsec;
+        if( mActive )
+        {
+            start();
+        }
     }
 
     //! @return true while the timer is running.
@@ -90,6 +103,12 @@ namespace QtMimic
         int aMsec  //!< Interval in milliseconds.
         )
     {
+        if( aMsec < 0 )
+        {
+            std::fprintf( stderr,
+                "Timer::start: negative intervals are not allowed; using 1 ms\n" );
+            aMsec = 1;
+        }
         mInterval = aMsec;
         start();
     }
@@ -99,8 +118,17 @@ namespace QtMimic
     //! **Must be called from this timer's own thread**; see start(int).
     void Timer::start()
     {
-        stop();
-        mTimerId = startTimer( mInterval );
+        const int oldTimerId = mActive ? mTimerId : -1;
+        const int newTimerId = startTimer( mInterval );
+
+        // Keep the old id reserved until its replacement has been allocated. Otherwise the shared
+        // FIFO pool can immediately hand the same id back, violating QTimer's restart contract.
+        if( oldTimerId != -1 )
+        {
+            killTimer( oldTimerId );
+        }
+
+        mTimerId = newTimerId;
         mActive = ( mTimerId != -1 );
     }
 

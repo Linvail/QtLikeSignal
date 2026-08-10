@@ -19,6 +19,9 @@
 
 #if defined( _WIN32 )
     #include <windows.h>
+#elif defined( __linux__ )
+    #include <pthread.h>
+    #include <sched.h>
 #endif
 
 namespace
@@ -104,6 +107,34 @@ namespace
         thread.quit();
         thread.wait();
     }
+
+    #if defined( __linux__ ) && defined( SCHED_IDLE )
+        //! The POSIX backend must apply priority to the native thread, not only cache the enum.
+        TEST( ThreadPriority, IdlePriorityReachesPosixScheduler )
+        {
+            Thread thread( "prio-posix-idle" );
+            thread.start();
+            ASSERT_TRUE( waitUntilRunning( thread ) );
+
+            thread.setPriority( Thread::IdlePriority );
+
+            std::promise<int> sampledPolicy;
+            auto sampledPolicyFuture = sampledPolicy.get_future();
+            ASSERT_TRUE( thread.post( [&sampledPolicy]()
+                {
+                    int policy = 0;
+                    sched_param param {};
+                    EXPECT_EQ( pthread_getschedparam( pthread_self(), &policy, &param ), 0 );
+                    sampledPolicy.set_value( policy );
+                } ) );
+
+            ASSERT_EQ( sampledPolicyFuture.wait_for( 5s ), std::future_status::ready );
+            EXPECT_EQ( sampledPolicyFuture.get(), SCHED_IDLE );
+
+            thread.quit();
+            thread.wait();
+        }
+    #endif
 
     //! InheritPriority is rejected by the setter and does not disturb the current value.
     TEST( ThreadPriority, InheritPriorityIsRejected )
@@ -377,7 +408,7 @@ namespace
             }
 
             thread.quit();
-            thread.join();
+            thread.wait();
         }
 
         //! A priority passed to start() reaches the OS thread, not just our own bookkeeping.
@@ -401,7 +432,7 @@ namespace
                 << "start( Priority ) did not reach the OS thread";
 
             thread.quit();
-            thread.join();
+            thread.wait();
         }
 
         //! The priority is already in force by the time the loop's started signal fires, on the
@@ -448,9 +479,9 @@ namespace
                 << "the loop started before start()'s priority reached the OS thread";
 
             thread.quit();
-            thread.join();
+            thread.wait();
             localThread.quit();
-            localThread.join();
+            localThread.wait();
         }
 
         //! InheritPriority means the creating thread's priority, and has to be made to happen.
@@ -512,9 +543,9 @@ namespace
                 << "an inherited priority is still reported as InheritPriority";
 
             thread.quit();
-            thread.join();
+            thread.wait();
             localThread.quit();
-            localThread.join();
+            localThread.wait();
         }
 
     #endif // _WIN32

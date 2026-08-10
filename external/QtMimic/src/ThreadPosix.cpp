@@ -135,6 +135,7 @@ namespace QtMimic
             // the requested priority.
             #if defined( QT_MIMIC_HAS_THREAD_PRIORITY_SCHEDULING )
                 pthread_attr_setinheritsched( &attr, PTHREAD_INHERIT_SCHED );
+                mPriorityNeedsReset = ( mPriority != InheritPriority );
             #endif
             code = pthread_create( &mThreadId, &attr, &threadEntry, this );
         }
@@ -176,8 +177,42 @@ namespace QtMimic
         Priority aPriority
         )
     {
-        // No priority scheduling on this platform; the value is recorded and nothing else.
-        ( void )aPriority;
+        #if defined( QT_MIMIC_HAS_THREAD_PRIORITY_SCHEDULING )
+            int schedPolicy = 0;
+            sched_param param {};
+            if( pthread_getschedparam( mThreadId, &schedPolicy, &param ) != 0 )
+            {
+                std::fprintf( stderr,
+                    "Thread::setPriority: cannot get scheduler parameters\n" );
+                return;
+            }
+
+            int prio = 0;
+            if( !calculateUnixPriority( aPriority, &schedPolicy, &prio ) )
+            {
+                std::fprintf( stderr,
+                    "Thread::setPriority: cannot determine scheduler priority range\n" );
+                return;
+            }
+
+            param.sched_priority = prio;
+            const int status = pthread_setschedparam( mThreadId, schedPolicy, &param );
+
+            #ifdef SCHED_IDLE
+                if( status == EINVAL && schedPolicy == SCHED_IDLE )
+                {
+                    if( pthread_getschedparam( mThreadId, &schedPolicy, &param ) == 0 )
+                    {
+                        param.sched_priority = sched_get_priority_min( schedPolicy );
+                        pthread_setschedparam( mThreadId, schedPolicy, &param );
+                    }
+                }
+            #else
+                ( void )status;
+            #endif
+        #else
+            ( void )aPriority;
+        #endif
     }
 
     //! @brief Block until the event loop has exited and the OS thread has been reaped.

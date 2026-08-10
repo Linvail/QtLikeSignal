@@ -7,6 +7,7 @@
 
 #include "Object.hpp"
 
+#include <climits>
 #include <cstdio>
 #include <deque>
 
@@ -45,7 +46,9 @@ namespace QtMimic
                 {
                     return -1;
                 }
-                return sNextFresh++;
+                const int id = sNextFresh;
+                sNextFresh = ( sNextFresh == INT_MAX ) ? -1 : sNextFresh + 1;
+                return id;
             }
 
             //! Returns an id to the pool.
@@ -88,8 +91,16 @@ namespace QtMimic
     // object's affinity can never become a dangling pointer. currentData() auto-adopts the
     // calling thread exactly as current() does when no thread is given. Held in an Affinity
     // box read at emit time, so a later moveToThread() redirects existing connections too.
-        : mAffinity( std::make_shared<Affinity>( aThread ? aThread->data() :
-            Thread::currentData() ) )
+        : Object( aThread ? aThread->data() : Thread::currentData() )
+    {
+    }
+
+    //! @brief Constructor for internal helpers that already hold stable ThreadData.
+    Object::Object
+        (
+        std::shared_ptr<ThreadData> aThreadData
+        )
+        : mAffinity( std::make_shared<Affinity>( std::move( aThreadData ) ) )
         , mLife( std::make_shared<int>( 0 ) )
     {
     }
