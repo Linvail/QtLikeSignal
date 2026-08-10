@@ -11,6 +11,13 @@ namespace QtMimic
 
     CoreApplication* CoreApplication::sInstance = nullptr;
 
+    //! @brief Constructor - adopt the calling (main) thread, with no command-line arguments.
+    CoreApplication::CoreApplication()
+        : Object( nullptr )
+    {
+        sInstance = this;
+    }
+
     //! @brief Constructor - adopt the calling (main) thread and capture command-line arguments.
     //! Creates a singleton CoreApplication instance. There can be at most one instance.
     CoreApplication::CoreApplication

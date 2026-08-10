@@ -1,11 +1,14 @@
-#include <gtest/gtest.h>
+#include "QtLikeSignal-test-types.h"
+#include "TestCpuTime.h"
+
+#include "gtest/gtest.h"
 #include "CoreApplication.h"
 #include "Object.h"
 #include "Signal.h"
 #include "Thread.h"
-#include "TestCpuTime.h"
 #include "Timer.h"
 #include <atomic>
+#include <memory>
 #include <chrono>
 #include <future>
 #include <thread>
@@ -21,6 +24,38 @@ using namespace QtLikeSignal;
 //! returning. That matters more than usual: gtest runs every test on one thread, and an application
 //! left alive would keep that thread's platform dispatcher -- and the singleton instance() reports
 //! -- in place for every test that follows.
+
+//! Allocates an Object that sets @p aFlag when it is destroyed.
+//!
+//! Written against the destructor rather than addCleanupCallback(), which only one of the two
+//! libraries has -- a subclass observing its own destruction says the same thing everywhere.
+static Object* newDestructionProbe
+    (
+    std::shared_ptr<std::atomic<bool> > aFlag  //!< Set to true when the returned object dies.
+    )
+{
+    class DestructionProbe : public Object
+    {
+    public:
+        explicit DestructionProbe
+            (
+            std::shared_ptr<std::atomic<bool> > aTarget
+            )
+            : mTarget( std::move( aTarget ) )
+        {
+        }
+
+        virtual ~DestructionProbe() override
+        {
+            mTarget->store( true );
+        }
+
+    private:
+        std::shared_ptr<std::atomic<bool> > mTarget;
+    };
+
+    return new DestructionProbe( std::move( aFlag ) );
+}
 
 //! Runs the application's event loop and returns once quit() has taken effect.
 //!
@@ -112,7 +147,9 @@ TEST( CoreApplicationTest, ApplicationRunsOnTheAlreadyAdoptedThreadAndLeavesItUs
 {
     Thread* const adopted = Thread::currentThread();
     ASSERT_NE( adopted, nullptr ) << "every thread should be adopted on demand";
-    EXPECT_TRUE( adopted->isAdopted() );
+    #if LIB_HAS_THREAD_IS_ADOPTED
+        EXPECT_TRUE( adopted->isAdopted() );
+    #endif
 
     {
         CoreApplication app;
@@ -127,16 +164,29 @@ TEST( CoreApplicationTest, ApplicationRunsOnTheAlreadyAdoptedThreadAndLeavesItUs
 
     // The thread is owned by a thread_local inside Thread, not by the application, so it survives.
     EXPECT_EQ( Thread::currentThread(), adopted );
-    EXPECT_NE( adopted->eventDispatcher(), nullptr )
-        << "the application stripped the thread's dispatcher on the way out, which would silently "
-        "break every Object still living on it.";
+    #if LIB_HAS_EVENT_DISPATCHER
+        EXPECT_NE( adopted->eventDispatcher(), nullptr )
+            << "the application stripped the thread's dispatcher on the way out, which would "
+            "silently break every Object still living on it.";
+    #endif
 
     // And it still works: a queued call must be deliverable, drained by processEvents() since no
     // loop is running here any more.
-    Object receiver;
-    Object::callLater( &receiver, &Object::setObjectName, std::string( "ok" ) );
-    adopted->processEvents();
-    EXPECT_EQ( receiver.objectName(), "ok" );
+    #if LIB_HAS_CALL_LATER && LIB_HAS_OBJECT_NAME
+        Object receiver;
+        Object::callLater( &receiver, &Object::setObjectName, std::string( "ok" ) );
+        adopted->processEvents();
+        EXPECT_EQ( receiver.objectName(), "ok" );
+    #else
+        // Same property without callLater(): a task posted to the adopted thread must still run.
+        bool ran = false;
+        adopted->post( [&ran]()
+            {
+                ran = true;
+            } );
+        adopted->processEvents();
+        EXPECT_TRUE( ran );
+    #endif
 }
 
 //! Verifies the command-line overload captures arguments and the default constructor reports none.
@@ -213,6 +263,7 @@ TEST( CoreApplicationTest, ReExecAfterQuitBlocksInsteadOfSpinning )
         "latched again.";
 }
 
+#if LIB_HAS_ADOPTION_SURVIVES_EXEC  // otherwise the loop un-adopts the caller on the way out
 //! Verifies the loop still dispatches work on a *second* exec(), not merely that it stops spinning.
 //!
 //! The CPU check above catches the symptom; this catches the more damaging half of the same defect.
@@ -255,7 +306,9 @@ TEST( CoreApplicationTest, LoopStillDispatchesAfterAQuitExecCycle )
         << "after one quit()/exec() cycle the loop stopped dispatching entirely: the timer never "
         "fired, so processEvents() is returning before it reaches the queue.";
 }
+#endif
 
+#if LIB_HAS_EXEC_GUARDS  // without the guard this blocks forever instead of returning
 //! Verifies exec() is rejected from a thread other than the one the application adopted.
 TEST( CoreApplicationTest, ExecFromAnotherThreadIsRejected )
 {
@@ -270,7 +323,9 @@ TEST( CoreApplicationTest, ExecFromAnotherThreadIsRejected )
 
     EXPECT_EQ( result, -1 ) << "exec() must refuse to run the main loop on a foreign thread.";
 }
+#endif
 
+#if LIB_HAS_EXEC_GUARDS  // without the guard the nested call blocks forever
 //! Verifies a nested exec() is rejected rather than starting a second loop on one thread.
 TEST( CoreApplicationTest, NestedExecIsRejected )
 {
@@ -290,6 +345,7 @@ TEST( CoreApplicationTest, NestedExecIsRejected )
     EXPECT_EQ( app.exec(), 0 );
     EXPECT_EQ( nestedResult, -1 ) << "a nested exec() must be refused.";
 }
+#endif
 
 //! Verifies queued work posted from a worker thread is delivered on the main thread's loop.
 TEST( CoreApplicationTest, QueuedSignalFromWorkerIsDeliveredOnTheMainThread )
@@ -328,11 +384,7 @@ TEST( CoreApplicationTest, DeleteLaterIsProcessedByTheMainLoop )
     CoreApplication app;
 
     auto destroyed = std::make_shared<std::atomic<bool> >( false );
-    Object* victim = new Object();
-    victim->addCleanupCallback( [destroyed]()
-        {
-            destroyed->store( true );
-        } );
+    Object* victim = newDestructionProbe( destroyed );
     victim->deleteLater();
 
     EXPECT_EQ( execUntilQuit( app, 20 ), 0 );
@@ -340,6 +392,7 @@ TEST( CoreApplicationTest, DeleteLaterIsProcessedByTheMainLoop )
         << "deleteLater() on the main thread was never dispatched by exec().";
 }
 
+#if LIB_HAS_SHUTDOWN_DEFERRED_DELETE  // the object is leaked instead, which only a leak checker would notice
 //! Verifies a deleteLater() still pending when the application shuts down is not leaked.
 //!
 //! Worker threads already drained deferred deletes on shutdown; the main thread had no equivalent,
@@ -352,11 +405,7 @@ TEST( CoreApplicationTest, PendingDeleteLaterIsProcessedWhenTheApplicationShutsD
     {
         CoreApplication app;
 
-        Object* victim = new Object();
-        victim->addCleanupCallback( [destroyed]()
-            {
-                destroyed->store( true );
-            } );
+        Object* victim = newDestructionProbe( destroyed );
         victim->deleteLater();
 
         // Deliberately no exec() -- the deferred delete is still queued at destruction.
@@ -364,6 +413,7 @@ TEST( CoreApplicationTest, PendingDeleteLaterIsProcessedWhenTheApplicationShutsD
     EXPECT_TRUE( destroyed->load() )
         << "a deleteLater() still pending at application shutdown was leaked instead of run.";
 }
+#endif
 
 //! Verifies a Timer created on the main thread fires from the application's loop.
 TEST( CoreApplicationTest, TimerFiresOnTheMainThreadLoop )

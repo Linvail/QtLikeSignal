@@ -36,7 +36,7 @@ timer:15
 stress:20
 object:1300
 thread:20
-coreapplication:450
+coreapplication:20
 thread-priority:15
 "
 

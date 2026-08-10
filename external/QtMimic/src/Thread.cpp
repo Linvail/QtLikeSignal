@@ -172,8 +172,15 @@ namespace QtMimic
     int Thread::exec()
     {
         mId = std::this_thread::get_id();
+
+        // Reset the mailbox the way start() does. Without this a second exec() -- after a quit()
+        // has already cleared mRunning -- returns instantly with no loop at all, so a program that
+        // re-enters its own event loop silently stops processing events. start() has always done
+        // this; exec() is the other way into loop() and was missing it.
+        mData->prepareForRun();
+
         loop();
-        return mExitCode;
+        return mExitCode.load();
     }
 
     //! @brief Install an external event dispatcher invoked once per loop iteration. Lets external
@@ -269,7 +276,7 @@ namespace QtMimic
         int aCode
         )
     {
-        mExitCode = aCode;
+        mExitCode.store( aCode );
         quit();
     }
 

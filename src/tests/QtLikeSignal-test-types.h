@@ -30,9 +30,13 @@
 #define LIB_HAS_CLEANUP_CALLBACKS          1  //!< Object::addCleanupCallback()
 #define LIB_HAS_VIRTUAL_RUN                1  //!< Thread::run() is virtual and subclassable
 #define LIB_HAS_THREAD_CREATE              1  //!< Thread::create()
+#define LIB_HAS_THREAD_IS_ADOPTED          1  //!< Thread::isAdopted()
 #define LIB_HAS_THREAD_IS_RUNNING          1  //!< Thread::isRunning()/isFinished()
 #define LIB_HAS_WAIT_TIMEOUT               1  //!< Thread::wait( ms ) returning bool
 #define LIB_HAS_POST_REJECTED_BEFORE_START 1  //!< post() fails until the dispatcher exists
+#define LIB_HAS_ADOPTION_SURVIVES_EXEC     1  //!< the caller is still its own Thread after exec()
+#define LIB_HAS_EXEC_GUARDS                1  //!< exec() rejects nested and off-thread calls
+#define LIB_HAS_SHUTDOWN_DEFERRED_DELETE   1  //!< pending deleteLater() runs at app shutdown
 #define LIB_HAS_INCOMING_CONNECTION_COUNT  0  //!< Object::incomingConnectionCount()
 #define LIB_HAS_EXTERNAL_DISPATCHER        0  //!< Thread::setDispatcher()/setWaiter()
 

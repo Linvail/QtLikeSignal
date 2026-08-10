@@ -36,6 +36,10 @@ namespace QtMimic
     class CoreApplication : public Object
     {
     public:
+        //! Constructs an application with no command-line arguments, for code that has none to
+        //! pass on -- a test, or a program embedding the loop. arguments() is then empty.
+        CoreApplication();
+
         CoreApplication
             (
             int aArgc,

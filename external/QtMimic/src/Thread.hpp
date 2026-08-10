@@ -8,6 +8,7 @@
 #ifndef QT_MIMIC_THREAD_HPP
 #define QT_MIMIC_THREAD_HPP
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -247,7 +248,9 @@ namespace QtMimic
 
         std::thread::id mId;                      //!< Id of the OS thread, set from inside it.
         bool mAdopted = false; //!< True if this represents an already-running native thread
-        int mExitCode = 0; //!< Value returned by exec()
+        //! Value returned by exec(). Atomic because exit() may be called from any thread while
+        //! the loop thread is about to read it -- ThreadSanitizer flags the plain int.
+        std::atomic<int> mExitCode { 0 };
         std::function<void( int )> mDispatcher; //!< External event pump (optional)
         std::function<void( int )> mWaiter;   //!< External blocking wait (optional)
         int mWaiterTimeoutMs = -1;            //!< Timeout for external wait (optional)
