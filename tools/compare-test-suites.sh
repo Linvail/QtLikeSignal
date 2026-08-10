@@ -37,9 +37,13 @@ stress:20
 object:1300
 thread:450
 coreapplication:450
-thread-priority:850
-defect-regressions:1900
+thread-priority:25
 "
+
+# Deliberately NOT compared: defect-regressions. A regression suite is a record of what actually
+# broke in that codebase, so the two are supposed to differ -- QtMimic never had QtLikeSignal's
+# dispatcher bugs and QtLikeSignal never had QtMimic's. Tracking them here would imply a
+# convergence that should not happen. See the plan's category C.
 
 # Collapses the differences that are legal by design, so what remains is real drift.
 normalise()

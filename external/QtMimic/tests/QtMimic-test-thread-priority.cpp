@@ -43,12 +43,22 @@ namespace
     {
         std::promise<void> ran;
         std::future<void> ranFuture = ran.get_future();
-        if( !aThread.post( [&ran]()
+        const auto deadline = std::chrono::steady_clock::now()
+            + std::chrono::milliseconds( aTimeoutMs );
+
+        // Retried rather than posted once: a thread whose loop has not come up yet may refuse the
+        // task outright, which is a "not ready" answer and not a failure. Posting once and giving
+        // up turns the ordinary startup race into a test failure.
+        while( !aThread.post( [&ran]()
             {
                 ran.set_value();
             } ) )
         {
-            return false;
+            if( std::chrono::steady_clock::now() > deadline )
+            {
+                return false;
+            }
+            std::this_thread::yield();
         }
         return ranFuture.wait_for( std::chrono::milliseconds( aTimeoutMs ) ) ==
                std::future_status::ready;
