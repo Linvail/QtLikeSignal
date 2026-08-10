@@ -27,9 +27,19 @@ namespace QtLikeSignal
     class Thread : public Object
     {
     public:
-        Thread();
+        //! Constructs an unstarted thread with an optional name.
+        //!
+        //! The name is descriptive only -- it is not pushed to the OS and nothing keys off it. It
+        //! exists so a thread can identify itself in a log or a test failure, which matters most
+        //! exactly when several are running at once.
+        explicit Thread
+            (
+            const std::string& aName = std::string()
+            );
 
         virtual ~Thread() override;
+
+        const std::string& name() const;
 
         //! Scheduling priority of a thread, mirroring QThread::Priority.
         //!
@@ -188,6 +198,7 @@ namespace QtLikeSignal
             bool mJoinable { false };
         #endif
 
+        std::string mName;                        //!< Descriptive name; see the constructor.
         std::shared_ptr<ThreadData> mData;        //!< This thread's dispatcher-holding data.
         std::atomic<bool> mHasFinished { false };  //!< True once the OS thread has finished.
 

@@ -95,14 +95,18 @@ namespace QtLikeSignal
     std::deque<int> TimerIdPool::sFree;
     int TimerIdPool::sNextFresh = 1;
 
-    //! Constructs an object.
-    Object::Object()
+    //! Constructs an object living in the given thread, or in the calling thread if none is given.
+    Object::Object
+        (
+        Thread* aThread  //!< Thread this object lives in; null means the calling thread.
+        )
         : mLife( std::make_shared<int>( 0 ) )
         // Store the thread's ThreadData, not the Thread itself: it outlives the Thread, so this
         // object's affinity can never become a dangling pointer. Held in an Affinity box read at
         // emit time, so a later moveToThread() redirects existing connections too.
         , mAffinity( std::make_shared<Affinity>(
-            Thread::currentThread() ? Thread::currentThread()->threadData() : nullptr ) )
+            aThread ? aThread->threadData()
+            : ( Thread::currentThread() ? Thread::currentThread()->threadData() : nullptr ) ) )
     {
     }
 

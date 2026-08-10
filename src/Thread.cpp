@@ -15,12 +15,23 @@ namespace QtLikeSignal
     thread_local std::unique_ptr<Thread> Thread::sAdoptedThread;
     thread_local bool Thread::sAdopting = false;
 
-    //! Constructs a new thread object.
-    Thread::Thread()
+    //! Constructs a new thread object with an optional descriptive name.
+    Thread::Thread
+        (
+        const std::string& aName  //!< Descriptive name; empty by default.
+        )
         : Object()
+        , mName( aName )
     {
         mData = std::make_shared<ThreadData>();
         mData->setThread( this );
+    }
+
+    //! Gets this thread's descriptive name, empty if it was not given one. Thread-safe: the name
+    //! is set at construction and never changes.
+    const std::string& Thread::name() const
+    {
+        return mName;
     }
 
     //! Destroys the thread, waiting for it to finish if running.

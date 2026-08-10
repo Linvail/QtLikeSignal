@@ -16,7 +16,10 @@ namespace QtLikeSignal
     class Timer : public Object
     {
     public:
-        Timer();
+        explicit Timer
+            (
+            Thread* aThread = nullptr
+            );
 
         virtual ~Timer() override;
 
@@ -91,6 +94,19 @@ namespace QtLikeSignal
             ) override;
 
     private:
+        //! Corrects a caller-supplied interval to one a timer can actually run at.
+        //!
+        //! Mirrors Qt's checkInterval() in qtimer.cpp, including its choice to correct rather than
+        //! reject: Qt treats a negative interval as a caller mistake worth reporting but not worth
+        //! cancelling the call over, so the timer still runs, just at the shortest interval there
+        //! is. Shared by every entry point that takes one so none of them can drift from the
+        //! others. Returns the interval to use, in milliseconds.
+        static int checkInterval
+            (
+            const char* aCaller,  //!< Name of the calling function, for the warning text.
+            int aMsec             //!< The requested interval, in milliseconds.
+            );
+
         // Deliberately unsynchronised, matching QTimer, which has no locking of any kind. Every
         // member here is only ever touched from the timer's own thread: start()/stop() are
         // thread-confined because they go through Object::startTimer()/killTimer(), and timerEvent()
@@ -114,6 +130,8 @@ namespace QtLikeSignal
         Functor aFunctor  //!< Slot function to execute.
         )
     {
+        aMsec = checkInterval( "Timer::singleShot", aMsec );
+
         //! Self-deleting helper that fires functor once when its timer expires.
         class SingleShotHelper : public Object
         {
@@ -167,6 +185,10 @@ namespace QtLikeSignal
         Functor aFunctor            //!< Slot function to execute.
         )
     {
+        // Checked before the context is, as Qt does: the warning is about what the caller passed,
+        // so it is worth reporting whether or not there is a context to run it against.
+        aMsec = checkInterval( "Timer::singleShot", aMsec );
+
         if( !aContext )
         {
             return;
@@ -177,10 +199,12 @@ namespace QtLikeSignal
         public:
             SingleShotContextHelper
                 (
+                std::weak_ptr<int> aContextLife,
                 int aMs,
                 Functor aFn
                 )
-                : mFn( std::move( aFn ) )
+                : mContextLife( std::move( aContextLife ) )
+                , mFn( std::move( aFn ) )
                 , mInterval( aMs )
             {
             }
@@ -190,6 +214,13 @@ namespace QtLikeSignal
             //! Public only so callLater() can target it; it is not part of any API.
             void arm()
             {
+                if( mContextLife.expired() )
+                {
+                    // The context died between the call and this hop. Qt's QSingleShotTimer is
+                    // parented to the receiver and dies with it; this is the same guarantee.
+                    delete this;
+                    return;
+                }
                 mId = startTimer( mInterval );
                 if( mId == -1 )
                 {
@@ -204,20 +235,28 @@ namespace QtLikeSignal
                 TimerEvent* aEvent
                 ) override
             {
-                if( aEvent->timerId() == mId )
+                if( !aEvent || aEvent->timerId() != mId )
+                {
+                    return;
+                }
+
+                // Re-checked here and not only in arm(): the context may have been destroyed at any
+                // point during the delay, and the functor commonly captures it.
+                if( !mContextLife.expired() )
                 {
                     mFn();
-                    deleteLater();
                 }
+                deleteLater();
             }
 
         private:
+            std::weak_ptr<int> mContextLife;
             Functor mFn;
             int mInterval { 0 };
             int mId { -1 };
         };
 
-        auto*    helper = new SingleShotContextHelper( aMsec, aFunctor );
+        auto*    helper = new SingleShotContextHelper( aContext->objectLife(), aMsec, aFunctor );
         Object* ctx    = const_cast<Object*>( aContext );
 
         // startTimer() is thread-confined, so the timer has to be registered on the thread that will

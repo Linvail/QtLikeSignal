@@ -29,7 +29,16 @@ namespace QtLikeSignal
     class Object
     {
     public:
-        Object();
+        //! Constructs an object living in @p aThread.
+        //!
+        //! Null -- the default -- means the thread that is constructing it, which is what a
+        //! parent-less QObject gets. Passing the thread explicitly is equivalent to constructing
+        //! and then calling moveToThread(), but is available to an object being built *on* another
+        //! thread, where moveToThread() would be refused as a pull.
+        explicit Object
+            (
+            Thread* aThread = nullptr
+            );
 
         virtual ~Object();
 
