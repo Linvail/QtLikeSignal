@@ -371,9 +371,10 @@ namespace QtMimic
         return currentThread()->data();
     }
 
-    //! @brief Worker function that runs the event loop on a newly-created thread.
+    //! @brief Everything the new thread must do whether or not run() is overridden: publish the
+    //! thread id, apply a priority the kernel refused at creation, then hand over to run().
     //! @private
-    void Thread::run()
+    void Thread::threadBody()
     {
         mId = std::this_thread::get_id();
 
@@ -392,6 +393,26 @@ namespace QtMimic
             }
         }
 
+        // Register this thread so objects constructed on it (via Thread::currentThread()) and
+        // Objects default-bound to it resolve to this Thread, and announce the lifecycle -- both
+        // around run() rather than inside loop(), so a subclass that overrides run() and never
+        // enters the loop still gets them. Qt does the same: started() and finished() are emitted
+        // by QThreadPrivate either side of run(), not by the event loop.
+        tCurrentThread = this;
+
+        mStarted.emit();
+
+        run();
+
+        mFinished.emit();
+
+        tCurrentThread = nullptr;
+    }
+
+    //! @brief The body the new thread executes. The default runs the event loop until quit()/exit();
+    //! override to do something else, as with QThread::run().
+    void Thread::run()
+    {
         loop();
     }
 
@@ -406,13 +427,11 @@ namespace QtMimic
     {
         bool stop = false;
 
-        // Register this thread so objects constructed on it (via Thread::currentThread())
-        // and Objects default-bound to it resolve to this Thread. This runs on
-        // this thread, so the thread_local naturally scopes to us.
+        // Registered here as well as in threadBody(), because exec() reaches this without going
+        // through threadBody() at all -- that is how CoreApplication turns the caller into a
+        // Thread. Setting it twice on the started-thread path is harmless; not setting it on the
+        // exec() path would leave that thread unable to resolve its own affinity.
         tCurrentThread = this;
-
-        // Qt-like lifecycle signal: emitted when the event loop starts running.
-        mStarted.emit();
 
         // When a dispatcher is present it polls external (OS) sources, so the loop
         // must not block indefinitely on the condition variable; give it a small
@@ -527,9 +546,6 @@ namespace QtMimic
         // The event loop has exited; clear our per-thread registration. mAccepting was already
         // cleared above, atomically with the decision to stop -- see that block's comment.
         tCurrentThread = nullptr;
-
-        // Qt-like lifecycle signal: emitted when the event loop has finished.
-        mFinished.emit();
     }
 
     //! @return the underlying std::thread id (valid after start()).

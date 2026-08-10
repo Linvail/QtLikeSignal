@@ -27,79 +27,6 @@ namespace
     using namespace std::chrono_literals;
     using namespace QtLikeSignal;
 
-    //! How long a test waits for something that should happen within a few timer intervals. Long
-    //! enough that a loaded CI box does not fail spuriously, short enough that a genuine hang is
-    //! still a test failure rather than a timeout at a higher level.
-    constexpr auto kPatience = 5s;
-
-    //! Posts a task and blocks until it has run, which can only happen once the thread's loop is
-    //! actually draining its queue. isRunning() would answer a weaker question -- the thread
-    //! exists -- where a round-trip through post() also proves the loop is servicing work.
-    //! @return true if the thread drained the marker task in time.
-    bool waitUntilRunning
-        (
-        Thread& aThread  //!< The thread to wait for.
-        )
-    {
-        std::promise<void> running;
-        auto runningFuture = running.get_future();
-        const auto deadline = std::chrono::steady_clock::now() + kPatience;
-        while( !aThread.post( [&running]()
-            {
-                running.set_value();
-            } ) )
-        {
-            if( std::chrono::steady_clock::now() > deadline )
-            {
-                return false;
-            }
-            std::this_thread::yield();
-        }
-        return runningFuture.wait_for( kPatience ) == std::future_status::ready;
-    }
-
-    //! Runs @p aBody on @p aThread and blocks until it has finished. Timer start()/stop() are
-    //! thread-confined, so nearly every test here needs to get onto the worker before touching one.
-    template <typename Body> void runOnThread
-        (
-        Thread& aThread,  //!< The thread to run on.
-        Body aBody        //!< The work to run there.
-        )
-    {
-        std::promise<void> done;
-        auto doneFuture = done.get_future();
-        ASSERT_TRUE( aThread.post( [&aBody, &done]()
-            {
-                aBody();
-                done.set_value();
-            } ) ) << "worker refused the task.";
-        ASSERT_EQ( doneFuture.wait_for( kPatience ), std::future_status::ready )
-            << "worker never ran the task.";
-    }
-
-    //! Blocks until everything currently queued on @p aThread has been drained.
-    //!
-    //! Needed before quitting a worker that may still hold a single-shot helper's own
-    //! deleteLater(): quitting while that delete is queued strands the object, which the leak
-    //! checker then reports.
-    void drainQueuedTasks
-        (
-        Thread& aThread  //!< The thread to drain.
-        )
-    {
-        std::promise<void> drained;
-        auto drainedFuture = drained.get_future();
-        if( !aThread.post( [&drained]()
-            {
-                drained.set_value();
-            } ) )
-        {
-            return;  // loop already stopped, so there is nothing left to drain
-        }
-        EXPECT_EQ( drainedFuture.wait_for( kPatience ), std::future_status::ready )
-            << "worker event loop did not drain.";
-    }
-
     //! Counts how often it is timed out, and on which thread.
     class CountingReceiver : public Object
     {
@@ -361,25 +288,6 @@ namespace
         }
 
     };
-
-    //! Spins until @p aPredicate holds or kPatience runs out.
-    //! @return the final value of the predicate.
-    template <typename Predicate> bool waitFor
-        (
-        Predicate aPredicate  //!< Condition to wait for.
-        )
-    {
-        const auto deadline = std::chrono::steady_clock::now() + kPatience;
-        while( !aPredicate() )
-        {
-            if( std::chrono::steady_clock::now() > deadline )
-            {
-                return false;
-            }
-            std::this_thread::sleep_for( 1ms );
-        }
-        return true;
-    }
 
     //================================================================
     // Timer configuration

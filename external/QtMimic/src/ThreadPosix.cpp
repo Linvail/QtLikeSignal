@@ -161,7 +161,7 @@ namespace QtMimic
         void* aArg      //!< The Thread that is starting, as a void*.
         )
     {
-        static_cast<Thread*>( aArg )->run();
+        static_cast<Thread*>( aArg )->threadBody();
         return nullptr;
     }
 

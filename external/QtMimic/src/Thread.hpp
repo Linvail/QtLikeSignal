@@ -54,7 +54,9 @@ namespace QtMimic
             const std::string& aName = std::string()
             );
 
-        ~Thread();
+        //! Virtual so a subclass overriding run() can be destroyed through a Thread*, which the
+        //! subclassing idiom below makes reachable. See run().
+        virtual ~Thread();
 
         Thread
             (
@@ -163,8 +165,27 @@ namespace QtMimic
 
         std::shared_ptr<ThreadData> data() const;
 
+    protected:
+        //! The body the new thread executes. Override to do something other than run an event
+        //! loop, exactly as QThread::run() is overridden; the default enters the loop and stays
+        //! there until quit()/exit().
+        //!
+        //! An override that wants an event loop after doing its own setup should call exec().
+        //! One that does not call either simply returns, and the thread ends -- which is the Qt
+        //! behaviour too, and means queued slots for objects on this thread will never run.
+        //!
+        //! Note what this is NOT responsible for: publishing the thread id and applying a
+        //! priority the kernel refused at creation both happen in threadBody() before this is
+        //! called, so an override cannot skip them by forgetting to chain up.
+        virtual void run();
+
     private:
-        void run();
+        //! Everything the new thread must do whether or not run() is overridden.
+        //!
+        //! Kept separate from run() precisely so it cannot be overridden away: an override that
+        //! did not call Thread::run() would otherwise leave the thread id unpublished and a
+        //! refused priority unapplied.
+        void threadBody();
 
         void loop();
 

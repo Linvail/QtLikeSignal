@@ -7,6 +7,8 @@
 //! same names -- so the two can be diffed against each other. See
 //! history/TEST-UNIFICATION-PLAN-20260810.md.
 
+#include "QtLikeSignal-test-types.h"
+
 #include "Thread.h"
 #include "Object.h"
 
@@ -30,42 +32,6 @@ namespace
 {
     using namespace std::chrono_literals;
     using namespace QtLikeSignal;
-
-    //! Posts a no-op task and blocks until it has run, which can only happen once the thread's
-    //! loop is actually draining its queue. Priority can only be set on a running thread, so every
-    //! test here needs a reliable way to know the loop is up. isRunning() alone is not it: start()
-    //! sets that flag on the CALLING thread before the new thread has executed anything, so it can
-    //! be true while the worker has not yet created its dispatcher -- and post() rejects work until
-    //! it has. A round-trip through post() cannot land in that window.
-    //! @return true if the thread's loop drained the marker task within the timeout.
-    bool waitUntilRunning
-        (
-        Thread& aThread,        //!< The thread to wait for.
-        int aTimeoutMs = 5000   //!< How long to wait before giving up.
-        )
-    {
-        std::promise<void> ran;
-        std::future<void> ranFuture = ran.get_future();
-        const auto deadline = std::chrono::steady_clock::now()
-            + std::chrono::milliseconds( aTimeoutMs );
-
-        // Retried rather than posted once: a thread whose loop has not come up yet may refuse the
-        // task outright, which is a "not ready" answer and not a failure. Posting once and giving
-        // up turns the ordinary startup race into a test failure.
-        while( !aThread.post( [&ran]()
-            {
-                ran.set_value();
-            } ) )
-        {
-            if( std::chrono::steady_clock::now() > deadline )
-            {
-                return false;
-            }
-            std::this_thread::yield();
-        }
-        return ranFuture.wait_for( std::chrono::milliseconds( aTimeoutMs ) ) ==
-               std::future_status::ready;
-    }
 
     //! A thread that is not running reports InheritPriority.
     TEST( ThreadPriority, ReportsInheritPriorityBeforeStart )

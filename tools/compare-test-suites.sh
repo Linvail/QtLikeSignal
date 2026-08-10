@@ -32,12 +32,12 @@ VERBOSE=0
 # budget whenever a phase of the plan brings a pair closer; timer and stress show what the far end
 # looks like, where all that is left is the file header and the include block.
 PAIRS="
-timer:25
+timer:15
 stress:20
 object:1300
-thread:450
+thread:20
 coreapplication:450
-thread-priority:25
+thread-priority:15
 "
 
 # Deliberately NOT compared: defect-regressions. A regression suite is a record of what actually

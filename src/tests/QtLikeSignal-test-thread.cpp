@@ -1,12 +1,24 @@
-#include <gtest/gtest.h>
+//! @file
+//!
+//! GoogleTest suite for QtLikeSignal::Thread -- lifecycle, exit codes, post() and the subclassing
+//! idiom.
+//!
+//! Deliberately parallel to QtMimic's QtMimic-test-thread.cpp -- same tests, same order, same
+//! names -- so the two can be diffed against each other. See
+//! history/TEST-UNIFICATION-PLAN-20260810.md.
+
+#include "QtLikeSignal-test-types.h"
+
+#include "gtest/gtest.h"
 #include "Thread.h"
 #include "Signal.h"
-#include "EventDispatcherDefault.h"
 #include <chrono>
 #include <future>
 #include <thread>
 #include <vector>
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 
 using namespace QtLikeSignal;
 
@@ -101,13 +113,16 @@ TEST( ThreadTest, LifecycleAndSignals )
     thread.start();
     thread.wait();
 
-    EXPECT_TRUE( thread.isFinished() );
-    EXPECT_FALSE( thread.isRunning() );
+    #if LIB_HAS_THREAD_IS_RUNNING
+        EXPECT_TRUE( thread.isFinished() );
+        EXPECT_FALSE( thread.isRunning() );
+    #endif
     EXPECT_TRUE( thread.wasExecuted() );
     EXPECT_TRUE( startedFired );
     EXPECT_TRUE( finishedFired );
 }
 
+#if LIB_HAS_THREAD_CREATE  // Thread::create()
 //! Tests static thread factory creation. Verifies static function Thread::create()
 //! instantiates a Thread that executes a functor once started.
 //!
@@ -126,7 +141,9 @@ TEST( ThreadTest, CreateStaticFactory )
     EXPECT_TRUE( funcExecuted );
     delete threadObj;
 }
+#endif
 
+#if LIB_HAS_THREAD_CREATE  // Thread::create()
 //! Verifies Thread::create() hands back an unstarted thread, and why that matters.
 //!
 //! create() used to start the thread before returning, which closed the only window in which a
@@ -173,6 +190,7 @@ TEST( ThreadTest, CreateReturnsAnUnstartedThread )
 
     delete threadObj;
 }
+#endif
 
 //! Tests retrieval of current thread pointer. Verifies static function
 //! Thread::currentThread() returns the pointer to the active Thread instance inside its
@@ -193,9 +211,12 @@ TEST( ThreadTest, ThreadExitAndReturnCode )
     ExitCodeTestThread thread;
     thread.start();
     thread.wait();
-    EXPECT_TRUE( thread.isFinished() );
+    #if LIB_HAS_THREAD_IS_RUNNING
+        EXPECT_TRUE( thread.isFinished() );
+    #endif
 }
 
+#if LIB_HAS_WAIT_TIMEOUT  // wait( ms ) returning bool
 //! Tests timed waiting on thread execution. Verifies Thread::wait(ms) returns false when
 //! thread execution exceeds timeout, and true once finished.
 TEST( ThreadTest, WaitTimeout )
@@ -211,7 +232,9 @@ TEST( ThreadTest, WaitTimeout )
     EXPECT_TRUE( finishedEventually );
     EXPECT_TRUE( thread.isFinished() );
 }
+#endif
 
+#if LIB_HAS_THREAD_CREATE  // Thread::create()
 //! Tests concurrent multi-thread execution. Verifies launching multiple Thread instances in
 //! parallel, joining each via Thread::wait(), and ensuring thread safety.
 TEST( ThreadTest, MultipleThreadsExecution )
@@ -240,7 +263,9 @@ TEST( ThreadTest, MultipleThreadsExecution )
 
     EXPECT_EQ( completedCount.load(), count );
 }
+#endif
 
+#if LIB_HAS_EVENT_DISPATCHER  // Thread::eventDispatcher()
 //! Tests event dispatcher lifetime across a thread's own start/finish cycle. Replaces the
 //! former EventDispatcherSetAndGet test, which drove the removed Thread::setEventDispatcher().
 //! That setter could delete a dispatcher a running exec()/processEvents() loop was still calling
@@ -265,16 +290,14 @@ TEST( ThreadTest, EventDispatcherOwnedAcrossThreadLifecycle )
     thread.wait();
     EXPECT_TRUE( thread.isFinished() );
 }
+#endif
 
 //! Tests Thread::post() runs the task on the target thread, from another thread.
 TEST( ThreadTest, PostRunsTaskOnTargetThread )
 {
     Thread worker;
     worker.start();
-    while( !worker.eventDispatcher() )
-    {
-        std::this_thread::yield();
-    }
+    ASSERT_TRUE( waitUntilRunning( worker ) );
 
     std::promise<Thread*> ranOnPromise;
     auto ranOnFuture = ranOnPromise.get_future();
@@ -300,10 +323,7 @@ TEST( ThreadTest, PostFromOwnThreadStillDefers )
 {
     Thread worker;
     worker.start();
-    while( !worker.eventDispatcher() )
-    {
-        std::this_thread::yield();
-    }
+    ASSERT_TRUE( waitUntilRunning( worker ) );
 
     std::promise<void> orderPromise;
     auto orderFuture = orderPromise.get_future();
@@ -339,6 +359,7 @@ TEST( ThreadTest, PostFromOwnThreadStillDefers )
     worker.wait();
 }
 
+#if LIB_HAS_POST_REJECTED_BEFORE_START  // post() fails before the loop is up
 //! Tests Thread::post() reports failure and drops the task when there is no dispatcher.
 TEST( ThreadTest, PostBeforeStartFails )
 {
@@ -351,16 +372,14 @@ TEST( ThreadTest, PostBeforeStartFails )
         << "post() should fail before start() -- there is no dispatcher yet.";
     EXPECT_FALSE( ran );
 }
+#endif
 
 //! Tests Thread::post() rejects an empty std::function without touching the dispatcher.
 TEST( ThreadTest, PostRejectsEmptyTask )
 {
     Thread worker;
     worker.start();
-    while( !worker.eventDispatcher() )
-    {
-        std::this_thread::yield();
-    }
+    waitUntilRunning( worker );
 
     EXPECT_FALSE( worker.post( std::function<void()>() ) );
 

@@ -5,6 +5,8 @@
 //!
 //! Copyright 2026 by Garmin Ltd. or its subsidiaries.
 
+#include "QtMimic-test-types.hpp"
+
 #include "Thread.hpp"
 #include "Object.hpp"
 
@@ -28,41 +30,6 @@ namespace
 {
     using namespace std::chrono_literals;
     using namespace QtMimic;
-
-    //! Posts a no-op task and blocks until it has run, which can only happen once the thread's
-    //! loop() is actually draining its mailbox. Priority can only be set on a running thread, so
-    //! every test here needs a reliable way to know the loop is up -- QtMimic::Thread exposes no
-    //! isRunning()/isFinished(), so waiting on a round-trip through post() is the idiomatic
-    //! equivalent already used throughout the rest of this test suite.
-    //! @return true if the thread's loop drained the marker task within the timeout.
-    bool waitUntilRunning
-        (
-        Thread& aThread,        //!< The thread to wait for.
-        int aTimeoutMs = 5000   //!< How long to wait before giving up.
-        )
-    {
-        std::promise<void> ran;
-        std::future<void> ranFuture = ran.get_future();
-        const auto deadline = std::chrono::steady_clock::now()
-            + std::chrono::milliseconds( aTimeoutMs );
-
-        // Retried rather than posted once: a thread whose loop has not come up yet may refuse the
-        // task outright, which is a "not ready" answer and not a failure. Posting once and giving
-        // up turns the ordinary startup race into a test failure.
-        while( !aThread.post( [&ran]()
-            {
-                ran.set_value();
-            } ) )
-        {
-            if( std::chrono::steady_clock::now() > deadline )
-            {
-                return false;
-            }
-            std::this_thread::yield();
-        }
-        return ranFuture.wait_for( std::chrono::milliseconds( aTimeoutMs ) ) ==
-               std::future_status::ready;
-    }
 
     //! A thread that is not running reports InheritPriority.
     TEST( ThreadPriority, ReportsInheritPriorityBeforeStart )
