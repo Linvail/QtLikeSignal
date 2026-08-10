@@ -11,6 +11,27 @@
 #include "Object.hpp"
 #include "Thread.hpp"
 
+// ---------------------------------------------------------------------------------------------
+// Feature macros.
+//
+// The two suites hold the same tests in the same order (see
+// history/TEST-UNIFICATION-PLAN-20260810.md). Where one library has an API the other does not, the
+// test is still written in *both* files and guarded by one of these, so the absence is visible on
+// the side that lacks it instead of the test simply not existing there.
+//
+// Add a macro here rather than deleting a test from one file.
+// ---------------------------------------------------------------------------------------------
+#define LIB_HAS_CALL_LATER                 0  //!< Object::callLater()
+#define LIB_HAS_EVENT_DISPATCHER           0  //!< Thread::eventDispatcher(), the Event types
+#define LIB_HAS_OBJECT_NAME                0  //!< Object::objectName()/setObjectName()
+#define LIB_HAS_CLEANUP_CALLBACKS          0  //!< Object::addCleanupCallback()
+#define LIB_HAS_THREAD_CREATE              0  //!< Thread::create()
+#define LIB_HAS_THREAD_IS_RUNNING          0  //!< Thread::isRunning()/isFinished()
+#define LIB_HAS_WAIT_TIMEOUT               0  //!< Thread::wait( ms ) returning bool
+#define LIB_HAS_POST_REJECTED_BEFORE_START 0  //!< post() fails until the dispatcher exists
+#define LIB_HAS_INCOMING_CONNECTION_COUNT  1  //!< Object::incomingConnectionCount()
+#define LIB_HAS_EXTERNAL_DISPATCHER        1  //!< Thread::setDispatcher()/setWaiter()
+
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
