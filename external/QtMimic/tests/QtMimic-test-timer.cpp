@@ -1155,11 +1155,26 @@ namespace
         constexpr int kPerEmitter = 250;
         constexpr int kExpectedMetaCalls = kEmitters * kPerEmitter;
 
+        // Enough work per metacall that the load provably outlasts the timer intervals below.
+        //
+        // Without it the assertions here are a race rather than a test. The load is what sets the
+        // observation window: the timers are armed, the metacalls are delivered, and timerFires()
+        // is sampled the moment the last one lands. Trivial metacalls make that window ~0.9-2.8 ms
+        // against a 1 ms shortest interval -- roughly 280 us of margin at the median -- so a few
+        // percent of runs finish before any timer is due and correctly report zero expiries. That
+        // reads as "the timers were starved" when nothing was starved at all; they were not yet
+        // owed anything. Measured at 11 failures in 300 runs before this, none in 300 after.
+        //
+        // 5 us x 1000 metacalls puts the window at ~5-7 ms, several times the shortest interval,
+        // so any expiry that fails to get through really is one the mailbox crowded out.
+        constexpr int kWorkMicros = 5;
+
         Thread worker( "mixed-load" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
         MixedLoadReceiver receiver( &worker );
+        receiver.setMetaCallWorkMicros( kWorkMicros );
 
         Signal<int, int> metaCall;
         Object::connect( metaCall, &receiver, &MixedLoadReceiver::onMetaCall,
