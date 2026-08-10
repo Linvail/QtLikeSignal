@@ -32,7 +32,7 @@ namespace QtLikeSignal
     };
 
     //! A handle representing a signal-slot connection.
-    using ConnectionHandle = boost::signals2::connection;
+    using Connection = boost::signals2::connection;
 
     //! Helper identity struct establishing a non-deduced context for the wrapped type T.
     template<typename T>

@@ -128,7 +128,7 @@ namespace QtLikeSignal
         //! Connect Overload 1: connects a signal to a non-overloaded member function slot.
         template <typename Signal, typename Receiver, typename Slot>
         static std::enable_if_t<MemberFunctionTraits<Slot>::is_member_function,
-            ConnectionHandle>
+            Connection>
         connect
             (
             Signal& aSignal,
@@ -143,7 +143,7 @@ namespace QtLikeSignal
         static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
             std::is_base_of<SlotClass, Receiver>::value &&
             !std::is_same<SlotClass, Receiver>::value,
-            ConnectionHandle>
+            Connection>
         connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             void ( SlotClass::*aSlot )( SignalArgs... ),
@@ -155,7 +155,7 @@ namespace QtLikeSignal
         static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
             std::is_base_of<SlotClass, Receiver>::value &&
             !std::is_same<SlotClass, Receiver>::value,
-            ConnectionHandle>
+            Connection>
         connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             void ( SlotClass::*aSlot )( SignalArgs... ) const,
@@ -168,7 +168,7 @@ namespace QtLikeSignal
             std::is_base_of<Object, Receiver>::value && std::is_base_of<SlotClass, Receiver>::
             value &&
             !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
-            ConnectionHandle>
+            Connection>
         connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             Ret ( SlotClass::*aSlot )( SignalArgs... ),
@@ -181,7 +181,7 @@ namespace QtLikeSignal
             std::is_base_of<Object, Receiver>::value && std::is_base_of<SlotClass, Receiver>::
             value &&
             !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
-            ConnectionHandle>
+            Connection>
         connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             Ret ( SlotClass::*aSlot )( SignalArgs... ) const,
@@ -190,7 +190,7 @@ namespace QtLikeSignal
         //! Connect Overload 6: connects an overloaded void member function slot defined directly
         //! on the receiver.
         template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver>
-        static std::enable_if_t<std::is_base_of<Object, Receiver>::value, ConnectionHandle>
+        static std::enable_if_t<std::is_base_of<Object, Receiver>::value, Connection>
         connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             void ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ),
@@ -199,7 +199,7 @@ namespace QtLikeSignal
         //! Connect Overload 7: connects an overloaded const void member function slot defined
         //! directly on the receiver.
         template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver>
-        static std::enable_if_t<std::is_base_of<Object, Receiver>::value, ConnectionHandle>
+        static std::enable_if_t<std::is_base_of<Object, Receiver>::value, Connection>
         connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             void ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ) const,
@@ -210,7 +210,7 @@ namespace QtLikeSignal
         template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename Ret>
         static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
             !std::is_same<Ret, void>::value,
-            ConnectionHandle>
+            Connection>
         connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             Ret ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ),
@@ -221,7 +221,7 @@ namespace QtLikeSignal
         template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename Ret>
         static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
             !std::is_same<Ret, void>::value,
-            ConnectionHandle>
+            Connection>
         connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             Ret ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ) const,
@@ -230,7 +230,7 @@ namespace QtLikeSignal
         //! slot.
         template <typename Signal, typename Functor>
         static std::enable_if_t<!MemberFunctionTraits<Functor>::is_member_function,
-            ConnectionHandle>
+            Connection>
         connect
             (
             Signal& aSignal,
@@ -241,7 +241,7 @@ namespace QtLikeSignal
 
         static void disconnect
             (
-            const ConnectionHandle& aHandle
+            const Connection& aHandle
             );
 
         //! CallLater Overload 1: schedules a non-overloaded member function slot to run deferred.
@@ -499,7 +499,7 @@ namespace QtLikeSignal
 
             Object* mOwner;                //!< Receiver owning the mIncoming entry.
             std::weak_ptr<int> mLife;      //!< Receiver's life token; expired means it is gone.
-            ConnectionHandle mHandle;      //!< The entry to prune; set once the handle exists.
+            Connection mHandle;      //!< The entry to prune; set once the handle exists.
         };
 
         //! The one body shared by all ten connect() overloads.
@@ -520,7 +520,7 @@ namespace QtLikeSignal
         //!
         //! Thread-safe. Returns a default-constructed handle if @p aContext is null.
         template <typename SignalType, typename Callable>
-        static ConnectionHandle connectImpl
+        static Connection connectImpl
             (
             SignalType& aSignal,     //!< Signal to connect to.
             Object* aContext,        //!< Receiver/context supplying thread affinity and lifetime.
@@ -597,7 +597,7 @@ namespace QtLikeSignal
                         } );
                 };
 
-            ConnectionHandle handle = aSignal.connect( wrapper );
+            Connection handle = aSignal.connect( wrapper );
 
             if( !cleanup || !cleanup->mOwner )
             {
@@ -641,7 +641,7 @@ namespace QtLikeSignal
         //! captured state and is still walked on every emit, so one long-lived signal feeding
         //! many short-lived receivers grows without bound in both memory and emit cost. Qt does
         //! the equivalent by walking cd->senders in ~QObject().
-        std::vector<ConnectionHandle> mIncoming;
+        std::vector<Connection> mIncoming;
         mutable std::mutex mIncomingMutex;                   //!< Guards mIncoming.
 
         //! Timer ids started on this object and not yet killed.
@@ -664,7 +664,7 @@ namespace QtLikeSignal
     //! Because the target slot is not overloaded, the compiler can directly deduce the Slot type
     //! without needing explicit template resolution.
     template <typename Signal, typename Receiver, typename Slot>
-    std::enable_if_t<MemberFunctionTraits<Slot>::is_member_function, ConnectionHandle>Object::
+    std::enable_if_t<MemberFunctionTraits<Slot>::is_member_function, Connection>Object::
     connect
         (
         Signal& aSignal,          //!< The signal to connect.
@@ -700,7 +700,7 @@ namespace QtLikeSignal
     std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
         std::is_base_of<SlotClass, Receiver>::value &&
         !std::is_same<SlotClass, Receiver>::value,
-        ConnectionHandle>Object::connect
+        Connection>Object::connect
         (
         SignalSource<SignalArgs...>& aSignal,           //!< The signal to connect.
         Receiver* aReceiver,                        //!< The object receiving the signal.
@@ -726,7 +726,7 @@ namespace QtLikeSignal
     std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
         std::is_base_of<SlotClass, Receiver>::value &&
         !std::is_same<SlotClass, Receiver>::value,
-        ConnectionHandle>Object::connect
+        Connection>Object::connect
         (
         SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
         Receiver* aReceiver,                  //!< The object receiving the signal.
@@ -750,7 +750,7 @@ namespace QtLikeSignal
     std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
         std::is_base_of<SlotClass, Receiver>::value &&
         !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
-        ConnectionHandle>Object::connect
+        Connection>Object::connect
         (
         SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
         Receiver* aReceiver,                  //!< The object receiving the signal.
@@ -775,7 +775,7 @@ namespace QtLikeSignal
     std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
         std::is_base_of<SlotClass, Receiver>::value &&
         !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
-        ConnectionHandle>Object::connect
+        Connection>Object::connect
         (
         SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
         Receiver* aReceiver,                  //!< The object receiving the signal.
@@ -796,7 +796,7 @@ namespace QtLikeSignal
     //! forces the compiler to use SignalArgs from the signal to perfectly select the right
     //! overload pointer. SignalArgs is used both to deduce and to select the slot overload.
     template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value, ConnectionHandle>Object::connect
+    std::enable_if_t<std::is_base_of<Object, Receiver>::value, Connection>Object::connect
         (
         SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
         Receiver* aReceiver,                  //!< The object receiving the signal.
@@ -815,7 +815,7 @@ namespace QtLikeSignal
     //! Connect Overload 7 definition. Same as Overload 6, but specifically matches const member
     //! functions.
     template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value, ConnectionHandle>Object::connect
+    std::enable_if_t<std::is_base_of<Object, Receiver>::value, Connection>Object::connect
         (
         SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
         Receiver* aReceiver,                  //!< The object receiving the signal.
@@ -836,7 +836,7 @@ namespace QtLikeSignal
     //! that returns Ret compiles successfully.
     template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename Ret>
     std::enable_if_t<std::is_base_of<Object, Receiver>::value && !std::is_same<Ret, void>::value,
-        ConnectionHandle>Object::connect
+        Connection>Object::connect
         (
         SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
         Receiver* aReceiver,                  //!< The object receiving the signal.
@@ -856,7 +856,7 @@ namespace QtLikeSignal
     //! functions.
     template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename Ret>
     std::enable_if_t<std::is_base_of<Object, Receiver>::value && !std::is_same<Ret, void>::value,
-        ConnectionHandle>Object::connect
+        Connection>Object::connect
         (
         SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
         Receiver* aReceiver,                  //!< The object receiving the signal.
@@ -876,7 +876,7 @@ namespace QtLikeSignal
     //! functions, lambdas, or general functors. Binds the functor's lifetime and thread affinity
     //! to the provided context object.
     template <typename Signal, typename Functor>
-    std::enable_if_t<!MemberFunctionTraits<Functor>::is_member_function, ConnectionHandle>Object::
+    std::enable_if_t<!MemberFunctionTraits<Functor>::is_member_function, Connection>Object::
     connect
         (
         Signal& aSignal,           //!< The signal to connect.
@@ -896,7 +896,7 @@ namespace QtLikeSignal
     //! Disconnects a signal connection using a connection handle. Thread-safe.
     inline void Object::disconnect
         (
-        const ConnectionHandle& aHandle  //!< The handle to disconnect.
+        const Connection& aHandle  //!< The handle to disconnect.
         )
     {
         aHandle.disconnect();

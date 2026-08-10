@@ -168,7 +168,7 @@ namespace QtLikeSignal
         // disconnect() would nest our mutex inside boost's signal mutex, the reverse of the order
         // ~Cleanup takes them in (boost destroys slots with its signal mutex held), and there is no
         // reason to invite that inversion when a swap avoids it entirely.
-        std::vector<ConnectionHandle> incoming;
+        std::vector<Connection> incoming;
         {
             std::lock_guard<std::mutex> lock( mIncomingMutex );
             incoming.swap( mIncoming );

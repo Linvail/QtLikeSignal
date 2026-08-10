@@ -270,7 +270,7 @@ TEST( ObjectTest, MultiArgumentSignal )
 
 //! Tests null receiver and context safety when connecting signals.
 //!
-//! Verifies Object::connect() safely returns an invalid ConnectionHandle when passed nullptr
+//! Verifies Object::connect() safely returns an invalid Connection when passed nullptr
 //! for receiver or context pointers.
 TEST( ObjectTest, NullReceiverOrContextConnection )
 {

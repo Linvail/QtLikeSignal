@@ -44,7 +44,7 @@ namespace QtLikeSignal
         //! Private, with Object a friend, so subscribing goes through Object::connect() and picks
         //! up the thread affinity and lifetime tracking that raw boost connections have no idea
         //! about.
-        ConnectionHandle connect
+        Connection connect
             (
             std::function<void( Args... )> aSlot  //!< The callable slot function.
             );
@@ -78,7 +78,7 @@ namespace QtLikeSignal
         }
 
         //! Connects a callable slot to this signal. Thread-safe.
-        ConnectionHandle connect
+        Connection connect
             (
             std::function<void( Args... )> aSlot  //!< The callable slot function.
             )
@@ -89,28 +89,52 @@ namespace QtLikeSignal
         //! Disconnects a connection by handle. Thread-safe.
         void disconnect
             (
-            const ConnectionHandle& aConnection  //!< The connection handle to disconnect.
+            const Connection& aConnection  //!< The connection handle to disconnect.
             )
         {
             aConnection.disconnect();
         }
 
         //! Emits the signal with the specified arguments. Thread-safe.
+        //!
+        //! Forwards rather than taking Args... by value. By value cost one copy of every argument
+        //! per emit before boost had even seen them -- invisible for an int, a whole payload for
+        //! anything that owns memory. Caught by
+        //! ObjectTest.DeepArgumentCopying_QueuedEventsMinimizeCopies, which counts copies and
+        //! expects one per receiver plus boost's own two.
+        template <typename ... EmitArgs>
         void emit
             (
-            Args... aArgs  //!< Arguments to pass to all connected slots.
+            EmitArgs&&... aArgs  //!< Arguments to pass to all connected slots.
             )
         {
-            mSignal( aArgs ... );
+            mSignal( std::forward<EmitArgs>( aArgs )... );
         }
 
         //! Function call operator to emit the signal. Thread-safe.
+        template <typename ... EmitArgs>
         void operator()
             (
-            Args... aArgs  //!< Arguments to pass to all connected slots.
+            EmitArgs&&... aArgs  //!< Arguments to pass to all connected slots.
             )
         {
-            mSignal( aArgs ... );
+            mSignal( std::forward<EmitArgs>( aArgs )... );
+        }
+
+        //! Disconnects every slot from this signal. Thread-safe.
+        //!
+        //! Blunt by design, and correspondingly rare: a receiver that wants to stop listening
+        //! should disconnect its own handle. This exists for the sender tearing itself down, and
+        //! for tests that need a signal emptied without tracking every handle.
+        void disconnectAll()
+        {
+            mSignal.disconnect_all_slots();
+        }
+
+        //! True if no slots are connected to this signal. Thread-safe.
+        bool empty() const
+        {
+            return mSignal.empty();
         }
 
         //! Gets the number of slots currently connected to this signal. Thread-safe.
@@ -148,7 +172,7 @@ namespace QtLikeSignal
     //! Subscribes a slot to the viewed signal. Defined out of line because it needs Signal to be
     //! complete. Thread-safe.
     template<typename ... Args>
-    ConnectionHandle SignalView<Args...>::connect
+    Connection SignalView<Args...>::connect
         (
         std::function<void( Args... )> aSlot  //!< The callable slot function.
         )

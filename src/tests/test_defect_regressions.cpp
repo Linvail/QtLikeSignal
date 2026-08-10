@@ -689,7 +689,7 @@ TEST( ObjectDefectTest, DestroyedReceiverIsDisconnectedFromItsSender )
     // mIncoming entry, so the receiver is not left holding a stale handle to disconnect later.
     {
         Object receiver;
-        ConnectionHandle handle = Object::connect( longLivedSignal, &receiver, []( int )
+        Connection handle = Object::connect( longLivedSignal, &receiver, []( int )
             {
             }, ConnectionType::Direct );
         EXPECT_EQ( longLivedSignal.receivers(), 1u );
