@@ -6,6 +6,8 @@
 //!
 //! Copyright 2026 by Garmin Ltd. or its subsidiaries.
 
+#include "QtMimic-test-types.hpp"
+
 #include "Object.hpp"
 #include "Thread.hpp"
 #include "Timer.hpp"
@@ -928,19 +930,72 @@ namespace
     }
 
     //! A context-bound single shot is cancelled when its context is destroyed before expiry.
-    TEST( TimerSingleShotTest, DestroyedContextCancelsMemberCall )
+    //!
+    //! The counter deliberately lives outside the context and is owned by the functor, not the
+    //! context, so the cancellation is observable without touching freed memory: if the liveness
+    //! check in the helper were removed, this counter would simply reach 1 and the test would fail
+    //! outright rather than relying on a sanitizer to notice.
+    TEST( TimerSingleShotTest, DestroyedContextCancelsFunctor )
     {
         Thread worker( "single-destroyed-context" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
-        CountingReceiver* receiver = nullptr;
+        std::atomic<int> runs { 0 };
+
+        // Created and destroyed on the worker, which is the only thread allowed to do either.
+        Object* context = nullptr;
         runOnThread( worker, [&]()
             {
-                receiver = new CountingReceiver( &worker );
+                context = new Object( &worker );
+            } );
+        ASSERT_NE( context, nullptr );
+
+        Timer::singleShot( 100, context, [&runs]()
+            {
+                runs.fetch_add( 1 );
             } );
 
-        Timer::singleShot( 100, receiver, &CountingReceiver::onTimeout );
+        runOnThread( worker, [&]()
+            {
+                delete context;
+                context = nullptr;
+            } );
+
+        std::this_thread::sleep_for( 150ms );
+        drainQueuedTasks( worker );
+        worker.quit();
+        worker.wait();
+
+        EXPECT_EQ( runs.load(), 0 )
+            << "the functor ran even though its context was destroyed before the delay elapsed.";
+    }
+
+    //! The member-function overload takes the same cancellation path, on the receiver it would
+    //! otherwise have called into.
+    //!
+    //! What this adds over the functor test above is the bound-member closure, which captures a raw
+    //! receiver pointer and would dereference it if the liveness check ever stopped running. The
+    //! counter is an ExternalCounter's, owned here and not by the receiver, so it survives the
+    //! receiver and can be asserted on afterwards -- the same technique
+    //! ObjectTest.ReceiverDestroyedBeforeDeliveryNoCrash uses to observe a slot that must not have
+    //! run. A regression bumps it to 1 and fails here outright, rather than only under a sanitizer.
+    TEST( TimerSingleShotTest, DestroyedContextDoesNotCallIntoFreedReceiver )
+    {
+        Thread worker( "single-destroyed-receiver" );
+        worker.start();
+        ASSERT_TRUE( waitUntilRunning( worker ) );
+
+        std::atomic<int> invocations { 0 };
+
+        ExternalCounter* receiver = nullptr;
+        runOnThread( worker, [&]()
+            {
+                receiver = new ExternalCounter( &worker, invocations );
+            } );
+        ASSERT_NE( receiver, nullptr );
+
+        Timer::singleShot( 100, receiver, &ExternalCounter::onTimeout );
 
         runOnThread( worker, [&]()
             {
@@ -949,6 +1004,35 @@ namespace
             } );
 
         std::this_thread::sleep_for( 150ms );
+        drainQueuedTasks( worker );
+        worker.quit();
+        worker.wait();
+
+        EXPECT_EQ( invocations.load(), 0 )
+            << "the member function was called on a receiver that had already been destroyed.";
+    }
+
+    //! Every entry point that takes an interval corrects a negative one to 1 ms rather than
+    //! dropping the call, so singleShot() does not silently do nothing where start() would run.
+    TEST( TimerSingleShotTest, NegativeIntervalStillRuns )
+    {
+        Thread worker( "single-negative" );
+        worker.start();
+        ASSERT_TRUE( waitUntilRunning( worker ) );
+
+        Object context( &worker );
+
+        std::atomic<int> runs { 0 };
+        Timer::singleShot( -1, &context, [&runs]()
+            {
+                runs.fetch_add( 1 );
+            } );
+
+        EXPECT_TRUE( waitFor( [&runs]()
+            {
+                return runs.load() >= 1;
+            } ) ) << "a negative interval dropped the single shot instead of clamping it to 1 ms.";
+
         drainQueuedTasks( worker );
         worker.quit();
         worker.wait();

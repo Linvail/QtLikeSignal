@@ -1,4 +1,7 @@
 
+#ifndef QT_MIMIC_TEST_TYPES
+#define QT_MIMIC_TEST_TYPES
+
 //! @file
 //!
 //! GoogleTest suite for the QtMimic framework.
@@ -143,6 +146,13 @@ namespace
             ++mCounter;
         }
 
+        //! Same bookkeeping, in the no-argument shape a timer needs: Timer::singleShot()'s member
+        //! overload and Timer::timeout both target a slot taking nothing.
+        void onTimeout()
+        {
+            ++mCounter;
+        }
+
     private:
         std::atomic<int>& mCounter;
     };
@@ -188,3 +198,5 @@ namespace
     };
 
 }
+
+#endif  // QT_MIMIC_TEST_TYPES

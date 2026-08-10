@@ -28,9 +28,10 @@ namespace QtMimic
     //!
     //! **No part of this class is thread-safe**, exactly as with Qt's QTimer. A Timer must be used
     //! from the thread it lives in: start()/stop() are thread-confined because they go through
-    //! Object::startTimer()/killTimer(), and timeout is emitted by that thread's event loop. To
-    //! drive a timer that lives in another thread, hop onto it first -- post a task to that thread
-    //! that calls start().
+    //! Object::startTimer()/killTimer(), setInterval() joins them whenever the timer is active
+    //! because it restarts one, and timeout is emitted by that thread's event loop. To drive a
+    //! timer that lives in another thread, hop onto it first -- post a task to that thread that
+    //! calls start().
     //!
     //! Usage:
     //! @code
@@ -51,9 +52,14 @@ namespace QtMimic
 
         int interval() const;
 
+        //! Set the interval, restarting the timer if it is already running.
+        //!
+        //! **Must be called from this timer's own thread whenever the timer is active**, since the
+        //! restart goes through Object::startTimer()/killTimer(); see start(int). Safe from any
+        //! thread only while the timer is inactive.
         void setInterval
             (
-            int aMsec
+            int aMsec  //!< Interval in milliseconds. Negative values become 1 ms, with a warning.
             );
 
         bool isActive() const;
@@ -90,28 +96,32 @@ namespace QtMimic
         //! @tparam Functor Any callable taking no arguments.
         template <typename Functor> static void singleShot
             (
-            int aMsec,
+            int aMsec,       //!< Delay in ms. Negative values become 1 ms, with a warning.
             Functor aFunctor
             );
 
         //! Run @p aFunctor once, on @p aContext's thread, after @p aMsec milliseconds.
         //!
-        //! Safe to call from any thread. A null context, or a context with no thread, does nothing.
+        //! Safe to call from any thread. A null context, or a context with no thread, does nothing,
+        //! and a context destroyed before the delay elapses cancels the call.
         //! @tparam Functor Any callable taking no arguments.
         template <typename Functor> static void singleShot
             (
-            int aMsec,
+            int aMsec,               //!< Delay in ms. Negative values become 1 ms, with a warning.
             const Object* aContext,
             Functor aFunctor
             );
 
         //! Call @p aMethod on @p aReceiver once, on the receiver's thread, after @p aMsec
         //! milliseconds. A null receiver does nothing.
+        //!
+        //! Forwards to the context overload above with the receiver as the context, so it inherits
+        //! that overload's interval handling and its cancellation on a destroyed receiver.
         //! @tparam Receiver The receiver's type (must derive from Object).
         //! @tparam MemberFunc Pointer to a member function taking no arguments.
         template <typename Receiver, typename MemberFunc> static void singleShot
             (
-            int aMsec,
+            int aMsec,                  //!< Delay in ms. Negative values become 1 ms, with a warning.
             const Receiver* aReceiver,
             MemberFunc aMethod
             );
@@ -123,6 +133,19 @@ namespace QtMimic
             ) override;
 
     private:
+        //! Correct a caller-supplied interval to one a timer can actually run at.
+        //!
+        //! Mirrors Qt's checkInterval() in qtimer.cpp, including its choice to correct rather than
+        //! reject: a negative interval warns and becomes 1 ms. Shared by every entry point that
+        //! takes an interval -- start(), setInterval() and all three singleShot() overloads -- so
+        //! none of them can drift from the others.
+        //! @return the interval to use, in milliseconds.
+        static int checkInterval
+            (
+            const char* aCaller,  //!< Name of the calling function, for the warning text.
+            int aMsec             //!< The requested interval, in milliseconds.
+            );
+
         // Deliberately unsynchronised, matching QTimer, which has no locking of any kind. Every
         // member here is only ever touched from the timer's own thread: start()/stop() are
         // thread-confined because they go through Object::startTimer()/killTimer(), and timerEvent()
@@ -148,6 +171,8 @@ namespace QtMimic
         Functor aFunctor  //!< Callable to run.
         )
     {
+        aMsec = checkInterval( "Timer::singleShot", aMsec );
+
         //! Self-deleting helper that fires its functor once when its timer expires.
         class SingleShotHelper : public Object
         {
@@ -211,6 +236,10 @@ namespace QtMimic
         Functor aFunctor         //!< Callable to run.
         )
     {
+        // Checked before the context is, as Qt does: the warning is about what the caller passed,
+        // so it is worth reporting whether or not there is a context to run it against.
+        aMsec = checkInterval( "Timer::singleShot", aMsec );
+
         if( !aContext )
         {
             return;

@@ -199,6 +199,13 @@ namespace QtMimic
             const int status = pthread_setschedparam( mThreadId, schedPolicy, &param );
 
             #ifdef SCHED_IDLE
+                // SCHED_IDLE is optional and some kernels reject it. Fall back to the lowest
+                // priority the thread's existing policy allows, which is as close as we can get.
+                //
+                // NOTE: this condition deliberately differs from Qt, which tests
+                // `status == -1 && errno == EINVAL`. pthread_setschedparam() returns the error
+                // number directly and does not touch errno, so Qt's test can never be true and its
+                // fallback is dead code. Testing the return value is what actually reaches it.
                 if( status == EINVAL && schedPolicy == SCHED_IDLE )
                 {
                     if( pthread_getschedparam( mThreadId, &schedPolicy, &param ) == 0 )
