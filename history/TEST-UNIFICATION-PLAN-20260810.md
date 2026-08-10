@@ -126,8 +126,8 @@ banner comment saying so, so a diff shows one clean block rather than scattered 
 | object | `test_gobject.cpp` → `-test-object.cpp` | split out of `QtMimic-tests.cpp` (20) | rename + split |
 | thread | `test_gthread.cpp` → `-test-thread.cpp` | split out of `QtMimic-tests.cpp` (1) | rename + split |
 | coreapplication | `test_gcoreapplication.cpp` → `-test-coreapplication.cpp` | split out of `QtMimic-tests.cpp` (1) | rename + split |
-| thread priority | `test_gthread_priority.cpp` → `-test-thread-priority.cpp` | `QtMimic-test-thread-priority.cpp` | **content already aligned** |
-| timer | `test_gtimer.cpp` → `-test-timer.cpp` | `QtMimic-test-timer.cpp` | **content already aligned** |
+| thread priority | `test_gthread_priority.cpp` → `-test-thread-priority.cpp` | `QtMimic-test-thread-priority.cpp` | ~~content already aligned~~ **names only — see correction** |
+| timer | `test_gtimer.cpp` → `-test-timer.cpp` | `QtMimic-test-timer.cpp` | **content aligned** |
 | defect regressions | `test_defect_regressions.cpp` → `-test-defect-regressions.cpp` | `QtMimic-test-defect-regressions.cpp` | rename, content diverges |
 | argument copying | `test_gobject_argument_copying.cpp` → `-test-argument-copying.cpp` | 2 tests in `QtMimic-tests.cpp` | rename + split |
 | stress | *missing* | `QtMimic-test-stress.cpp` (9 tests, 743 lines) | **port to QtLikeSignal** |
@@ -191,3 +191,63 @@ down as phases land; never up without a comment saying why.
 - **Converging the two libraries' architectures.** QtLikeSignal has an event-dispatcher hierarchy
   and an `Event` type set; QtMimic's mailbox carries callables. That difference is the point of
   having both, and the tests should reflect it rather than paper over it.
+
+
+---
+
+## Progress log
+
+### 2026-08-10 — phases 2, 3, 4, 5 and 8 landed
+
+Worked in a different order than planned. Phase 3 (the category-A renames) moved to the front,
+because two of them *removed* most of what phase 1's shim layer was going to paper over — giving
+QtLikeSignal `Object( Thread* )`, `Timer( Thread* )` and `Thread( name )` is strictly cheaper than
+writing shims that translate between the two spellings forever. Phase 1's support headers are
+consequently much smaller than budgeted, and only the shared-fixture half
+(`QtLikeSignal-test-types.h`) has been needed so far.
+
+| Phase | State |
+|---|---|
+| 3 — category-A renames | done (constructors, `ConnectionHandle`→`Connection`, `Signal::disconnectAll/empty`) |
+| 2 — port the stress suite | done, 9 tests |
+| 4 — split `QtMimic-tests.cpp` | done, into object / thread / coreapplication |
+| 5 — rename to the parallel scheme | done, both sides |
+| 8 — drift check | done, `tools/compare-test-suites.sh` |
+| 1 — support headers | partial: shared fixtures done, helper vocabulary not yet extracted |
+| 1b — thread-priority alignment | **not started, and larger than planned — see correction** |
+| 6 — object/thread/coreapplication content | not started |
+| 7 — adoption suite to QtMimic | not started |
+
+**Correction to this document.** The file map above claimed the thread-priority suites were
+"content already aligned". That was wrong, and it was inferred from the wrong evidence: the two
+share 11 of 12 test *names*, so a name-overlap count made them look ported. The bodies were written
+independently and differ by 814 lines. Only the timer pair is genuinely aligned. Aligning
+thread-priority is real work, comparable to the timer port, and is now tracked as its own phase.
+
+**What porting found.** Twice now, porting a test suite has surfaced a genuine difference rather
+than just moving text:
+
+- QtLikeSignal's `Timer` was missing four Qt-conformance behaviours QtMimic had: negative-interval
+  clamping, restart-on-`setInterval`, a guaranteed-fresh timer id across a restart, and
+  cancellation of a `singleShot` whose context is destroyed.
+- QtLikeSignal's `Signal::emit()` took its arguments **by value**, costing one copy of every
+  argument per emit before boost saw them. Caught by the ported copy-counting stress test.
+
+That is the argument for the whole plan in miniature: each of those was present on one side and
+absent on the other, and nothing said so.
+
+### Current drift
+
+```
+timer                            13         25   ok
+stress                            8         20   ok
+object                         1264       1300   ok
+thread                          408        450   ok
+coreapplication                 407        450   ok
+thread-priority                 814        850   ok
+defect-regressions             1874       1900   ok
+```
+
+Budgets are ratchets set just above today's numbers, so the check is green now and goes red on
+regression. Lower them as phases 1b, 6 and 7 land. `timer` and `stress` show the far end: all that
+remains there is the file header and the include block.
