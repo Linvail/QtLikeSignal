@@ -34,7 +34,7 @@ VERBOSE=0
 PAIRS="
 timer:15
 stress:20
-object:1300
+object:15
 thread:20
 coreapplication:20
 thread-priority:15

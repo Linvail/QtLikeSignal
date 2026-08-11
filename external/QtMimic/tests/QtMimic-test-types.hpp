@@ -21,6 +21,9 @@
 //
 // Add a macro here rather than deleting a test from one file.
 // ---------------------------------------------------------------------------------------------
+#define LIB_HAS_NULL_CONTEXT_REJECTED      0  //!< connect() with a null receiver returns a dead handle
+#define LIB_HAS_OBJECT_LIFE                0  //!< Object::objectLife()
+#define LIB_HAS_STATIC_DISCONNECT          0  //!< Object::disconnect( handle )
 #define LIB_HAS_CALL_LATER                 0  //!< Object::callLater()
 #define LIB_HAS_EVENT_DISPATCHER           0  //!< Thread::eventDispatcher(), the Event types
 #define LIB_HAS_OBJECT_NAME                0  //!< Object::objectName()/setObjectName()
@@ -34,7 +37,6 @@
 #define LIB_HAS_ADOPTION_SURVIVES_EXEC     0  //!< the caller is still its own Thread after exec()
 #define LIB_HAS_EXEC_GUARDS                0  //!< exec() rejects nested and off-thread calls
 #define LIB_HAS_SHUTDOWN_DEFERRED_DELETE   0  //!< pending deleteLater() runs at app shutdown
-#define LIB_HAS_INCOMING_CONNECTION_COUNT  1  //!< Object::incomingConnectionCount()
 #define LIB_HAS_EXTERNAL_DISPATCHER        1  //!< Thread::setDispatcher()/setWaiter()
 
 #include "gtest/gtest.h"

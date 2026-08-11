@@ -10,6 +10,8 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <thread>
 
 #if !defined( _WIN32 )
     // For pthread_t only. Included here rather than hidden behind an opaque handle because this
@@ -40,6 +42,8 @@ namespace QtLikeSignal
         virtual ~Thread() override;
 
         const std::string& name() const;
+
+        std::thread::id id() const;
 
         //! Scheduling priority of a thread, mirroring QThread::Priority.
         //!
@@ -199,6 +203,10 @@ namespace QtLikeSignal
         #endif
 
         std::string mName;                        //!< Descriptive name; see the constructor.
+
+        //! The running OS thread's std::thread::id, published by threadBody() before anything
+        //! else. Default-constructed -- and so equal to no live thread -- until then.
+        std::atomic<std::thread::id> mId {};
         std::shared_ptr<ThreadData> mData;        //!< This thread's dispatcher-holding data.
         std::atomic<bool> mHasFinished { false };  //!< True once the OS thread has finished.
 

@@ -106,6 +106,16 @@ namespace QtLikeSignal
             std::function<void()> aCallback
             );
 
+        //! Number of live connections where this object is the receiver. Thread-safe.
+        //!
+        //! A diagnostic, for asserting that a disconnect really pruned the entry rather than
+        //! leaving an inert slot behind -- see ObjectTest.IncomingPrunedOnDisconnect.
+        std::size_t incomingConnectionCount() const
+        {
+            std::lock_guard<std::mutex> lock( mIncomingMutex );
+            return mIncoming.size();
+        }
+
         //! Gets the weak pointer tracking the lifetime of this object. Thread-safe.
         //!
         //! Callers testing whether the object is still alive should use `expired()`, **not**

@@ -27,6 +27,13 @@ namespace QtLikeSignal
         mData->setThread( this );
     }
 
+    //! Gets the underlying OS thread's id, valid once start() has published it. Useful mainly for
+    //! asserting which thread a slot ran on.
+    std::thread::id Thread::id() const
+    {
+        return mId.load();
+    }
+
     //! Gets this thread's descriptive name, empty if it was not given one. Thread-safe: the name
     //! is set at construction and never changes.
     const std::string& Thread::name() const
@@ -126,6 +133,7 @@ namespace QtLikeSignal
     //! threadEntry().
     void Thread::threadBody()
     {
+        mId.store( std::this_thread::get_id() );
         sCurrentThread = this;
         // Not moveToThread(this): see bindAffinityToSelf(). Once every thread is adopted, this
         // Thread object already has an affinity (to whichever thread constructed it), so
