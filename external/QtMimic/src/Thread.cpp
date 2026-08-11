@@ -84,6 +84,17 @@ namespace QtMimic
         // back-pointer, so the invariant "thread() == nullptr implies not accepting" holds.
         mData->stopAccepting();
 
+        // An adopted Thread is destroyed by the thread_local that owns it as the native thread
+        // exits, and a Thread that ran exec() is destroyed by whoever created it; neither path
+        // goes through threadBody(), which is what unregisters a started worker. Leaving the
+        // registration set would hand out a pointer to freed memory -- currentThread() would
+        // return it, and the first caller to follow it (deleteLater() reaching for
+        // currentData(), say) reads destroyed storage.
+        if( tCurrentThread == this )
+        {
+            tCurrentThread = nullptr;
+        }
+
         // Clear the back-pointer LAST, once the loop is guaranteed stopped and joined. Anything
         // still holding this ThreadData (an Object living on this thread, a queued connection that
         // captured it) now sees thread() == nullptr instead of a dangling pointer -- the same thing
@@ -180,6 +191,15 @@ namespace QtMimic
         mData->prepareForRun();
 
         loop();
+
+        // The loop stopped, but this thread has not. loop() clears mAccepting as it commits to
+        // stopping -- right for a worker whose OS thread is about to end, wrong here, where the
+        // caller carries on living and may well exec() again. Left cleared, its mailbox would
+        // refuse every later post(), and deleteLater() would quietly delete on the spot rather
+        // than defer. Same distinction as the registration above: the loop's lifetime is not the
+        // thread's.
+        mData->resumeAccepting();
+
         return mExitCode.load();
     }
 
@@ -567,9 +587,20 @@ namespace QtMimic
             }
         }
 
-        // The event loop has exited; clear our per-thread registration. mAccepting was already
-        // cleared above, atomically with the decision to stop -- see that block's comment.
-        tCurrentThread = nullptr;
+        // Deliberately does NOT clear the per-thread registration on the way out.
+        //
+        // It used to, and that was wrong for exec(). Registration belongs to the *thread*, not to
+        // the loop: a started worker is registered by threadBody() and unregistered when that
+        // returns, which is when the OS thread ends. exec() is the other way in, and there the two
+        // lifetimes are nothing alike -- the main thread outlives its loop by the whole rest of the
+        // program. Clearing here un-adopted it the moment exec() returned, so
+        // Thread::currentThread() auto-adopted a fresh dummy and every thread-confined call the
+        // main thread made afterwards -- startTimer(), processEvents(), a second exec() -- was
+        // refused as coming from the wrong thread.
+        //
+        // What stops the pointer dangling is ~Thread(), which clears it if it still points here.
+        // That is the same division QtLikeSignal uses, and the reason its exec() never touches the
+        // registration at all.
     }
 
     //! @return the underlying std::thread id (valid after start()).

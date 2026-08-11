@@ -146,6 +146,8 @@ namespace QtMimic
 
         void stopAccepting();
 
+        void resumeAccepting();
+
         void setWakeCallback
             (
             std::function<void()> aWake

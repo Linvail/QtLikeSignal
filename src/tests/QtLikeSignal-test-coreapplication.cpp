@@ -263,7 +263,6 @@ TEST( CoreApplicationTest, ReExecAfterQuitBlocksInsteadOfSpinning )
         "latched again.";
 }
 
-#if LIB_HAS_ADOPTION_SURVIVES_EXEC  // otherwise the loop un-adopts the caller on the way out
 //! Verifies the loop still dispatches work on a *second* exec(), not merely that it stops spinning.
 //!
 //! The CPU check above catches the symptom; this catches the more damaging half of the same defect.
@@ -306,7 +305,6 @@ TEST( CoreApplicationTest, LoopStillDispatchesAfterAQuitExecCycle )
         << "after one quit()/exec() cycle the loop stopped dispatching entirely: the timer never "
         "fired, so processEvents() is returning before it reaches the queue.";
 }
-#endif
 
 //! Verifies exec() is rejected from a thread other than the one the application adopted.
 TEST( CoreApplicationTest, ExecFromAnotherThreadIsRejected )

@@ -110,6 +110,19 @@ namespace QtMimic
         mAccepting = false;
     }
 
+    //! @brief Accept posts again, for a thread that outlives the loop that just stopped.
+    //!
+    //! The counterpart to stopAccepting(). loop() refuses further posts as it commits to stopping,
+    //! which is right for a worker whose thread is ending -- nothing would ever drain them. It is
+    //! wrong for a thread that merely finished one exec() cycle and carries on living: its mailbox
+    //! would refuse posts forever after, and deleteLater() would silently fall back to deleting on
+    //! the spot instead of deferring.
+    void ThreadData::resumeAccepting()
+    {
+        std::lock_guard<std::mutex> locker( mMutex );
+        mAccepting = true;
+    }
+
     //! @brief Install the external-loop wake callback (used by adopted threads with their own loop).
     void ThreadData::setWakeCallback
         (

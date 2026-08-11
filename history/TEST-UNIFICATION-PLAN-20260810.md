@@ -284,12 +284,14 @@ the other with nothing to say so — which is the argument this document opened 
 
 **Open decisions**, all recorded as feature macros so they are greppable rather than forgotten:
 
-- `LIB_HAS_EXEC_GUARDS` — QtMimic has no thread-confinement or re-entrancy check on `exec()` or
-  `processEvents()`. Three tests are gated on it; two of them block forever without the guard.
-- `LIB_HAS_ADOPTION_SURVIVES_EXEC` — the `loop()` un-adopt above. A first attempt at fixing it
-  (saving and restoring `tCurrentThread`) introduced a heap-use-after-free, because the saved
-  `Thread*` can be destroyed while the loop runs. It needs a lifetime-safe design, not a raw
-  pointer.
+- ~~`LIB_HAS_EXEC_GUARDS`~~ — **resolved 2026-08-11.** QtMimic's `processEvents()` and
+  `CoreApplication::exec()` now refuse the wrong thread, and `exec()` refuses re-entry.
+- ~~`LIB_HAS_ADOPTION_SURVIVES_EXEC`~~ — **resolved 2026-08-11.** `loop()` no longer clears the
+  per-thread registration; `~Thread()` does, if it still points there. Registration belongs to the
+  thread, not the loop. Fixing it also forced a second fix: `loop()` clears `mAccepting` as it
+  stops, which is right for a worker whose OS thread is ending and wrong for a thread that merely
+  finished an `exec()` cycle, so `exec()` now restores it. The un-adopt had been *masking* that
+  one, by handing out a fresh dummy with a fresh mailbox on every call.
 - ~~`LIB_HAS_NULL_CONTEXT_REJECTED`~~ — **resolved 2026-08-11.** QtMimic now refuses a null
   context and returns a dead handle, matching QtLikeSignal and Qt. The macro is gone and the test
   asserts it unconditionally on both sides.
