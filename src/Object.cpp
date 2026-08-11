@@ -136,9 +136,17 @@ namespace QtLikeSignal
         // (owner->isRunning()) would have reintroduced exactly the dangling-pointer hazard the
         // Affinity indirection exists to remove: thread() can hand back a pointer that a
         // concurrent ~Thread() frees before the call lands.
+        //
+        // Asked with currentThreadOrNull(), never currentThread(): the latter adopts the calling
+        // thread when it has no Thread yet, and this runs during thread_local teardown -- an
+        // adopted Thread being destroyed as its native thread exits -- where adopting re-enters
+        // the unique_ptr already being destroyed. A diagnostic must not allocate. A null answer
+        // means the caller is not registered, in which case there is nothing to compare and
+        // nothing to warn about.
         const std::shared_ptr<ThreadData> ownerData = mAffinity->data();
-        if( ownerData && ownerData->isThreadRunning()
-            && ownerData->thread() != Thread::currentThread() )
+        Thread* const callerThread = Thread::currentThreadOrNull();
+        if( ownerData && callerThread && ownerData->isThreadRunning()
+            && ownerData->thread() != callerThread )
         {
             std::fprintf( stderr,
                 "Object::~Object: object destroyed from a thread other than the one it lives "

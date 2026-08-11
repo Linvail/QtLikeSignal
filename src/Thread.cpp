@@ -117,6 +117,7 @@ namespace QtLikeSignal
 
         mData->setThreadRunning( true );
         mHasFinished.store( false );
+        mFinishing.store( false );
         mExiting.store( false );
         mPriorityNeedsReset = false;
         // Each run starts from what start() was given, never from what the previous run ended at: a
@@ -173,6 +174,19 @@ namespace QtLikeSignal
 
         run();
 
+        // The run is over: report it before announcing it, so a finished() handler sees the same
+        // state Qt would show it -- isRunning() false, isFinished() true. Qt sets threadState =
+        // Finishing inside finish() and emits finished() immediately after, in that order.
+        {
+            // Under the same mutex setPriority() uses, so a setPriority() that holds the lock and
+            // sees the flag still set knows this store has not happened yet and the OS thread is
+            // therefore still alive -- which is what makes using the native handle there safe
+            // rather than merely likely.
+            std::lock_guard<std::mutex> priorityLock( mPriorityMutex );
+            mData->setThreadRunning( false );
+        }
+        mFinishing.store( true );
+
         mFinished.emit();
 
         // Drain deferred deletes before letting go of the dispatcher, mirroring Qt's
@@ -195,15 +209,9 @@ namespace QtLikeSignal
             mData->setDispatcher( nullptr );
         }
 
-        {
-            // Under the same mutex setPriority() uses. This is the only place a *running* thread
-            // clears the flag, so a setPriority() holding the lock and seeing it set knows this
-            // store has not happened yet and the OS thread is still alive -- which is what makes
-            // using the native handle there safe rather than merely likely. (The two thread-
-            // creation-failure paths also clear it, but those run before any thread exists.)
-            std::lock_guard<std::mutex> priorityLock( mPriorityMutex );
-            mData->setThreadRunning( false );
-        }
+        // Only now, once the dispatcher is released and nothing here will touch this object
+        // again, is it safe to release wait() -- whose caller may destroy this Thread the instant
+        // it returns. mFinishing above is what isFinished() reports; this is what wait() waits for.
         mHasFinished.store( true );
         {
             std::lock_guard<std::mutex> lock( mWaitMutex );
@@ -243,7 +251,7 @@ namespace QtLikeSignal
     //! Checks if the thread has finished execution. Thread-safe.
     bool Thread::isFinished() const
     {
-        return mHasFinished.load();
+        return mFinishing.load();
     }
 
     //! Gets a subscription-only view of the signal emitted when this thread's event loop starts
@@ -365,6 +373,19 @@ namespace QtLikeSignal
     {
         mAdopted = true;
         sCurrentThread = this;
+
+        // An adopted thread is running -- it is executing this very call. Qt states the same and
+        // for the same reason, setting threadState = Running in the QThread constructor used for
+        // adoption with the comment "thread should be running and not finished for the lifetime of
+        // the application". Without this, Thread::currentThread()->isRunning() answered false on
+        // the main thread, which is both wrong and the opposite of Qt.
+        //
+        // It also makes start() on an adopted Thread the no-op it should be: the early-out there
+        // tests this flag, and previously an adopted Thread would have gone on to create a second
+        // OS thread underneath itself. setPriority() still refuses, because it additionally
+        // requires a native handle, which an adopted thread has never had.
+        mData->setThreadRunning( true );
+
         bindAffinityToSelf();
 
         if( !mData->dispatcher() )

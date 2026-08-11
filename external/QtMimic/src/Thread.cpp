@@ -159,6 +159,11 @@ namespace QtMimic
         // being set up.
         std::lock_guard<std::mutex> startLock( mPriorityMutex );
         mPriorityNeedsReset = false;
+        // Set before the thread exists rather than from inside it, so isRunning() can never report
+        // false for a thread that has already begun executing. Qt publishes Running from start()
+        // for the same reason.
+        mThreadRunning.store( true );
+        mHasFinished.store( false );
         // Each run starts from what start() was given, never from what the previous run ended
         // at: a priority set on an earlier run said nothing about this one.
         mPriority = aPriority;
@@ -172,6 +177,10 @@ namespace QtMimic
     {
         mId = std::this_thread::get_id();
         mAdopted.store( true ); // native thread is already executing
+
+        // ...and a thread that is executing is running. Qt says the same, setting Running in the
+        // constructor it adopts with; see mThreadRunning.
+        mThreadRunning.store( true );
         tCurrentThread = this;
     }
 
@@ -448,6 +457,9 @@ namespace QtMimic
 
         run();
 
+        mThreadRunning.store( false );
+        mHasFinished.store( true );
+
         mFinished.emit();
 
         tCurrentThread = nullptr;
@@ -601,6 +613,22 @@ namespace QtMimic
         // What stops the pointer dangling is ~Thread(), which clears it if it still points here.
         // That is the same division QtLikeSignal uses, and the reason its exec() never touches the
         // registration at all.
+    }
+
+    //! @return true if this thread is running: start()ed and not yet finished, or adopted.
+    //!
+    //! Matches Qt's isRunning(), which reads threadState == Running and which an adopted QThread
+    //! sits in for its whole life. Thread-safe.
+    bool Thread::isRunning() const
+    {
+        return mThreadRunning.load();
+    }
+
+    //! @return true once this thread's body has finished. Always false for an adopted thread,
+    //! which never leaves the running state -- again matching Qt. Thread-safe.
+    bool Thread::isFinished() const
+    {
+        return mHasFinished.load();
     }
 
     //! @return true if this Thread describes a native thread that was already running -- one

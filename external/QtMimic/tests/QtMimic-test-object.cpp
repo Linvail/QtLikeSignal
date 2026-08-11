@@ -402,7 +402,6 @@ TEST( ObjectTest, CrossThreadLambdaConnection )
     EXPECT_EQ( executedInThread, &workerThread );
 }
 
-#if LIB_HAS_THREAD_IS_RUNNING
 //! Tests signal emission when receiver is destroyed before event processing.
 //!
 //! Verifies that when a receiver object connected via ConnectionType::Queued is destroyed prior to
@@ -466,7 +465,6 @@ TEST( ObjectTest, ReceiverDestroyedBeforeQueuedEventHandled )
 
     EXPECT_TRUE( workerThread.isFinished() );
 }
-#endif
 
 //! Tests lambda slot execution when context object is destroyed before event handling.
 //!

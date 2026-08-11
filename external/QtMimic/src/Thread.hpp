@@ -154,6 +154,10 @@ namespace QtMimic
 
         bool isAdopted() const;
 
+        bool isRunning() const;
+
+        bool isFinished() const;
+
         std::thread::id id() const;
 
         const std::string& name() const;
@@ -253,6 +257,19 @@ namespace QtMimic
         //! created. Atomic because isAdopted() may be asked from any thread, while adopt() writes
         //! it on the thread being adopted.
         std::atomic<bool> mAdopted { false };
+
+        //! True between the moment start() commits to creating a thread and the moment that
+        //! thread's body finishes -- and, for an adopted thread, from adoption onwards.
+        //!
+        //! Mirrors Qt's threadState == Running, including its treatment of an adopted thread:
+        //! QThread's adopting constructor sets Running with the comment "thread should be running
+        //! and not finished for the lifetime of the application". A thread that is executing is
+        //! running, however it came to exist.
+        std::atomic<bool> mThreadRunning { false };
+
+        //! True once the thread's body has finished. Mirrors Qt's threadState >= Finishing, and
+        //! stays false forever for an adopted thread, which Qt never moves out of Running.
+        std::atomic<bool> mHasFinished { false };
         //! Value returned by exec(). Atomic because exit() may be called from any thread while
         //! the loop thread is about to read it -- ThreadSanitizer flags the plain int.
         std::atomic<int> mExitCode { 0 };

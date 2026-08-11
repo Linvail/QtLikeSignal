@@ -113,10 +113,8 @@ TEST( ThreadTest, LifecycleAndSignals )
     thread.start();
     thread.wait();
 
-    #if LIB_HAS_THREAD_IS_RUNNING
-        EXPECT_TRUE( thread.isFinished() );
-        EXPECT_FALSE( thread.isRunning() );
-    #endif
+    EXPECT_TRUE( thread.isFinished() );
+    EXPECT_FALSE( thread.isRunning() );
     EXPECT_TRUE( thread.wasExecuted() );
     EXPECT_TRUE( startedFired );
     EXPECT_TRUE( finishedFired );
@@ -211,9 +209,7 @@ TEST( ThreadTest, ThreadExitAndReturnCode )
     ExitCodeTestThread thread;
     thread.start();
     thread.wait();
-    #if LIB_HAS_THREAD_IS_RUNNING
-        EXPECT_TRUE( thread.isFinished() );
-    #endif
+    EXPECT_TRUE( thread.isFinished() );
 }
 
 #if LIB_HAS_WAIT_TIMEOUT  // wait( ms ) returning bool
@@ -385,4 +381,58 @@ TEST( ThreadTest, PostRejectsEmptyTask )
 
     worker.quit();
     worker.wait();
+}
+
+//! Verifies isRunning()/isFinished() report the states Qt reports, at the moments Qt reports them.
+//!
+//! Three claims, each of which QtLikeSignal got wrong at some point and Qt is the authority on:
+//!
+//!   - An adopted thread is *running*. Qt's adopting QThread constructor sets threadState =
+//!     Running outright, commenting that the thread "should be running and not finished for the
+//!     lifetime of the application". Thread::currentThread()->isRunning() answering false on the
+//!     main thread was simply a lie.
+//!   - A finished() handler sees isRunning() false and isFinished() true. Qt sets Finishing inside
+//!     finish() and emits finished() immediately afterwards, in that order.
+//!   - wait() returns only once the thread is fully done, which is strictly later than the point
+//!     isFinished() starts reporting true. Qt separates Finishing from Finished for this reason.
+TEST( ThreadTest, RunningAndFinishedFollowQtStateTransitions )
+{
+    Thread* const adopted = Thread::currentThread();
+    ASSERT_NE( adopted, nullptr );
+    EXPECT_TRUE( adopted->isRunning() ) << "an adopted thread is running -- it is executing now";
+    EXPECT_FALSE( adopted->isFinished() );
+
+    Thread worker( "state-transitions" );
+    EXPECT_FALSE( worker.isRunning() ) << "not started yet";
+    EXPECT_FALSE( worker.isFinished() );
+
+    std::atomic<bool> runningInHandler { true };
+    std::atomic<bool> finishedInHandler { false };
+    Object context;
+    Object::connect( worker.getFinished(), &context,
+        [&worker, &runningInHandler, &finishedInHandler]()
+        {
+            runningInHandler.store( worker.isRunning() );
+            finishedInHandler.store( worker.isFinished() );
+        }, ConnectionType::Direct );
+
+    worker.start();
+    ASSERT_TRUE( waitUntilRunning( worker ) );
+    EXPECT_TRUE( worker.isRunning() );
+    EXPECT_FALSE( worker.isFinished() );
+
+    worker.quit();
+
+    // Called as a statement, not asserted on: wait() returns bool on one library and void on the
+    // other (see LIB_HAS_WAIT_TIMEOUT). What matters here is what it guarantees on return, which
+    // the assertions below check.
+    worker.wait();
+
+    EXPECT_FALSE( runningInHandler.load() )
+        << "finished() ran while the thread still reported itself running";
+    EXPECT_TRUE( finishedInHandler.load() )
+        << "finished() ran before the thread reported itself finished";
+
+    EXPECT_FALSE( worker.isRunning() );
+    EXPECT_TRUE( worker.isFinished() );
 }
