@@ -251,3 +251,60 @@ defect-regressions             1874       1900   ok
 Budgets are ratchets set just above today's numbers, so the check is green now and goes red on
 regression. Lower them as phases 1b, 6 and 7 land. `timer` and `stress` show the far end: all that
 remains there is the file header and the include block.
+
+
+### 2026-08-11 — all eight phases complete
+
+| Pair | Differing lines | Was |
+|---|---|---|
+| thread | 0 | 408 |
+| coreapplication | 0 | 407 |
+| thread-adoption | 0 | one-sided |
+| object | 2 | 1264 |
+| thread-priority | 8 | 814 |
+| stress | 8 | one-sided |
+| timer | 9 | 111 |
+
+153 QtLikeSignal tests and 111 QtMimic, from 118 and 74. `defect-regressions` is
+deliberately outside the comparison (category C).
+
+**What porting found.** Eight defects and gaps, every one of them present on one side and absent on
+the other with nothing to say so — which is the argument this document opened with:
+
+| Library | Found |
+|---|---|
+| QtLikeSignal | `Timer` missing four Qt behaviours: negative-interval clamping, restart on `setInterval()`, a fresh id across a restart, cancelling a `singleShot` whose context died |
+| QtLikeSignal | `Signal::emit()` took arguments by value — one copy of every argument per emit before boost saw them |
+| QtLikeSignal | `applyPriority()` was a no-op on POSIX, so `setPriority()` on a running thread changed nothing the scheduler could see |
+| QtMimic | `started`/`finished` emitted inside `loop()`, so a subclass overriding `run()` emitted neither |
+| QtMimic | `tCurrentThread` registered inside `loop()`, so such a subclass could not resolve its own affinity |
+| QtMimic | `mExitCode` raced between `exit()` and `exec()` |
+| QtMimic | `exec()` did not reset the mailbox, so a second `exec()` returned instantly with no loop |
+| QtMimic | `loop()` un-adopts the caller on exit, so after `exec()` the main thread is not its own `Thread` |
+
+**Open decisions**, all recorded as feature macros so they are greppable rather than forgotten:
+
+- `LIB_HAS_EXEC_GUARDS` — QtMimic has no thread-confinement or re-entrancy check on `exec()` or
+  `processEvents()`. Three tests are gated on it; two of them block forever without the guard.
+- `LIB_HAS_ADOPTION_SURVIVES_EXEC` — the `loop()` un-adopt above. A first attempt at fixing it
+  (saving and restoring `tCurrentThread`) introduced a heap-use-after-free, because the saved
+  `Thread*` can be destroyed while the loop runs. It needs a lifetime-safe design, not a raw
+  pointer.
+- `LIB_HAS_NULL_CONTEXT_REJECTED` — `connect()` with a null receiver returns a dead handle on
+  QtLikeSignal and a live one on QtMimic. An API contract question, not a bug.
+- `LIB_HAS_SHUTDOWN_DEFERRED_DELETE`, `LIB_HAS_CALL_LATER`, `LIB_HAS_OBJECT_NAME`,
+  `LIB_HAS_CLEANUP_CALLBACKS`, `LIB_HAS_THREAD_CREATE`, `LIB_HAS_EVENT_DISPATCHER`,
+  `LIB_HAS_OBJECT_LIFE`, `LIB_HAS_STATIC_DISCONNECT`, `LIB_HAS_WAIT_TIMEOUT`,
+  `LIB_HAS_THREAD_IS_RUNNING`, `LIB_HAS_THREAD_IS_ADOPTED`,
+  `LIB_HAS_POST_REJECTED_BEFORE_START` — features QtMimic does not have and may never want.
+
+**Left for a later pass.** The object suites were merged as the union, so several pairs now cover
+the same behaviour twice under different names (`DirectConnectionSameThread` and
+`DirectSignalSlotConnection`, for instance). Pruning them means reading bodies rather than names,
+and deleting a test is a decision that should not be made by a script.
+
+**One trap worth remembering.** A feature macro fails open in the wrong direction. When
+QtLikeSignal's coreapplication file was missing its types-header include, the macros were
+undefined, `#if UNDEFINED` evaluated to 0, and four tests silently vanished from the suite that was
+supposed to have them. Only the test count dropping showed it. The drift script does not catch
+this; the count does.
