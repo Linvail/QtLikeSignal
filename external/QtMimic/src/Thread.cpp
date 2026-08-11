@@ -214,8 +214,25 @@ namespace QtMimic
     //! For adopted threads that pump from their own external loop instead of exec().
     void Thread::processEvents()
     {
-        // Register affinity so Objects/current() resolve to us even without exec().
-        tCurrentThread = this;
+        // Confined to the thread this Thread represents. Draining another thread's queue on the
+        // caller would run its handlers on the wrong thread -- every slot, every timer, every
+        // deleteLater -- which is the exact confinement the whole affinity model exists to keep.
+        //
+        // Worse than merely running them in the wrong place: the old code registered `this` as the
+        // caller's current thread on the way in and never put it back, so a single stray call left
+        // the caller permanently believing it *was* the other thread. Everything it did afterwards
+        // -- constructing an Object, resolving a queued connection, starting a timer -- picked up
+        // the wrong affinity.
+        //
+        // Asked via isCurrent() rather than currentThread() for the reasons given in
+        // CoreApplication::exec(): currentThread() would auto-adopt a Thread as a side effect of
+        // answering, and reads a pointer that loop() clears on the way out.
+        if( !isCurrent() )
+        {
+            std::fprintf( stderr,
+                "Thread::processEvents: must be called from the thread it belongs to\n" );
+            return;
+        }
 
         for( auto& task : mData->takeAll() )
         {

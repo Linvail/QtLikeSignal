@@ -146,7 +146,6 @@ TEST( ThreadAdoptionTest, ProcessEventsDrainsQueuedWorkWithoutAnExecLoop )
     EXPECT_EQ( calls.load(), 2 );
 }
 
-#if LIB_HAS_EXEC_GUARDS  // QtMimic's processEvents() has no thread-confinement check
 //! Verifies processEvents() is rejected from a thread other than the one it belongs to.
 TEST( ThreadAdoptionTest, ProcessEventsFromAnotherThreadIsRejected )
 {
@@ -178,7 +177,6 @@ TEST( ThreadAdoptionTest, ProcessEventsFromAnotherThreadIsRejected )
     owner->processEvents();
     EXPECT_EQ( calls.load(), 1 );
 }
-#endif
 
 //! Verifies setWakeCallback() notifies a thread's own native loop when work is posted.
 //!

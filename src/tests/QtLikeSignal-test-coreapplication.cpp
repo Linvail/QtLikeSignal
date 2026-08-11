@@ -308,7 +308,6 @@ TEST( CoreApplicationTest, LoopStillDispatchesAfterAQuitExecCycle )
 }
 #endif
 
-#if LIB_HAS_EXEC_GUARDS  // without the guard this blocks forever instead of returning
 //! Verifies exec() is rejected from a thread other than the one the application adopted.
 TEST( CoreApplicationTest, ExecFromAnotherThreadIsRejected )
 {
@@ -323,9 +322,7 @@ TEST( CoreApplicationTest, ExecFromAnotherThreadIsRejected )
 
     EXPECT_EQ( result, -1 ) << "exec() must refuse to run the main loop on a foreign thread.";
 }
-#endif
 
-#if LIB_HAS_EXEC_GUARDS  // without the guard the nested call blocks forever
 //! Verifies a nested exec() is rejected rather than starting a second loop on one thread.
 TEST( CoreApplicationTest, NestedExecIsRejected )
 {
@@ -345,7 +342,6 @@ TEST( CoreApplicationTest, NestedExecIsRejected )
     EXPECT_EQ( app.exec(), 0 );
     EXPECT_EQ( nestedResult, -1 ) << "a nested exec() must be refused.";
 }
-#endif
 
 //! Verifies queued work posted from a worker thread is delivered on the main thread's loop.
 TEST( CoreApplicationTest, QueuedSignalFromWorkerIsDeliveredOnTheMainThread )

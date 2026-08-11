@@ -20,6 +20,7 @@
 
 #include "Object.hpp"
 
+#include <atomic>
 #include <functional>
 #include <string>
 #include <vector>
@@ -94,6 +95,13 @@ namespace QtMimic
     private:
         static CoreApplication* sInstance; //!< Single instance (Qt-style)
         std::vector<std::string> mArgs; //!< Command-line arguments
+
+        //! True while exec() is running its loop, so a re-entrant call can be refused.
+        //!
+        //! Atomic because the rejecting read happens on whichever thread called exec(), which is
+        //! not necessarily the one that set it -- the off-thread call is rejected by the check
+        //! above this one, but only after this flag has been read.
+        std::atomic<bool> mInExec { false };
     };
 
 } // namespace QtMimic
