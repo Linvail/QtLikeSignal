@@ -386,6 +386,7 @@ TEST( CoreApplicationTest, DeleteLaterIsProcessedByTheMainLoop )
         << "deleteLater() on the main thread was never dispatched by exec().";
 }
 
+#if LIB_HAS_SHUTDOWN_DEFERRED_DELETE  // the object is leaked instead, which only a leak checker would notice
 //! Verifies a deleteLater() still pending when the application shuts down is not leaked.
 //!
 //! Worker threads already drained deferred deletes on shutdown; the main thread had no equivalent,
@@ -406,6 +407,7 @@ TEST( CoreApplicationTest, PendingDeleteLaterIsProcessedWhenTheApplicationShutsD
     EXPECT_TRUE( destroyed->load() )
         << "a deleteLater() still pending at application shutdown was leaked instead of run.";
 }
+#endif
 
 //! Verifies a Timer created on the main thread fires from the application's loop.
 TEST( CoreApplicationTest, TimerFiresOnTheMainThreadLoop )

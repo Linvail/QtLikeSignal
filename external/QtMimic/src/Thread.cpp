@@ -77,12 +77,6 @@ namespace QtMimic
         quit();
         wait();
 
-        // Drain deferred deletes BEFORE refusing further posts, so an object that asked to be
-        // deleted is deleted rather than freed as an un-run closure. threadBody() already did this
-        // for a worker that ran to completion; this covers the rest -- an adopted Thread destroyed
-        // by its thread_local owner as the native thread exits, and one that was never started.
-        mData->processDeferredDeletes();
-
         // Refuse any further posts now that this Thread is gone: nothing will ever drain the mailbox
         // again, so post() must return false (letting deleteLater() fall back to a synchronous
         // delete) rather than silently stranding tasks. For a started+joined worker the loop already
@@ -206,9 +200,6 @@ namespace QtMimic
         // thread's.
         mData->resumeAccepting();
 
-        // Deletes queued during the final pass, which the loop broke out of before draining them.
-        mData->processDeferredDeletes();
-
         return mExitCode.load();
     }
 
@@ -276,22 +267,6 @@ namespace QtMimic
         // controls how often the external loop calls us, so the resolution a timer actually gets is
         // that loop's pump rate; see setWakeCallback() for nudging it.
         mData->dispatchExpiredTimers();
-
-        mData->processDeferredDeletes();
-    }
-
-    //! @brief Run every destruction queued on this thread by deleteLater(), and any queued by
-    //! those destructors in turn. Ordinary queued work is left alone.
-    //!
-    //! Public for the same reason QtLikeSignal's AbstractEventDispatcher::processDeferredDeletes()
-    //! is: it drives the loop as a whole and cannot be aimed at a particular receiver, unlike the
-    //! per-object operations that stay private. The loop calls it once per pass, so this is for the
-    //! shutdown paths -- CoreApplication's destructor -- and for a thread pumping externally.
-    //!
-    //! Runs the destructors on the calling thread, so call it from the thread the objects live in.
-    void Thread::processDeferredDeletes()
-    {
-        mData->processDeferredDeletes();
     }
 
     //! @brief Set a callback invoked (from any thread) whenever a task is posted, so an
@@ -473,12 +448,6 @@ namespace QtMimic
 
         run();
 
-        // Anything that asked to be deleted and never got the chance -- because quit() landed
-        // first, or because run() was overridden and never pumped at all. Drained here, on this
-        // thread, which is the thread those destructors expect. Without it they are simply leaked:
-        // the mailbox goes away with nothing having run its contents.
-        mData->processDeferredDeletes();
-
         mFinished.emit();
 
         tCurrentThread = nullptr;
@@ -523,8 +492,7 @@ namespace QtMimic
                 // Nothing to run yet: block until work is posted, a timer comes due, or a quit/OS
                 // event arrives.
                 const auto now = std::chrono::steady_clock::now();
-                if( mData->mTasks.empty() && mData->mDeferredDeletes.empty()
-                    && !mData->hasExpiredTimers( now ) && mData->mRunning )
+                if( mData->mTasks.empty() && !mData->hasExpiredTimers( now ) && mData->mRunning )
                 {
                     // How long we may sleep before the earliest timer deadline, or -1 if no timer
                     // is registered and there is therefore no deadline to respect.
@@ -540,14 +508,10 @@ namespace QtMimic
                     // A quit, a posted task or a timer change ends the wait early; a timer deadline
                     // ends it on time. Nothing else needs to be in the predicate, because a timer
                     // coming due is not a state change anyone signals -- it is just the clock.
-                    // Deferred deletes are in here as well as tasks. They live in their own list,
-                    // so without naming them a deleteLater() posted to a sleeping loop looks like a
-                    // spurious wakeup -- the predicate says no work, and the object is not deleted
-                    // until something else happens to wake the thread.
                     auto wakeCondition = [this]
                         {
-                            return !mData->mTasks.empty() || !mData->mDeferredDeletes.empty()
-                                   || !mData->mRunning || mData->mTimersChanged;
+                            return !mData->mTasks.empty() || !mData->mRunning
+                                   || mData->mTimersChanged;
                         };
 
                     if( mWaiter )
@@ -614,12 +578,6 @@ namespace QtMimic
             if( !stop )
             {
                 mData->dispatchExpiredTimers();
-            }
-
-            // Deferred deletes, after the tasks and timers that may have queued them.
-            if( !stop )
-            {
-                mData->processDeferredDeletes();
             }
 
             // Pump OS-level events; don't block since Object tasks may be pending.

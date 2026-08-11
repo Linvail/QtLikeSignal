@@ -295,10 +295,7 @@ the other with nothing to say so — which is the argument this document opened 
 - ~~`LIB_HAS_NULL_CONTEXT_REJECTED`~~ — **resolved 2026-08-11.** QtMimic now refuses a null
   context and returns a dead handle, matching QtLikeSignal and Qt. The macro is gone and the test
   asserts it unconditionally on both sides.
-- ~~`LIB_HAS_SHUTDOWN_DEFERRED_DELETE`~~ — **resolved 2026-08-11.** QtMimic keeps deferred deletes
-  in their own list, separable from ordinary queued work, and drains them from the loop, from
-  processEvents(), from ~Thread() and from ~CoreApplication().
-- `LIB_HAS_CALL_LATER`, `LIB_HAS_OBJECT_NAME`,
+- `LIB_HAS_SHUTDOWN_DEFERRED_DELETE`, `LIB_HAS_CALL_LATER`, `LIB_HAS_OBJECT_NAME`,
   `LIB_HAS_CLEANUP_CALLBACKS`, `LIB_HAS_THREAD_CREATE`, `LIB_HAS_EVENT_DISPATCHER`,
   `LIB_HAS_OBJECT_LIFE`, `LIB_HAS_STATIC_DISCONNECT`, `LIB_HAS_WAIT_TIMEOUT`,
   `LIB_HAS_THREAD_IS_RUNNING`, `LIB_HAS_THREAD_IS_ADOPTED`,

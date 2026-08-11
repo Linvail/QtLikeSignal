@@ -130,8 +130,6 @@ namespace QtMimic
 
         void processEvents();
 
-        void processDeferredDeletes();
-
         void setWakeCallback
             (
             std::function<void()> aWake
