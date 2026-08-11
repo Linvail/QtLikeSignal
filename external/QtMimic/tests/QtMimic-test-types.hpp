@@ -21,6 +21,15 @@
 //
 // Add a macro here rather than deleting a test from one file.
 // ---------------------------------------------------------------------------------------------
+//! Extra argument copies each emit() makes before the slots are reached, on top of the one copy
+//! per receiver that a by-value slot parameter costs.
+//!
+//! Zero for a signal implementation that holds the caller's arguments by reference and hands them
+//! to each slot in turn. boost::signals2 copies them into its combiner state first, which is two
+//! more -- a combiner being a feature for signals whose slots return values, which none of ours
+//! do. The copy-counting tests assert an exact total, so they need the number rather than a range.
+#define LIB_SIGNAL_EMIT_EXTRA_COPIES       2  //!< still on boost::signals2
+
 #define LIB_HAS_CALL_LATER                 0  //!< Object::callLater()
 #define LIB_HAS_EVENT_DISPATCHER           0  //!< Thread::eventDispatcher(), the Event types
 #define LIB_HAS_CLEANUP_CALLBACKS          0  //!< Object::addCleanupCallback()

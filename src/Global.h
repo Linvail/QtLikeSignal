@@ -1,9 +1,10 @@
 #ifndef GLOBAL_H
 #define GLOBAL_H
 
+#include "Connection.h"
+
 #include <memory>
 #include <type_traits>
-#include <boost/signals2.hpp>
 
 namespace QtLikeSignal
 {
@@ -30,9 +31,6 @@ namespace QtLikeSignal
         //! The slot is executed in the receiver's thread.
         Queued
     };
-
-    //! A handle representing a signal-slot connection.
-    using Connection = boost::signals2::connection;
 
     //! Selects a non-const overload of a member function by its argument types.
     //!

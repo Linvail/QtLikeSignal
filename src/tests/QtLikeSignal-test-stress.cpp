@@ -533,10 +533,18 @@ namespace
         }
 
         // THE VALIDATION:
-        // We expect only 1 copy per connected receiver, plus 2 copies for emit().
-        // Copies 1 & 2: boost::signals2 internals. When a boost signal is fired, it copies
-        // the arguments into an internal "combiner" state before it starts looping over the slots.
-        EXPECT_EQ( HeavyPayload::copyCount.load(), numReceivers + 2 );
+        // Exactly one copy per connected receiver, and nothing else.
+        //
+        // The signal is Signal<HeavyPayload>, so each slot's std::function takes the payload by
+        // value: that parameter is the one copy, and it is the copy the receiver needs, since a
+        // queued invocation has to own its arguments. Emission itself copies nothing -- it holds
+        // the caller's object by reference and hands it to each slot in turn.
+        //
+        // Anything an emit() costs on top of that is per-implementation, and is exactly what
+        // LIB_SIGNAL_EMIT_EXTRA_COPIES records: zero here, two on a library still using
+        // boost::signals2, which copies into its combiner state before looping over the slots.
+        EXPECT_EQ( HeavyPayload::copyCount.load(),
+            numReceivers + LIB_SIGNAL_EMIT_EXTRA_COPIES );
 
         worker.quit();
         worker.wait();
