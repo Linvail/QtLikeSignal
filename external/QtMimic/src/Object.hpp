@@ -35,6 +35,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -102,6 +103,13 @@ namespace QtMimic
         bool moveToThread
             (
             Thread* aThread
+            );
+
+        std::string objectName() const;
+
+        void setObjectName
+            (
+            const std::string& aName
             );
 
         void deleteLater();
@@ -608,6 +616,15 @@ namespace QtMimic
         std::atomic<bool> mDeleteLaterPosted { false }; //!< true once deleteLater() has posted delete
         mutable std::mutex mIncomingMutex;       //!< Protects mIncoming
         std::vector<Connection> mIncoming;       //!< Connections where this is the receiver
+
+        //! This object's descriptive name.
+        //!
+        //! Deliberately unguarded, matching QObject, whose objectName() has no locking either. A
+        //! mutex here would be paid for by every Object in the program to make one accessor safe
+        //! against a use the thread-affinity rules already forbid: an Object belongs to one thread,
+        //! and naming it from another is the same misuse as calling any of its other setters from
+        //! there. Use the object from the thread it lives in.
+        std::string mObjectName;
 
         //! Ids of timers started on this object and not yet killed.
         //!

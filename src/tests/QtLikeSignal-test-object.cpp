@@ -173,7 +173,6 @@ TEST( ObjectTest, SignalDisconnection )
 }
 #endif
 
-#if LIB_HAS_OBJECT_NAME
 //! Tests object naming and thread affinity functions.
 //!
 //! Verifies Object::setObjectName(), Object::objectName(), Object::thread(), and
@@ -192,7 +191,6 @@ TEST( ObjectTest, ObjectNameAndThreadAffinity )
     obj.moveToThread( &dummyThread );
     EXPECT_EQ( obj.thread(), &dummyThread );
 }
-#endif
 
 #if LIB_HAS_OBJECT_LIFE
 //! Tests weak life token tracking for object destruction.

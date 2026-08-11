@@ -457,7 +457,6 @@ namespace QtLikeSignal
     //! Gets the object's descriptive name. Thread-safe.
     std::string Object::objectName() const
     {
-        std::lock_guard<std::mutex> lock( mNameMutex );
         return mObjectName;
     }
 
@@ -467,7 +466,6 @@ namespace QtLikeSignal
         const std::string& aName  //!< The new object name.
         )
     {
-        std::lock_guard<std::mutex> lock( mNameMutex );
         mObjectName = aName;
     }
 

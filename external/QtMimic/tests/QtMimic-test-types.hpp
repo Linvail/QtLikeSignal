@@ -25,7 +25,6 @@
 #define LIB_HAS_STATIC_DISCONNECT          0  //!< Object::disconnect( handle )
 #define LIB_HAS_CALL_LATER                 0  //!< Object::callLater()
 #define LIB_HAS_EVENT_DISPATCHER           0  //!< Thread::eventDispatcher(), the Event types
-#define LIB_HAS_OBJECT_NAME                0  //!< Object::objectName()/setObjectName()
 #define LIB_HAS_CLEANUP_CALLBACKS          0  //!< Object::addCleanupCallback()
 #define LIB_HAS_VIRTUAL_RUN                1  //!< Thread::run() is virtual and subclassable
 #define LIB_HAS_THREAD_CREATE              0  //!< Thread::create()

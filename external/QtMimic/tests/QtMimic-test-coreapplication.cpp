@@ -172,7 +172,7 @@ TEST( CoreApplicationTest, ApplicationRunsOnTheAlreadyAdoptedThreadAndLeavesItUs
 
     // And it still works: a queued call must be deliverable, drained by processEvents() since no
     // loop is running here any more.
-    #if LIB_HAS_CALL_LATER && LIB_HAS_OBJECT_NAME
+    #if LIB_HAS_CALL_LATER
         Object receiver;
         Object::callLater( &receiver, &Object::setObjectName, std::string( "ok" ) );
         adopted->processEvents();

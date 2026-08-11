@@ -639,8 +639,14 @@ namespace QtLikeSignal
         std::shared_ptr<int> mLife;                          //!< Lifetime token; reset in ~Object() so weak references expire.
         const std::shared_ptr<Affinity> mAffinity;           //!< Thread affinity box; the box itself is never reassigned, only its contents (see moveToThread()).
         std::atomic<bool> mDeleteLaterPosted { false };       //!< True once deleteLater() has posted a DeferredDeleteEvent; de-bounces repeat calls, matching QObject::deleteLaterCalled.
-        std::string mObjectName;                              //!< This object's descriptive name.
-        mutable std::mutex mNameMutex;                       //!< Guards mObjectName.
+        //! This object's descriptive name.
+        //!
+        //! Deliberately unguarded, matching QObject, whose objectName() has no locking either. A
+        //! mutex here would be paid for by every Object in the program to make one accessor safe
+        //! against a use the thread-affinity rules already forbid: an Object belongs to one thread,
+        //! and naming it from another is the same misuse as calling any of its other setters from
+        //! there. Use the object from the thread it lives in.
+        std::string mObjectName;
         std::vector<std::function<void()> > mCleanupCallbacks;  //!< Callbacks to run on destruction.
         std::mutex mCleanupMutex;                            //!< Guards mCleanupCallbacks.
 

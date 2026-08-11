@@ -301,6 +301,25 @@ namespace QtMimic
         return true;
     }
 
+    //! @brief This object's descriptive name, empty unless one was set.
+    //!
+    //! **Not thread-safe**, exactly as QObject::objectName() is not; see mObjectName.
+    std::string Object::objectName() const
+    {
+        return mObjectName;
+    }
+
+    //! @brief Give this object a descriptive name, for logs and diagnostics. Nothing keys off it.
+    //!
+    //! **Not thread-safe**; see objectName().
+    void Object::setObjectName
+        (
+        const std::string& aName  //!< The new object name.
+        )
+    {
+        mObjectName = aName;
+    }
+
     //! @brief Number of live connections where this object is the receiver (diagnostics/tests).
     std::size_t Object::incomingConnectionCount() const
     {
