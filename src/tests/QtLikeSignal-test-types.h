@@ -36,7 +36,6 @@
 #define LIB_HAS_THREAD_IS_RUNNING          1  //!< Thread::isRunning()/isFinished()
 #define LIB_HAS_WAIT_TIMEOUT               1  //!< Thread::wait( ms ) returning bool
 #define LIB_HAS_POST_REJECTED_BEFORE_START 1  //!< post() fails until the dispatcher exists
-#define LIB_HAS_SHUTDOWN_DEFERRED_DELETE   1  //!< pending deleteLater() runs at app shutdown
 #define LIB_HAS_EXTERNAL_DISPATCHER        0  //!< Thread::setDispatcher()/setWaiter()
 
 #include "gtest/gtest.h"

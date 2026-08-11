@@ -148,6 +148,13 @@ namespace QtMimic
 
         void resumeAccepting();
 
+        bool postDeferredDelete
+            (
+            std::function<void()> aDelete
+            );
+
+        void processDeferredDeletes();
+
         void setWakeCallback
             (
             std::function<void()> aWake
@@ -167,6 +174,16 @@ namespace QtMimic
         bool mRunning { true };                      //!< Loop should keep iterating
         bool mAccepting { true };                    //!< post() accepts tasks (false once finished)
         std::function<void()> mWakeCb;              //!< Wakes an external loop on post (optional)
+
+        //! Deferred deletes, kept apart from mTasks rather than queued among them.
+        //!
+        //! They have to be separable because they are drained at moments when ordinary queued work
+        //! must NOT run: when a CoreApplication is destroyed, and when a Thread is. At those points
+        //! the only thing owed is the destruction of objects that asked for it -- running arbitrary
+        //! slots there would execute user code at teardown that the program never asked to run
+        //! then. Qt draws the same line, delivering DeferredDelete only when explicitly asked for
+        //! rather than as part of an ordinary sendPostedEvents().
+        std::deque<std::function<void()> > mDeferredDeletes;
 
         //! One registered timer's schedule and target. The receiver is a raw Object*, kept valid
         //! by ~Object() calling removeTimersForReceiver() before it goes away.

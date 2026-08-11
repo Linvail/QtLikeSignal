@@ -332,7 +332,7 @@ namespace QtMimic
         std::weak_ptr<int> life = mLife;
         Object* self = this;
 
-        const bool queued = targetData && targetData->post( [life, self]()
+        const bool queued = targetData && targetData->postDeferredDelete( [life, self]()
             {
                 // Skip if the object was already destroyed another way.
                 if( !life.expired() )

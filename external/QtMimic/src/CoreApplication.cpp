@@ -42,6 +42,19 @@ namespace QtMimic
     //! @brief Destructor - clears the singleton instance.
     CoreApplication::~CoreApplication()
     {
+        // Drain deferred deletes on the way out, mirroring what threadBody() does when a worker
+        // finishes and what Qt's QCoreApplication destructor does via
+        // sendPostedEvents( nullptr, DeferredDelete ). Without it every object that called
+        // deleteLater() before the application shut down is leaked: the mailbox is discarded with
+        // its contents un-run, so the closures that would have deleted them never fire.
+        //
+        // Only the deletes, not the whole mailbox: ordinary queued work must not be made to run at
+        // teardown, which would execute user code at a moment the program never asked for.
+        if( Thread* mainThread = thread() )
+        {
+            mainThread->processDeferredDeletes();
+        }
+
         if( sInstance == this )
         {
             sInstance = nullptr;
