@@ -5,23 +5,23 @@
 //! thread running its own native loop can drain our queue with processEvents() /
 //! setWakeCallback().
 //!
-//! Deliberately parallel to QtMimic's QtMimic-test-thread-adoption.cpp -- same tests, same order,
+//! Deliberately parallel to QtLikeSignal's QtLikeSignal-test-thread-adoption.cpp -- same tests, same order,
 //! same names -- so the two can be diffed against each other. See
 //! history/TEST-UNIFICATION-PLAN-20260810.md.
 
-#include "QtLikeSignal-test-types.h"
+#include "QtMimic-test-types.hpp"
 
 #include "gtest/gtest.h"
-#include "Object.h"
-#include "Signal.h"
-#include "Thread.h"
+#include "Object.hpp"
+#include "Signal.hpp"
+#include "Thread.hpp"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
 
-using namespace QtLikeSignal;
+using namespace QtMimic;
 
 //! Verifies every thread has an identity, created on demand, and that they are distinct.
 TEST( ThreadAdoptionTest, EveryNativeThreadIsAdoptedOnDemand )

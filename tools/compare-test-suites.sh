@@ -38,6 +38,7 @@ object:15
 thread:20
 coreapplication:20
 thread-priority:15
+thread-adoption:15
 "
 
 # Deliberately NOT compared: defect-regressions. A regression suite is a record of what actually
