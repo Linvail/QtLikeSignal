@@ -291,28 +291,24 @@ TEST( ObjectTest, MultiArgumentSignal )
 
 //! Tests null receiver and context safety when connecting signals.
 //!
-//! Neither form may crash. Whether the returned handle is dead is a contract difference rather
-//! than a defect: QtLikeSignal refuses the connection outright, as Qt does, because a connection
-//! with no context has no lifetime tracking and no affinity and would therefore fire forever.
-//! QtMimic returns a live one. Emitting is safe either way, which is the part both must pass.
+//! Both libraries refuse the connection outright and hand back a dead handle, as Qt does: a
+//! connection with no context has no life token, no affinity and no cleanup token, so it would
+//! fire forever, on whichever thread emitted, with nothing able to stop it.
 TEST( ObjectTest, NullReceiverOrContextConnection )
 {
     Signal<int>         sig;
     ObjectTestReceiver* nullReceiver = nullptr;
 
     auto handle1 = Object::connect( sig, nullReceiver, &ObjectTestReceiver::onValueReceived );
+    EXPECT_FALSE( handle1.connected() );
 
     Object* nullContext = nullptr;
     auto handle2     = Object::connect( sig, nullContext, []( int )
         {
         } );
+    EXPECT_FALSE( handle2.connected() );
 
-    #if LIB_HAS_NULL_CONTEXT_REJECTED
-        EXPECT_FALSE( handle1.connected() );
-        EXPECT_FALSE( handle2.connected() );
-    #endif
-
-    // Emitting with those handles outstanding must be safe whichever way the connection went.
+    // And emitting with those handles outstanding must be safe.
     sig.emit( 7 );
 }
 

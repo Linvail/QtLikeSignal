@@ -24,7 +24,6 @@
 //
 // Add a macro here rather than deleting a test from one file.
 // ---------------------------------------------------------------------------------------------
-#define LIB_HAS_NULL_CONTEXT_REJECTED      1  //!< connect() with a null receiver returns a dead handle
 #define LIB_HAS_OBJECT_LIFE                1  //!< Object::objectLife()
 #define LIB_HAS_STATIC_DISCONNECT          1  //!< Object::disconnect( handle )
 #define LIB_HAS_CALL_LATER                 1  //!< Object::callLater()

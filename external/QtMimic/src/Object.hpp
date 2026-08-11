@@ -481,10 +481,21 @@ namespace QtMimic
             ConnectionType aType
             )
         {
+            // No context, no connection. Everything that makes a connection safe hangs off the
+            // context: the life token that lets a queued invocation be dropped when the receiver
+            // dies, the affinity that decides which thread it runs on, and the cleanup token that
+            // prunes it on disconnect. A connection without one has none of that -- it would fire
+            // forever, on whichever thread emitted, with nothing able to stop it. Qt refuses the
+            // same call for the same reason, returning an invalid QMetaObject::Connection.
+            if( !aContext )
+            {
+                return {};
+            }
+
             // Capture a weak reference to the context's life token so queued
             // invocations can be safely dropped if the receiver is destroyed before
             // they run. (Only used on the queued path, which requires a context.)
-            std::weak_ptr<int> life = aContext ? aContext->mLife : std::weak_ptr<int>();
+            std::weak_ptr<int> life = aContext->mLife;
 
             // Capture the context's ThreadData, NOT a raw Thread*. Holding the data keeps it alive
             // for as long as this connection exists, and its thread() is resolved at emit time --
@@ -495,14 +506,13 @@ namespace QtMimic
             // Capture the receiver's Affinity holder, NOT a snapshot of its ThreadData. The holder
             // is resolved at emit time (below), so moveToThread() redirects even this connection.
             // Held by shared_ptr so it stays readable after the Object is destroyed.
-            std::shared_ptr<Affinity> ctxAffinity = aContext ? aContext->mAffinity : nullptr;
+            std::shared_ptr<Affinity> ctxAffinity = aContext->mAffinity;
 
             // Cleanup token captured by the slot: when the connection ends (manual
             // disconnect or signal teardown), boost destroys the slot, running this
             // destructor and pruning the handle from the receiver immediately. The
             // weak life token avoids touching a receiver that is already gone.
-            std::shared_ptr<Cleanup> cleanup = aContext ? std::make_shared<Cleanup>( aContext,
-                life ) : nullptr;
+            std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aContext, life );
 
             Connection handle = aSignal.connectReflective( [slot = std::forward<Callable>( aSlot ),
                 life, ctxAffinity, aType, cleanup]( const Connection&, auto&&... args )
@@ -561,9 +571,8 @@ namespace QtMimic
                     } );
                 } );
 
-            if( aContext )
+            cleanup->mHandle = handle;
             {
-                cleanup->mHandle = handle;
                 std::lock_guard<std::mutex> locker( aContext->mIncomingMutex );
                 aContext->mIncoming.push_back( handle );
             }
