@@ -152,6 +152,8 @@ namespace QtMimic
 
         bool isCurrent() const;
 
+        bool isAdopted() const;
+
         std::thread::id id() const;
 
         const std::string& name() const;
@@ -247,7 +249,10 @@ namespace QtMimic
         #endif
 
         std::thread::id mId;                      //!< Id of the OS thread, set from inside it.
-        bool mAdopted = false; //!< True if this represents an already-running native thread
+        //! True if this represents an already-running native thread rather than one start()
+        //! created. Atomic because isAdopted() may be asked from any thread, while adopt() writes
+        //! it on the thread being adopted.
+        std::atomic<bool> mAdopted { false };
         //! Value returned by exec(). Atomic because exit() may be called from any thread while
         //! the loop thread is about to read it -- ThreadSanitizer flags the plain int.
         std::atomic<int> mExitCode { 0 };

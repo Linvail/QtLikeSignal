@@ -28,9 +28,7 @@ TEST( ThreadAdoptionTest, EveryNativeThreadIsAdoptedOnDemand )
 {
     Thread* const main = Thread::currentThread();
     ASSERT_NE( main, nullptr );
-    #if LIB_HAS_THREAD_IS_ADOPTED
-        EXPECT_TRUE( main->isAdopted() );
-    #endif
+    EXPECT_TRUE( main->isAdopted() );
     EXPECT_EQ( Thread::currentThread(), main ) << "adoption must be stable, not re-created";
 
     Thread* fromWorker = nullptr;
@@ -38,9 +36,7 @@ TEST( ThreadAdoptionTest, EveryNativeThreadIsAdoptedOnDemand )
         {
             fromWorker = Thread::currentThread();
             EXPECT_NE( fromWorker, nullptr );
-            #if LIB_HAS_THREAD_IS_ADOPTED
-                EXPECT_TRUE( fromWorker->isAdopted() );
-            #endif
+            EXPECT_TRUE( fromWorker->isAdopted() );
         } );
     worker.join();
 

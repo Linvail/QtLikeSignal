@@ -171,7 +171,7 @@ namespace QtMimic
     void Thread::adopt()
     {
         mId = std::this_thread::get_id();
-        mAdopted = true; // native thread is already executing
+        mAdopted.store( true ); // native thread is already executing
         tCurrentThread = this;
     }
 
@@ -601,6 +601,14 @@ namespace QtMimic
         // What stops the pointer dangling is ~Thread(), which clears it if it still points here.
         // That is the same division QtLikeSignal uses, and the reason its exec() never touches the
         // registration at all.
+    }
+
+    //! @return true if this Thread describes a native thread that was already running -- one
+    //! auto-adopted on demand, or the main thread taken over by CoreApplication -- rather than one
+    //! start() created. An adopted Thread has no loop of its own unless someone exec()s it.
+    bool Thread::isAdopted() const
+    {
+        return mAdopted.load();
     }
 
     //! @return the underlying std::thread id (valid after start()).

@@ -147,9 +147,7 @@ TEST( CoreApplicationTest, ApplicationRunsOnTheAlreadyAdoptedThreadAndLeavesItUs
 {
     Thread* const adopted = Thread::currentThread();
     ASSERT_NE( adopted, nullptr ) << "every thread should be adopted on demand";
-    #if LIB_HAS_THREAD_IS_ADOPTED
-        EXPECT_TRUE( adopted->isAdopted() );
-    #endif
+    EXPECT_TRUE( adopted->isAdopted() );
 
     {
         CoreApplication app;

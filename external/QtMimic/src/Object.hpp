@@ -116,6 +116,35 @@ namespace QtMimic
 
         std::size_t incomingConnectionCount() const;
 
+        //! Gets the weak pointer tracking the lifetime of this object. Thread-safe.
+        //!
+        //! Callers testing whether the object is still alive should use `expired()`, **not**
+        //! `lock()`. The two are equally safe here and `expired()` is far cheaper: it is a plain
+        //! load where `lock()` is an atomic read-modify-write on the control block.
+        //!
+        //! Equally safe because the token is an `int`, not the Object. Holding the `shared_ptr`
+        //! that `lock()` returns keeps that `int` alive; it does nothing whatsoever to stop the
+        //! Object being destroyed a moment later. Both forms answer exactly one question -- "had
+        //! destruction begun at the instant of the check" -- and neither closes the check-then-use
+        //! race that follows it. What actually stops a destroyed receiver being called is
+        //! ~Object() disconnecting its incoming connections.
+        std::weak_ptr<int> objectLife() const
+        {
+            return mLife;
+        }
+
+        //! Disconnects a signal connection using a connection handle. Thread-safe.
+        //!
+        //! A named spelling of handle.disconnect(), so a call site reads as the counterpart of
+        //! Object::connect() rather than reaching into the boost handle directly.
+        static void disconnect
+            (
+            const Connection& aHandle  //!< The handle to disconnect.
+            )
+        {
+            aHandle.disconnect();
+        }
+
         //! Called when one of this object's timers comes due. Override to react to it; the default
         //! does nothing. Delivered by the event loop of the thread the object lives in, so an
         //! override runs there and needs no locking of its own.

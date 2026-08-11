@@ -21,14 +21,11 @@
 //
 // Add a macro here rather than deleting a test from one file.
 // ---------------------------------------------------------------------------------------------
-#define LIB_HAS_OBJECT_LIFE                0  //!< Object::objectLife()
-#define LIB_HAS_STATIC_DISCONNECT          0  //!< Object::disconnect( handle )
 #define LIB_HAS_CALL_LATER                 0  //!< Object::callLater()
 #define LIB_HAS_EVENT_DISPATCHER           0  //!< Thread::eventDispatcher(), the Event types
 #define LIB_HAS_CLEANUP_CALLBACKS          0  //!< Object::addCleanupCallback()
 #define LIB_HAS_VIRTUAL_RUN                1  //!< Thread::run() is virtual and subclassable
 #define LIB_HAS_THREAD_CREATE              0  //!< Thread::create()
-#define LIB_HAS_THREAD_IS_ADOPTED          0  //!< Thread::isAdopted()
 #define LIB_HAS_THREAD_IS_RUNNING          0  //!< Thread::isRunning()/isFinished()
 #define LIB_HAS_WAIT_TIMEOUT               0  //!< Thread::wait( ms ) returning bool
 #define LIB_HAS_POST_REJECTED_BEFORE_START 0  //!< post() fails until the dispatcher exists

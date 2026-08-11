@@ -153,7 +153,6 @@ TEST( ObjectTest, DirectSignalSlotConnection )
     EXPECT_EQ( receiver.lastValue(), 42 );
 }
 
-#if LIB_HAS_STATIC_DISCONNECT
 //! Tests signal disconnection via connection handle.
 //!
 //! Verifies Object::disconnect() successfully disconnects a previously connected signal handle,
@@ -171,7 +170,6 @@ TEST( ObjectTest, SignalDisconnection )
     sig.emit( 20 );
     EXPECT_EQ( receiver.callCount(), 1 );
 }
-#endif
 
 //! Tests object naming and thread affinity functions.
 //!
@@ -192,7 +190,6 @@ TEST( ObjectTest, ObjectNameAndThreadAffinity )
     EXPECT_EQ( obj.thread(), &dummyThread );
 }
 
-#if LIB_HAS_OBJECT_LIFE
 //! Tests weak life token tracking for object destruction.
 //!
 //! Verifies Object::objectLife() returns a valid weak pointer during the lifetime of Object
@@ -207,7 +204,6 @@ TEST( ObjectTest, ObjectLifeToken )
     }
     EXPECT_TRUE( lifeToken.expired() );
 }
-#endif
 
 #if LIB_HAS_CLEANUP_CALLBACKS
 //! Tests destruction cleanup callback execution.
