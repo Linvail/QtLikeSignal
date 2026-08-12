@@ -157,7 +157,7 @@ In priority order. None of these needs a code generator.
     lock held. connect()/disconnect() build a new vector and swap the pointer under the lock.
     Writers pay an allocation instead of readers, which is the right way round: emits vastly
     outnumber connects.
-    Keep every guarantee in ForAI/misson-signal.txt section 2 intact, and keep
+    Keep every guarantee in ForAI/mission-signal.txt section 2 intact, and keep
     QtLikeSignal-test-signal.cpp green -- it was written to pin exactly these.
 
 3b. The auto-connection path, ~65 ns against Qt's ~29. This is Object::connectImpl()'s wrapper

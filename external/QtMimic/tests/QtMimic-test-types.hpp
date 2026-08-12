@@ -33,7 +33,6 @@
 #define LIB_HAS_CALL_LATER                 0  //!< Object::callLater()
 #define LIB_HAS_EVENT_DISPATCHER           0  //!< Thread::eventDispatcher(), the Event types
 #define LIB_HAS_CLEANUP_CALLBACKS          0  //!< Object::addCleanupCallback()
-#define LIB_HAS_VIRTUAL_RUN                1  //!< Thread::run() is virtual and subclassable
 #define LIB_HAS_THREAD_CREATE              0  //!< Thread::create()
 #define LIB_HAS_WAIT_TIMEOUT               0  //!< Thread::wait( ms ) returning bool
 #define LIB_HAS_POST_REJECTED_BEFORE_START 0  //!< post() fails until the dispatcher exists
