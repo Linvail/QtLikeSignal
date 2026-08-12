@@ -222,36 +222,67 @@ namespace QtMimic
         #endif
     }
 
-    //! @brief Block until the event loop has exited and the OS thread has been reaped.
-    //! Thread-safe.
+    //! @brief Block until the event loop has exited and the OS thread has been reaped, or
+    //! @p aTime milliseconds have passed. Thread-safe.
+    //!
+    //! pthread_join() has no portable timed form -- pthread_timedjoin_np() is a glibc extension
+    //! Qt guards with a configure test -- so the timeout is served by the same condition variable
+    //! threadBody() ends by notifying, and the pthread_join() that follows is only ever the
+    //! already-finished kind. Windows can pass its timeout straight to WaitForSingleObject().
     //!
     //! Only the caller that actually claims mJoinable does the real pthread_join() -- calling
     //! pthread_join() on the same pthread_t concurrently from two threads is undefined, unlike
     //! WaitForSingleObject() on Windows, which is fine with multiple waiters. A second
     //! concurrent caller simply finds nothing left to claim and returns.
     //!
-    //! Deliberately does NOT hold mPriorityMutex across the actual pthread_join(): run()'s
-    //! priority fix-up needs that same mutex to get past its very first step, and this thread
-    //! cannot finish -- and so let pthread_join() return -- until it does. Holding the mutex
-    //! across the wait would be a self-inflicted deadlock against a thread that has barely
-    //! started.
-    void Thread::wait()
+    //! Deliberately does NOT hold mPriorityMutex across the actual wait: run()'s priority fix-up
+    //! needs that same mutex to get past its very first step, and this thread cannot finish --
+    //! and so let the wait return -- until it does. Holding the mutex across the wait would be a
+    //! self-inflicted deadlock against a thread that has barely started.
+    //! @param aTime Maximum time to wait in milliseconds; ULONG_MAX blocks indefinitely.
+    //! @return true if the thread finished (or there was nothing to wait for); false on timeout.
+    bool Thread::wait
+        (
+        unsigned long aTime
+        )
     {
-        pthread_t tid;
-        bool needJoin = false;
         {
             std::lock_guard<std::mutex> lock( mPriorityMutex );
-            if( mJoinable )
+            if( !mJoinable )
             {
-                tid = mThreadId;
-                needJoin = true;
-                mJoinable = false;
+                // Never started, or already reaped by an earlier wait().
+                return true;
             }
         }
-        if( needJoin )
+
         {
-            pthread_join( tid, nullptr );
+            std::unique_lock<std::mutex> lock( mWaitMutex );
+            const auto hasFinished = [this]
+                {
+                    return mHasFinished.load();
+                };
+
+            // The untimed overload rather than wait_for() with a huge duration: what a wait_for()
+            // has to do with it is add it to the clock's current time, which overflows.
+            if( aTime == ULONG_MAX )
+            {
+                mWaitCv.wait( lock, hasFinished );
+            }
+            else if( !mWaitCv.wait_for( lock, std::chrono::milliseconds( aTime ), hasFinished ) )
+            {
+                return false;
+            }
         }
+
+        std::lock_guard<std::mutex> lock( mPriorityMutex );
+        if( mJoinable )
+        {
+            // Under the lock and gated on the flag because two threads joining the same thread is
+            // undefined; whichever gets here second finds nothing left to reap.
+            pthread_join( mThreadId, nullptr );
+            mJoinable = false;
+        }
+        return true;
     }
 
 }

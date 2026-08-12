@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <climits>
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -148,7 +149,16 @@ namespace QtMimic
             int aCode
             );
 
-        void wait();
+        //! Blocks until the thread has finished, or @p aTime milliseconds have passed.
+        //!
+        //! Returns bool with a defaulted timeout, as QThread::wait() does, so the no-argument
+        //! call keeps meaning "block until finished".
+        //! @return true if the thread finished (or there was nothing to wait for); false if the
+        //!         timeout expired first.
+        bool wait
+            (
+            unsigned long aTime = ULONG_MAX
+            );
 
         bool isCurrent() const;
 
@@ -267,8 +277,20 @@ namespace QtMimic
         //! running, however it came to exist.
         std::atomic<bool> mThreadRunning { false };
 
-        //! True once the thread's body has finished. Mirrors Qt's threadState >= Finishing, and
-        //! stays false forever for an adopted thread, which Qt never moves out of Running.
+        //! True from the moment the run body starts winding down, before finished() is emitted.
+        //! Mirrors Qt's threadState >= Finishing, and stays false forever for an adopted thread,
+        //! which Qt never moves out of Running. This is what isFinished() reports.
+        std::atomic<bool> mFinishing { false };
+
+        //! True once the run body is completely done. This is what wait() waits for, and it is
+        //! deliberately NOT what isFinished() reports -- see mFinishing.
+        //!
+        //! Qt draws exactly this distinction: threadState goes Running -> Finishing -> Finished,
+        //! isFinished() tests >= Finishing, and wait() waits for Finished. One flag cannot do both
+        //! jobs. Reporting "finished" only at the later point would tell a finished() handler that
+        //! the thread is still running; waking wait() at the earlier one would release a waiter
+        //! while the thread is still emitting finished(), and the caller could then destroy the
+        //! Thread -- and the signal being emitted -- out from under it.
         std::atomic<bool> mHasFinished { false };
         //! Value returned by exec(). Atomic because exit() may be called from any thread while
         //! the loop thread is about to read it -- ThreadSanitizer flags the plain int.
@@ -278,6 +300,20 @@ namespace QtMimic
         int mWaiterTimeoutMs = -1;            //!< Timeout for external wait (optional)
         Signal<> mStarted;         //!< Emitted when loop starts
         Signal<> mFinished;        //!< Emitted when loop exits
+
+        //! Guards mWaitCv's predicate (mHasFinished).
+        //!
+        //! Separate from mPriorityMutex because wait() must not hold that one across a blocking
+        //! wait: run()'s priority fix-up needs it to get past its very first step, and the thread
+        //! cannot finish until it does.
+        mutable std::mutex mWaitMutex;
+
+        //! Notified by threadBody() once the run body is completely done, for wait().
+        //!
+        //! POSIX needs this: pthread_join() has no portable timed form, so the timeout is served
+        //! here and the join that follows is only ever the already-finished kind. Windows waits on
+        //! the OS thread handle instead, which takes a timeout directly.
+        std::condition_variable mWaitCv;
 
         //! Guards mPriority, mPriorityNeedsReset, and the native handle members above, including
         //! every use of that handle (creation, priority application, wait()).

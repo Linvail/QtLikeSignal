@@ -295,9 +295,16 @@ the other with nothing to say so — which is the argument this document opened 
 - ~~`LIB_HAS_NULL_CONTEXT_REJECTED`~~ — **resolved 2026-08-11.** QtMimic now refuses a null
   context and returns a dead handle, matching QtLikeSignal and Qt. The macro is gone and the test
   asserts it unconditionally on both sides.
+- ~~`LIB_HAS_WAIT_TIMEOUT`~~ — **resolved 2026-08-12.** QtMimic's `Thread::wait()` now takes a
+  defaulted timeout and returns bool, matching QtLikeSignal and Qt6. That forced the same
+  `Running -> Finishing -> Finished` split QtLikeSignal already had: one flag cannot both be what
+  `isFinished()` reports inside a `finished()` handler and what `wait()` blocks on, because
+  releasing a waiter at the earlier point lets it destroy the Thread mid-emit. POSIX serves the
+  timeout on a condition variable, `pthread_join()` having no portable timed form. The macro is
+  gone and the test asserts unconditionally on both sides.
 - `LIB_HAS_SHUTDOWN_DEFERRED_DELETE`, `LIB_HAS_CALL_LATER`, `LIB_HAS_OBJECT_NAME`,
   `LIB_HAS_CLEANUP_CALLBACKS`, `LIB_HAS_THREAD_CREATE`, `LIB_HAS_EVENT_DISPATCHER`,
-  `LIB_HAS_OBJECT_LIFE`, `LIB_HAS_STATIC_DISCONNECT`, `LIB_HAS_WAIT_TIMEOUT`,
+  `LIB_HAS_OBJECT_LIFE`, `LIB_HAS_STATIC_DISCONNECT`,
   `LIB_HAS_THREAD_IS_RUNNING`, `LIB_HAS_THREAD_IS_ADOPTED`,
   `LIB_HAS_POST_REJECTED_BEFORE_START` — features QtMimic does not have and may never want.
 

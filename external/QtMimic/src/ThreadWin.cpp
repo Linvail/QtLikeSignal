@@ -116,7 +116,9 @@ namespace QtMimic
         }
     }
 
-    //! @brief Block until the event loop has exited and the OS thread has been reaped.
+    //! @brief Block until the event loop has exited and the OS thread has been reaped, or
+    //! @p aTime milliseconds have passed.
+    //!
     //! Thread-safe: WaitForSingleObject() supports any number of concurrent waiters on the same
     //! handle, so this only needs to track who closes it, via mWaiters.
     //!
@@ -125,7 +127,12 @@ namespace QtMimic
     //! mutex to get past its very first step, and this thread cannot finish -- and so signal the
     //! handle -- until it does. Holding the mutex across the wait would be a self-inflicted
     //! deadlock against a thread that has barely started.
-    void Thread::wait()
+    //! @param aTime Maximum time to wait in milliseconds; ULONG_MAX blocks indefinitely.
+    //! @return true if the thread finished (or there was nothing to wait for); false on timeout.
+    bool Thread::wait
+        (
+        unsigned long aTime
+        )
     {
         HANDLE handle = nullptr;
         {
@@ -134,19 +141,30 @@ namespace QtMimic
             if( !handle )
             {
                 // Never started, or already reaped by an earlier wait().
-                return;
+                return true;
             }
             // Registered before the lock is dropped so no other caller can close the handle
             // while this call is inside WaitForSingleObject() on it.
             ++mWaiters;
         }
 
-        WaitForSingleObject( handle, INFINITE );
+        // The OS thread object is the wait primitive, as in Qt: it is signalled by the thread
+        // ending, which is strictly later than the mHasFinished store at the tail of
+        // threadBody(), so a true return always implies isFinished().
+        const DWORD timeout = ( aTime == ULONG_MAX ) ? INFINITE : static_cast<DWORD>( aTime );
+        const DWORD result = WaitForSingleObject( handle, timeout );
+        if( result == WAIT_FAILED )
+        {
+            std::fprintf( stderr, "Thread::wait: thread wait failure\n" );
+        }
+        const bool completed = ( result == WAIT_OBJECT_0 );
 
         {
             std::lock_guard<std::mutex> lock( mPriorityMutex );
             --mWaiters;
-            if( mWaiters == 0 )
+            // Only once the thread has actually ended: a timed-out waiter must leave the handle
+            // for the run that is still using it.
+            if( completed && mWaiters == 0 )
             {
                 CloseHandle( handle );
                 // Unless start() has already put a new run's handle there, in which case that
@@ -157,6 +175,7 @@ namespace QtMimic
                 }
             }
         }
+        return completed;
     }
 
 }

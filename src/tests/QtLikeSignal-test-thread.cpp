@@ -212,7 +212,6 @@ TEST( ThreadTest, ThreadExitAndReturnCode )
     EXPECT_TRUE( thread.isFinished() );
 }
 
-#if LIB_HAS_WAIT_TIMEOUT  // wait( ms ) returning bool
 //! Tests timed waiting on thread execution. Verifies Thread::wait(ms) returns false when
 //! thread execution exceeds timeout, and true once finished.
 TEST( ThreadTest, WaitTimeout )
@@ -228,7 +227,6 @@ TEST( ThreadTest, WaitTimeout )
     EXPECT_TRUE( finishedEventually );
     EXPECT_TRUE( thread.isFinished() );
 }
-#endif
 
 #if LIB_HAS_THREAD_CREATE  // Thread::create()
 //! Tests concurrent multi-thread execution. Verifies launching multiple Thread instances in
@@ -423,9 +421,9 @@ TEST( ThreadTest, RunningAndFinishedFollowQtStateTransitions )
 
     worker.quit();
 
-    // Called as a statement, not asserted on: wait() returns bool on one library and void on the
-    // other (see LIB_HAS_WAIT_TIMEOUT). What matters here is what it guarantees on return, which
-    // the assertions below check.
+    // Called as a statement, not asserted on: the untimed call cannot fail, and what matters here
+    // is what it guarantees on return, which the assertions below check. The return value is
+    // exercised by WaitTimeout instead.
     worker.wait();
 
     EXPECT_FALSE( runningInHandler.load() )

@@ -164,6 +164,7 @@ namespace QtMimic
         // for the same reason.
         mThreadRunning.store( true );
         mHasFinished.store( false );
+        mFinishing.store( false );
         // Each run starts from what start() was given, never from what the previous run ended
         // at: a priority set on an earlier run said nothing about this one.
         mPriority = aPriority;
@@ -458,10 +459,21 @@ namespace QtMimic
         run();
 
         mThreadRunning.store( false );
-        mHasFinished.store( true );
+        mFinishing.store( true );
 
         mFinished.emit();
 
+        // Only now, once nothing here will touch this object again, is it safe to release wait()
+        // -- whose caller may destroy this Thread the instant it returns. mFinishing above is what
+        // isFinished() reports; this is what wait() waits for.
+        mHasFinished.store( true );
+        {
+            std::lock_guard<std::mutex> locker( mWaitMutex );
+            mWaitCv.notify_all();
+        }
+
+        // Safe after the release above: this is a thread_local, not a member of the Thread the
+        // waiter may already have destroyed.
         tCurrentThread = nullptr;
     }
 
@@ -624,11 +636,14 @@ namespace QtMimic
         return mThreadRunning.load();
     }
 
-    //! @return true once this thread's body has finished. Always false for an adopted thread,
-    //! which never leaves the running state -- again matching Qt. Thread-safe.
+    //! @return true once this thread's body has begun winding down. Always false for an adopted
+    //! thread, which never leaves the running state -- again matching Qt. Thread-safe.
+    //!
+    //! Reports mFinishing, not the later flag wait() blocks on: Qt's isFinished() tests
+    //! threadState >= Finishing, so it is already true inside a finished() handler.
     bool Thread::isFinished() const
     {
-        return mHasFinished.load();
+        return mFinishing.load();
     }
 
     //! @return true if this Thread describes a native thread that was already running -- one
