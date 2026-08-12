@@ -22,6 +22,7 @@
 
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -75,11 +76,6 @@ namespace QtMimic
             std::function<void()> aTask
             );
 
-        void setEventDispatcher
-            (
-            std::function<void( int aTimeoutMs )> aDispatcher
-            );
-
         //! @return parsed command-line arguments.
         const std::vector<std::string>& arguments() const
         {
@@ -93,8 +89,18 @@ namespace QtMimic
             ) = delete;
 
     private:
+        void adoptMainThread();
+
         static CoreApplication* sInstance; //!< Single instance (Qt-style)
         std::vector<std::string> mArgs; //!< Command-line arguments
+
+        //! The adopted main thread. Non-owning: the Thread is owned by a thread_local inside
+        //! Thread and released when the native thread exits, not by this application.
+        Thread* mMainThread { nullptr };
+
+        //! The platform dispatcher this application installed on the main thread, kept so the
+        //! destructor can drain it and hand the thread back a plain one.
+        std::shared_ptr<AbstractEventDispatcher> mDispatcher;
 
         //! True while exec() is running its loop, so a re-entrant call can be refused.
         //!

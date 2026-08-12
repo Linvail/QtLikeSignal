@@ -24,18 +24,22 @@
 #ifndef QT_MIMIC_OBJECT_HPP
 #define QT_MIMIC_OBJECT_HPP
 
+#include "Event.hpp"
 #include "Global.hpp"
 #include "Signal.hpp"
-#include "Thread.hpp"
-#include "TimerEvent.hpp"
+#include "ThreadData.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -43,6 +47,14 @@
 namespace QtMimic
 {
     class Object;
+    // Forward-declared rather than included: Thread derives from Object, so Thread.hpp includes
+    // this header and the reverse include would be a cycle. Object.cpp includes Thread.hpp for the
+    // handful of places that need the definition, and isCurrentThread() below exists precisely so
+    // the inline connect machinery in this header does not.
+    class Thread;
+    class AbstractEventDispatcher;
+    class EventDispatcherDefault;
+    class CoreApplication;
 
     //! Return true if child is the same as or derived from Object.
     template <typename Child> constexpr bool is_obj = std::is_base_of<Object, Child>::value;
@@ -490,6 +502,138 @@ namespace QtMimic
             return connectImpl( aSignal, aContext, std::forward<Func>( aSlot ), aType );
         }
 
+        //! CallLater Overload 1: schedules a non-overloaded member function slot to run deferred.
+        template <typename Receiver, typename Slot, typename ... Args>
+        static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
+            MemberFunctionTraits<Slot>::is_member,
+            void>
+        callLater
+            (
+            Receiver* aReceiver,
+            Slot aSlot,
+            Args&&... aArgs
+            );
+
+        //! CallLater Overload 2: schedules an overloaded void member function slot inherited from
+        //! a base class.
+        template <typename Receiver, typename SlotClass, typename ... Args>
+        static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
+            std::is_base_of<SlotClass, Receiver>::value &&
+            !std::is_same<SlotClass, Receiver>::value,
+            void>
+        callLater( Receiver* aReceiver, void ( SlotClass::*aSlot )( NonDeduced<Args>... ), Args&&
+            ...
+            aArgs );
+
+        //! CallLater Overload 3: schedules an overloaded const void member function slot inherited
+        //! from a base class.
+        template <typename Receiver, typename SlotClass, typename ... Args>
+        static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
+            std::is_base_of<SlotClass, Receiver>::value &&
+            !std::is_same<SlotClass, Receiver>::value,
+            void>
+        callLater( Receiver* aReceiver,
+            void ( SlotClass::*aSlot )( NonDeduced<Args>... ) const,
+            Args&&... aArgs );
+
+        //! CallLater Overload 4: schedules an overloaded non-void returning member function slot
+        //! inherited from a base class.
+        template <typename Receiver, typename SlotClass, typename Ret, typename ... Args>
+        static std::enable_if_t<
+            std::is_base_of<Object, Receiver>::value && std::is_base_of<SlotClass, Receiver>::
+            value &&
+            !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
+            void>
+        callLater( Receiver* aReceiver, Ret ( SlotClass::*aSlot )( NonDeduced<Args>... ), Args&&
+            ...
+            aArgs );
+
+        //! CallLater Overload 5: schedules an overloaded non-void returning const member function
+        //! slot inherited from a base class.
+        template <typename Receiver, typename SlotClass, typename Ret, typename ... Args>
+        static std::enable_if_t<
+            std::is_base_of<Object, Receiver>::value && std::is_base_of<SlotClass, Receiver>::
+            value &&
+            !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
+            void>
+        callLater( Receiver* aReceiver,
+            Ret ( SlotClass::*aSlot )( NonDeduced<Args>... ) const,
+            Args&&... aArgs );
+
+        //! CallLater Overload 6: schedules an overloaded void member function slot defined
+        //! directly on the receiver.
+        template <typename Receiver, typename ... Args>
+        static std::enable_if_t<std::is_base_of<Object, Receiver>::value, void>
+        callLater( Receiver* aReceiver,
+            void ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ),
+            Args&&... aArgs );
+
+        //! CallLater Overload 7: schedules an overloaded const void member function slot defined
+        //! directly on the receiver.
+        template <typename Receiver, typename ... Args>
+        static std::enable_if_t<std::is_base_of<Object, Receiver>::value, void>
+        callLater( Receiver* aReceiver,
+            void ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ) const,
+            Args&&... aArgs );
+
+        //! CallLater Overload 8: schedules an overloaded non-void returning member function slot
+        //! defined directly on the receiver.
+        template <typename Receiver, typename Ret, typename ... Args>
+        static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
+            !std::is_same<Ret, void>::value,
+            void>
+        callLater( Receiver* aReceiver,
+            Ret ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ),
+            Args&&... aArgs );
+
+        //! CallLater Overload 9: schedules an overloaded non-void returning const member function
+        //! slot defined directly on the receiver.
+        template <typename Receiver, typename Ret, typename ... Args>
+        static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
+            !std::is_same<Ret, void>::value,
+            void>
+        callLater( Receiver* aReceiver,
+            Ret ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ) const,
+            Args&&... aArgs );
+        //! CallLater Overload 10: schedules a static or free function to run deferred.
+        template <typename Func, typename ... Args>
+        static std::enable_if_t<std::is_pointer<Func>::value &&
+            std::is_function<std::remove_pointer_t<Func> >::value,
+            void>
+        callLater
+            (
+            Object* aContext,
+            Func aFunc,
+            Args&&... aArgs
+            );
+
+        //! CallLater Overload 11: schedules a Signal emission to run deferred.
+        //!
+        //! Takes a Signal and not a SignalView, unlike the connect() overloads: this one emits,
+        //! which is exactly what a view exists to withhold.
+        template <typename ... SignalArgs, typename ... Args>
+        static void callLater
+            (
+            Object* aContext,
+            Signal<SignalArgs...>& aSignal,
+            Args&&... aArgs
+            );
+
+        //! CallLater Overload 12: fallback overload producing a compile-time error for unsupported
+        //! targets (e.g. lambdas).
+        template <typename Target, typename ... Args>
+        static std::enable_if_t<!MemberFunctionTraits<Target>::is_member &&
+            !( std::is_pointer<Target>::value &&
+            std::is_function<std::remove_pointer_t<Target> >::value ) &&
+            !IsSignal<std::decay_t<Target> >::value,
+            void>
+        callLater
+            (
+            Object* aContext,
+            Target&& aTarget,
+            Args&&... aArgs
+            );
+
     protected:
         //! Construct an Object directly on stable thread data. Used by internal helpers that must
         //! remain safe if the public Thread object is destroyed concurrently.
@@ -551,8 +695,12 @@ namespace QtMimic
             // weak life token avoids touching a receiver that is already gone.
             std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aContext, life );
 
+            // aContext is captured as a raw pointer, but never dereferenced here: it is handed to
+            // dispatchMetaCallTo() purely as the queue key that removeEventsForReceiver() later
+            // matches on. ~Object() strips every event still queued for it before it goes away, so
+            // the dispatcher never delivers to a dead receiver.
             Connection handle = aSignal.connectReflective( [slot = std::forward<Callable>( aSlot ),
-                life, ctxAffinity, aType, cleanup]( const Connection&, auto&&... args )
+                life, ctxAffinity, aType, cleanup, aContext]( const Connection&, auto&&... args )
                 {
                     if( aType == ConnectionType::Direct )
                     {
@@ -582,7 +730,7 @@ namespace QtMimic
                         return;
                     }
 
-                    if( aType == ConnectionType::Auto && ctxData == Thread::currentData() )
+                    if( aType == ConnectionType::Auto && isCurrentThread( ctxData ) )
                     {
                         // Already on the receiver's thread: deliver inline, like Qt::AutoConnection.
                         slot( args ... );
@@ -590,20 +738,25 @@ namespace QtMimic
                     }
 
                     // Queued connection: copy the arguments and run later in the receiver's
-                    // event loop. Post through the ThreadData (kept alive by the captured
+                    // event loop. Dispatched through the ThreadData (kept alive by the captured
                     // ctxData shared_ptr), NEVER a raw Thread* -- so a concurrent ~Thread()
-                    // cannot turn this into a use-after-free. If the target thread has already
-                    // stopped, post() returns false and the invocation is safely dropped, exactly
-                    // as Qt leaves events undelivered once the thread is gone. Skip too if the
-                    // receiver itself is gone by the time the task runs (the life token).
-                    auto sharedArgs =
-                    std::make_shared<std::tuple<std::decay_t<decltype( args )>...> >(
-                        std::forward<decltype( args )>( args )... );
-                    ctxData->post( [slot, life, sharedArgs]()
+                    // cannot turn this into a use-after-free. If the target thread has no
+                    // dispatcher, dispatchMetaCallTo() returns false and the invocation is safely
+                    // dropped, exactly as Qt leaves events undelivered once the thread is gone.
+                    // Skip too if the receiver itself is gone by the time the call runs (the life
+                    // token), which is only known then and not at emit time.
+                    //
+                    // The argument tuple lives in the closure itself rather than behind a
+                    // make_shared box: dispatchMetaCallTo() takes the std::function by value and
+                    // moves it into the MetaCallEvent, so the tuple is built once and never
+                    // copied, and the second heap allocation the box cost is gone.
+                    dispatchMetaCallTo( ctxData, aContext,
+                    [slot, life,
+                    argTuple = std::make_tuple( std::forward<decltype( args )>( args )... )]()
                     {
                         if( !life.expired() )
                         {
-                            std::apply( slot, *sharedArgs );
+                            std::apply( slot, argTuple );
                         }
                     } );
                 } );
@@ -615,6 +768,93 @@ namespace QtMimic
             }
             return handle;
         }
+
+        //! Key identifying a deduplicated deferred call.
+        //!
+        //! Implementation detail of callLater()'s per-cycle deduplication; not part of the API.
+        struct CallLaterKey
+        {
+            Object* mContext { nullptr };            //!< Target context Object.
+            size_t mTypeHash { 0 };                    //!< Type hash code of the callable target.
+            size_t mTargetSize { 0 };                  //!< Size of the callable target representation, in bytes.
+            std::array<uint8_t, 32> mTargetBytes {};   //!< Binary payload representing the callable target.
+
+            //! Compares two keys for equality.
+            bool operator==
+                (
+                const CallLaterKey& aOther  //!< Key to compare.
+                ) const
+            {
+                if( mContext != aOther.mContext || mTypeHash != aOther.mTypeHash ||
+                    mTargetSize != aOther.mTargetSize )
+                {
+                    return false;
+                }
+                return std::memcmp( mTargetBytes.data(), aOther.mTargetBytes.data(), mTargetSize )
+                       == 0;
+            }
+
+        };
+
+        //! Hash functor for CallLaterKey.
+        struct CallLaterKeyHash
+        {
+            //! Computes the hash value for a key.
+            size_t operator()
+                (
+                const CallLaterKey& aKey  //!< Key to hash.
+                ) const
+            {
+                size_t h = std::hash<Object*>()( aKey.mContext ) ^ ( aKey.mTypeHash << 1 );
+                for( size_t i = 0; i < aKey.mTargetSize; ++i )
+                {
+                    h = h * 31 + aKey.mTargetBytes[i];
+                }
+                return h;
+            }
+
+        };
+        static void
+        scheduleCallLater
+            (
+            Object* aContext,
+            const CallLaterKey& aKey,
+            std::function<void()> aInvoker
+            );
+
+        static bool isCurrentThread
+            (
+            const std::shared_ptr<ThreadData>& aData
+            );
+
+        std::shared_ptr<ThreadData> threadData() const;
+
+        bool event
+            (
+            Event* aEvent
+            );
+
+        static bool dispatchMetaCall
+            (
+            Object* aTarget,
+            std::function<void()> aSlot,
+            ConnectionType aType
+            );
+
+        //! Dispatches a metacall to an explicitly named thread, ignoring the receiver's affinity.
+        //!
+        //! The entry point for a caller that knows which thread it means rather than inferring it
+        //! from an Object. Thread::post() needs exactly that: it targets the thread's *own* queue,
+        //! which is not the same as the queue the Thread object happens to live in -- a Thread is
+        //! constructed on one thread and then runs on another, so routing post() through its Object
+        //! affinity would deliver to whoever created it until its loop started and re-pointed the
+        //! affinity at itself.
+        static bool dispatchMetaCallTo
+            (
+            const std::shared_ptr<ThreadData>& aData,
+            Object* aReceiver,
+            std::function<void()> aSlot
+            );
 
         //! Removes its connection from the receiver's mIncoming when destroyed,
         //! i.e. the moment the connection is disconnected. Lives only as long as the
@@ -670,8 +910,477 @@ namespace QtMimic
         //! quite that tightly, so the list is not single-threaded in practice.
         mutable std::mutex mRunningTimerIdsMutex;
 
+        //! Grants the event queue access to event(), which it alone invokes.
+        friend class EventDispatcherDefault;
+
+        //! Grants the callLater pending-call registry (defined in Object.cpp) the ability to
+        //! name the private CallLaterKey/CallLaterKeyHash types its map is keyed on.
+        friend struct CallLaterRegistry;
+
+        //! Grants Thread access to threadData() and mAffinity, which it needs to adopt a thread's
+        //! affinity, and to dispatchMetaCallTo(), which Thread::post() queues through.
+        friend class Thread;
+
+        friend class CoreApplication;
+
         friend class Timer;
     };
+
+    //! CallLater Overload 1 definition. This is the primary overload for standard member
+    //! functions. Because the target slot is not overloaded, the compiler can directly deduce the
+    //! Slot type.
+    template <typename Receiver, typename Slot, typename ... Args>
+    std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
+        MemberFunctionTraits<Slot>::is_member,
+        void>Object::callLater
+        (
+        Receiver* aReceiver,  //!< Target object receiving the call.
+        Slot aSlot,            //!< Member function pointer.
+        Args&&... aArgs        //!< Arguments passed to slot.
+        )
+    {
+        using SlotClass = typename MemberFunctionTraits<Slot>::class_type;
+
+        static_assert(
+            std::is_base_of<Object, Receiver>::value, "Receiver must be an instance of Object." );
+        static_assert( MemberFunctionTraits<Slot>::is_member,
+            "Slot must be a member function pointer." );
+        static_assert( std::is_base_of<SlotClass, Receiver>::value,
+            "Slot must be a member function of Receiver or one of its base classes." );
+        static_assert( std::is_invocable_v<Slot, Receiver*, Args...>,
+            "Arguments do not match the parameters of the member function." );
+
+        if( !aReceiver )
+        {
+            return;
+        }
+
+        CallLaterKey key;
+        key.mContext = aReceiver;
+        key.mTypeHash = typeid( Slot ).hash_code();
+        key.mTargetSize = sizeof( aSlot );
+        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
+        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
+
+        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
+        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+            {
+                std::apply( [aReceiver, aSlot]( auto&&... a )
+                    {
+                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+                    },
+                    std::move( tupleArgs ) );
+            };
+
+        scheduleCallLater( aReceiver, key, invoker );
+    }
+
+    //! CallLater Overload 2 definition. If the target slot is overloaded and inherited from a base
+    //! class, type deduction fails. This overload explicitly resolves the base class pointer so
+    //! you can defer execution of inherited overloaded methods.
+    template <typename Receiver, typename SlotClass, typename ... Args>
+    std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
+        std::is_base_of<SlotClass, Receiver>::value &&
+        !std::is_same<SlotClass, Receiver>::value,
+        void>Object::callLater
+        (
+        Receiver* aReceiver,  //!< Target object receiving the call.
+        void ( SlotClass::*aSlot )
+        (
+        NonDeduced<Args>...
+        ),                    //!< Member function pointer.
+        Args&&... aArgs        //!< Arguments passed to slot.
+        )
+    {
+        if( !aReceiver )
+        {
+            return;
+        }
+
+        CallLaterKey key;
+        key.mContext = aReceiver;
+        key.mTypeHash = typeid( void ( SlotClass::* )( Args... ) ).hash_code();
+        key.mTargetSize = sizeof( aSlot );
+        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
+        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
+
+        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
+        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+            {
+                std::apply( [aReceiver, aSlot]( auto&&... a )
+                    {
+                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+                    },
+                    std::move( tupleArgs ) );
+            };
+
+        scheduleCallLater( aReceiver, key, invoker );
+    }
+
+    //! CallLater Overload 3 definition. Same as Overload 2, but specifically for const member
+    //! functions.
+    template <typename Receiver, typename SlotClass, typename ... Args>
+    std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
+        std::is_base_of<SlotClass, Receiver>::value &&
+        !std::is_same<SlotClass, Receiver>::value,
+        void>Object::callLater
+        (
+        Receiver* aReceiver,                                             //!< Target object receiving the call.
+        void ( SlotClass::*aSlot )( NonDeduced<Args>... ) const,       //!< Const member function pointer.
+        Args&&... aArgs                                                   //!< Arguments passed to slot.
+        )
+    {
+        if( !aReceiver )
+        {
+            return;
+        }
+
+        CallLaterKey key;
+        key.mContext = aReceiver;
+        key.mTypeHash = typeid( void ( SlotClass::* )( Args... ) const ).hash_code();
+        key.mTargetSize = sizeof( aSlot );
+        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
+        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
+
+        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
+        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+            {
+                std::apply( [aReceiver, aSlot]( auto&&... a )
+                    {
+                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+                    },
+                    std::move( tupleArgs ) );
+            };
+
+        scheduleCallLater( aReceiver, key, invoker );
+    }
+
+    //! CallLater Overload 4 definition. If an overloaded inherited slot returns a value, it won't
+    //! match the void-returning overloads. This overload explicitly catches non-void slots from
+    //! base classes; the return value is safely discarded upon invocation.
+    template <typename Receiver, typename SlotClass, typename Ret, typename ... Args>
+    std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
+        std::is_base_of<SlotClass, Receiver>::value &&
+        !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
+        void>Object::callLater
+        (
+        Receiver* aReceiver,  //!< Target object receiving the call.
+        Ret ( SlotClass::*aSlot )
+        (
+        NonDeduced<Args>...
+        ),                    //!< Member function pointer.
+        Args&&... aArgs        //!< Arguments passed to slot.
+        )
+    {
+        if( !aReceiver )
+        {
+            return;
+        }
+
+        CallLaterKey key;
+        key.mContext = aReceiver;
+        key.mTypeHash = typeid( Ret ( SlotClass::* )( Args... ) ).hash_code();
+        key.mTargetSize = sizeof( aSlot );
+        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
+        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
+
+        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
+        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+            {
+                std::apply( [aReceiver, aSlot]( auto&&... a )
+                    {
+                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+                    },
+                    std::move( tupleArgs ) );
+            };
+
+        scheduleCallLater( aReceiver, key, invoker );
+    }
+
+    //! CallLater Overload 5 definition. Same as Overload 4, but specifically for const member
+    //! functions.
+    template <typename Receiver, typename SlotClass, typename Ret, typename ... Args>
+    std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
+        std::is_base_of<SlotClass, Receiver>::value &&
+        !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
+        void>Object::callLater
+        (
+        Receiver* aReceiver,                                        //!< Target object receiving the call.
+        Ret ( SlotClass::*aSlot )( NonDeduced<Args>... ) const,   //!< Const member function pointer.
+        Args&&... aArgs                                              //!< Arguments passed to slot.
+        )
+    {
+        if( !aReceiver )
+        {
+            return;
+        }
+
+        CallLaterKey key;
+        key.mContext = aReceiver;
+        key.mTypeHash = typeid( Ret ( SlotClass::* )( Args... ) const ).hash_code();
+        key.mTargetSize = sizeof( aSlot );
+        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
+        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
+
+        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
+        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+            {
+                std::apply( [aReceiver, aSlot]( auto&&... a )
+                    {
+                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+                    },
+                    std::move( tupleArgs ) );
+            };
+
+        scheduleCallLater( aReceiver, key, invoker );
+    }
+
+    //! CallLater Overload 6 definition. If the target slot is overloaded, the compiler cannot
+    //! deduce Slot in Overload 1. Using NonDeduced<Receiver>, this overload forces the compiler
+    //! to use the passed args types to select the right overload.
+    template <typename Receiver, typename ... Args>
+    std::enable_if_t<std::is_base_of<Object, Receiver>::value, void>Object::callLater
+        (
+        Receiver* aReceiver,                                                  //!< Target object receiving the call.
+        void ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ),   //!< Member function pointer.
+        Args&&... aArgs                                                       //!< Arguments passed to slot.
+        )
+    {
+        if( !aReceiver )
+        {
+            return;
+        }
+
+        CallLaterKey key;
+        key.mContext = aReceiver;
+        key.mTypeHash = typeid( void ( Receiver::* )( Args... ) ).hash_code();
+        key.mTargetSize = sizeof( aSlot );
+        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
+        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
+
+        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
+        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+            {
+                std::apply( [aReceiver, aSlot]( auto&&... a )
+                    {
+                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+                    },
+                    std::move( tupleArgs ) );
+            };
+
+        scheduleCallLater( aReceiver, key, invoker );
+    }
+
+    //! CallLater Overload 7 definition. Same as Overload 6, but specifically for const member
+    //! functions.
+    template <typename Receiver, typename ... Args>
+    std::enable_if_t<std::is_base_of<Object, Receiver>::value, void>Object::callLater
+        (
+        Receiver* aReceiver,                                                        //!< Target object receiving the call.
+        void ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ) const,   //!< Const member function pointer.
+        Args&&... aArgs                                                             //!< Arguments passed to slot.
+        )
+    {
+        if( !aReceiver )
+        {
+            return;
+        }
+
+        CallLaterKey key;
+        key.mContext = aReceiver;
+        key.mTypeHash = typeid( void ( Receiver::* )( Args... ) const ).hash_code();
+        key.mTargetSize = sizeof( aSlot );
+        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
+        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
+
+        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
+        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+            {
+                std::apply( [aReceiver, aSlot]( auto&&... a )
+                    {
+                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+                    },
+                    std::move( tupleArgs ) );
+            };
+
+        scheduleCallLater( aReceiver, key, invoker );
+    }
+
+    //! CallLater Overload 8 definition. If an overloaded slot returns a value, it won't match the
+    //! void-returning Overload 6. This ensures deferring overloaded methods that return Ret
+    //! compiles successfully.
+    template <typename Receiver, typename Ret, typename ... Args>
+    std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
+        !std::is_same<Ret, void>::value,
+        void>Object::callLater
+        (
+        Receiver* aReceiver,                                                 //!< Target object receiving the call.
+        Ret ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ),   //!< Member function pointer.
+        Args&&... aArgs                                                     //!< Arguments passed to slot.
+        )
+    {
+        if( !aReceiver )
+        {
+            return;
+        }
+
+        CallLaterKey key;
+        key.mContext = aReceiver;
+        key.mTypeHash = typeid( Ret ( Receiver::* )( Args... ) ).hash_code();
+        key.mTargetSize = sizeof( aSlot );
+        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
+        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
+
+        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
+        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+            {
+                std::apply( [aReceiver, aSlot]( auto&&... a )
+                    {
+                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+                    },
+                    std::move( tupleArgs ) );
+            };
+
+        scheduleCallLater( aReceiver, key, invoker );
+    }
+
+    //! CallLater Overload 9 definition. Same as Overload 8, but specifically for const member
+    //! functions.
+    template <typename Receiver, typename Ret, typename ... Args>
+    std::enable_if_t<std::is_base_of<Object, Receiver>::value && !std::is_same<Ret, void>::value,
+        void>Object::callLater
+        (
+        Receiver* aReceiver,                                                       //!< Target object receiving the call.
+        Ret ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ) const,   //!< Const member function pointer.
+        Args&&... aArgs                                                           //!< Arguments passed to slot.
+        )
+    {
+        if( !aReceiver )
+        {
+            return;
+        }
+
+        CallLaterKey key;
+        key.mContext = aReceiver;
+        key.mTypeHash = typeid( Ret ( Receiver::* )( Args... ) const ).hash_code();
+        key.mTargetSize = sizeof( aSlot );
+        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
+        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
+
+        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
+        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+            {
+                std::apply( [aReceiver, aSlot]( auto&&... a )
+                    {
+                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+                    },
+                    std::move( tupleArgs ) );
+            };
+
+        scheduleCallLater( aReceiver, key, invoker );
+    }
+
+    //! CallLater Overload 10 definition. Captures static and free functions, binding their
+    //! execution to the provided context object's thread loop.
+    template <typename Func, typename ... Args>
+    std::enable_if_t<std::is_pointer<Func>::value &&
+        std::is_function<std::remove_pointer_t<Func> >::value,
+        void>Object::callLater
+        (
+        Object* aContext,  //!< Target Object defining thread affinity and lifetime.
+        Func aFunc,          //!< Function pointer.
+        Args&&... aArgs      //!< Arguments passed to function.
+        )
+    {
+        static_assert( std::is_invocable_v<Func, Args...>,
+            "Arguments do not match the parameters of the function." );
+
+        if( !aContext || !aFunc )
+        {
+            return;
+        }
+
+        CallLaterKey key;
+        key.mContext = aContext;
+        key.mTypeHash = typeid( Func ).hash_code();
+        key.mTargetSize = sizeof( aFunc );
+        static_assert( sizeof( aFunc ) <= 32, "Function pointer exceeds key size limit." );
+        std::memcpy( key.mTargetBytes.data(), &aFunc, sizeof( aFunc ) );
+
+        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
+        auto invoker = [aFunc, tupleArgs = std::move( tupleArgs )]() mutable
+            {
+                std::apply( [aFunc]( auto&&... a )
+                    {
+                        (*aFunc )( std::forward<decltype( a )>( a )... );
+                    },
+                    std::move( tupleArgs ) );
+            };
+
+        scheduleCallLater( aContext, key, invoker );
+    }
+
+    //! CallLater Overload 11 definition. Allows callLater to queue a signal emission
+    //! (signal.emit(args...)) on a target thread instead of executing a function. SignalArgs are
+    //! the signal's parameter types.
+    template <typename ... SignalArgs, typename ... Args>
+    void Object::callLater
+        (
+        Object* aContext,               //!< Target Object defining thread affinity and lifetime.
+        Signal<SignalArgs...>& aSignal,  //!< Signal instance to emit.
+        Args&&... aArgs                  //!< Arguments passed to signal.
+        )
+    {
+        static_assert( std::is_invocable_v<Signal<SignalArgs...>, Args...>,
+            "Arguments do not match the parameters of the signal." );
+
+        if( !aContext )
+        {
+            return;
+        }
+
+        Signal<SignalArgs...>* sigPtr = &aSignal;
+
+        CallLaterKey key;
+        key.mContext = aContext;
+        key.mTypeHash = typeid( Signal<SignalArgs...> ).hash_code();
+        key.mTargetSize = sizeof( sigPtr );
+        static_assert( sizeof( sigPtr ) <= 32, "Signal pointer exceeds key size limit." );
+        std::memcpy( key.mTargetBytes.data(), &sigPtr, sizeof( sigPtr ) );
+
+        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
+        auto invoker = [sigPtr, tupleArgs = std::move( tupleArgs )]() mutable
+            {
+                std::apply( [sigPtr]( auto&&... a )
+                    {
+                        sigPtr->emit( std::forward<decltype( a )>( a )... );
+                    },
+                    std::move( tupleArgs ) );
+            };
+
+        scheduleCallLater( aContext, key, invoker );
+    }
+
+    //! CallLater Overload 12 definition. callLater relies on hashing the target address for
+    //! deduplication. Lambdas cannot be reliably hashed, so this overload intentionally catches
+    //! lambdas and general functors (Target) and triggers a static_assert.
+    template <typename Target, typename ... Args>
+    std::enable_if_t<!MemberFunctionTraits<Target>::is_member &&
+        !( std::is_pointer<Target>::value &&
+        std::is_function<std::remove_pointer_t<Target> >::value ) &&
+        !IsSignal<std::decay_t<Target> >::value,
+        void>Object::callLater
+        (
+        Object* aContext,  //!< Target Object context.
+        Target&& aTarget,   //!< Unsupported callable object (e.g. lambda).
+        Args&&... aArgs      //!< Arguments.
+        )
+    {
+        ( void )aContext;
+        ( void )aTarget;
+        static_assert(
+            sizeof( Target ) == 0, "Lambdas and general functors are not allowed in callLater." );
+    }
 
 } // namespace QtMimic
 

@@ -12,7 +12,7 @@
 #include "gtest/gtest.h"
 #include "Object.hpp"
 #include "Signal.hpp"
-#include "TimerEvent.hpp"
+#include "Event.hpp"
 #include "CoreApplication.hpp"
 #include "Thread.hpp"
 #include "Timer.hpp"
@@ -204,35 +204,6 @@ TEST( ObjectTest, ObjectLifeToken )
     }
     EXPECT_TRUE( lifeToken.expired() );
 }
-
-#if LIB_HAS_CLEANUP_CALLBACKS
-//! Tests destruction cleanup callback execution.
-//!
-//! Verifies Object::addCleanupCallback() registers callbacks that execute when Object is
-//! destroyed.
-TEST( ObjectTest, CleanupCallbacks )
-{
-    bool callbackFired1 = false;
-    bool callbackFired2 = false;
-
-    {
-        Object obj;
-        obj.addCleanupCallback( [&callbackFired1]()
-            {
-                callbackFired1 = true;
-            } );
-        obj.addCleanupCallback( [&callbackFired2]()
-            {
-                callbackFired2 = true;
-            } );
-        EXPECT_FALSE( callbackFired1 );
-        EXPECT_FALSE( callbackFired2 );
-    }
-
-    EXPECT_TRUE( callbackFired1 );
-    EXPECT_TRUE( callbackFired2 );
-}
-#endif
 
 //! Tests connecting a signal to a functor/lambda with context object.
 //!

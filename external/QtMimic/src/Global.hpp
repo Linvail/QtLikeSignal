@@ -15,6 +15,8 @@
 #ifndef QT_MIMIC_GLOBAL_HPP
 #define QT_MIMIC_GLOBAL_HPP
 
+#include <type_traits>
+
 namespace QtMimic
 {
     template <typename ... Args>
@@ -92,6 +94,13 @@ namespace QtMimic
      */
     template<typename T>
     using NonDeduced = typename Identity<T>::type;
+
+    //! Type trait detecting Signal instances. False for every T except a Signal<Args...>
+    //! specialization, which the Signal.hpp header specializes to true.
+    template<typename T>
+    struct IsSignal : std::false_type
+    {
+    };
 
     /**
      * @brief Type traits for inspecting member function pointers.

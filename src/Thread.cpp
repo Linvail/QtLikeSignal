@@ -62,6 +62,7 @@ namespace QtLikeSignal
         // destructors expect.
         if( auto dispatcher = mData->dispatcher() )
         {
+            dispatcher->close();
             dispatcher->processDeferredDeletes();
         }
         mData->setDispatcher( nullptr );
@@ -195,8 +196,14 @@ namespace QtLikeSignal
         // anything that called deleteLater() before the loop stopped is never destroyed: the
         // dispatcher's destructor can free the queued events but has no way to free their
         // receivers.
+        // Refuse further events BEFORE draining, so a deleteLater() racing this shutdown is
+        // rejected -- and falls back to a synchronous delete -- rather than landing in a queue
+        // nothing will drain again. Without the close() the post could slip between the drain
+        // below and the dispatcher being released, and the object would be neither run nor
+        // deleted.
         if( auto disp = mData->dispatcher() )
         {
+            disp->close();
             disp->processDeferredDeletes();
         }
 

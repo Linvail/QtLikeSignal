@@ -101,11 +101,6 @@ namespace QtLikeSignal
             int aId
             );
 
-        void addCleanupCallback
-            (
-            std::function<void()> aCallback
-            );
-
         //! Number of live connections where this object is the receiver. Thread-safe.
         //!
         //! A diagnostic, for asserting that a disconnect really pruned the entry rather than
@@ -647,8 +642,6 @@ namespace QtLikeSignal
         //! and naming it from another is the same misuse as calling any of its other setters from
         //! there. Use the object from the thread it lives in.
         std::string mObjectName;
-        std::vector<std::function<void()> > mCleanupCallbacks;  //!< Callbacks to run on destruction.
-        std::mutex mCleanupMutex;                            //!< Guards mCleanupCallbacks.
 
         //! Connections where this object is the receiver, disconnected by ~Object().
         //!

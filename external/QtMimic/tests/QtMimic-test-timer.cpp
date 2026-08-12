@@ -11,7 +11,7 @@
 #include "Object.hpp"
 #include "Thread.hpp"
 #include "Timer.hpp"
-#include "TimerEvent.hpp"
+#include "Event.hpp"
 
 #include "gtest/gtest.h"
 #include <atomic>

@@ -1,7 +1,13 @@
-#ifndef EVENTDISPATCHERDEFAULT_H
-#define EVENTDISPATCHERDEFAULT_H
+//! @file
+//!
+//! Cross-platform event dispatcher: queue, timers, condition-variable wait.
+//!
+//! Copyright 2026 by Garmin Ltd. or its subsidiaries.
 
-#include "AbstractEventDispatcher.h"
+#ifndef QT_MIMIC_EVENTDISPATCHERDEFAULT_HPP
+#define QT_MIMIC_EVENTDISPATCHERDEFAULT_HPP
+
+#include "AbstractEventDispatcher.hpp"
 #include <deque>
 #include <vector>
 #include <mutex>
@@ -9,7 +15,7 @@
 #include <atomic>
 #include <chrono>
 
-namespace QtLikeSignal
+namespace QtMimic
 {
     class Event;
     class Object;
@@ -178,4 +184,4 @@ namespace QtLikeSignal
     };
 }
 
-#endif // EVENTDISPATCHERDEFAULT_H
+#endif // QT_MIMIC_EVENTDISPATCHERDEFAULT_HPP

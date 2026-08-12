@@ -94,6 +94,7 @@ namespace QtLikeSignal
         // handled for worker threads; the main thread had no equivalent.
         if( mDispatcher )
         {
+            mDispatcher->close();
             mDispatcher->processDeferredDeletes();
         }
 

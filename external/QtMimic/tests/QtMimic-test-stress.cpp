@@ -362,6 +362,11 @@ namespace
         // 1. Setup the receiving thread (Thread A)
         Thread worker( "receiver_thread" );
         worker.start();
+        // start() returns before the thread's dispatcher exists, and an emit that resolves in that
+        // window is refused rather than queued. On Linux the window is microseconds and the test
+        // passed; on Windows _beginthreadex/ResumeThread makes it wide enough to swallow thousands
+        // of the 50000 emits below, which is what "dropped events" then reported.
+        ASSERT_TRUE( waitUntilRunning( worker ) );
 
         FanInReceiver receiver( &worker );
 

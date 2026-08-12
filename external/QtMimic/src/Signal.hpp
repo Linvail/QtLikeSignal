@@ -13,6 +13,8 @@
 #ifndef QT_MIMIC_SIGNAL_HPP
 #define QT_MIMIC_SIGNAL_HPP
 
+#include "Global.hpp"
+
 #include <boost/signals2/connection.hpp>
 #include <boost/signals2/signal.hpp>
 #include <functional>
@@ -137,6 +139,20 @@ namespace QtMimic
     private:
         boost::signals2::signal<void( Args... )> mSignal;
         mutable SignalView<Args...> mView;
+    };
+
+    //! Specialization of IsSignal matching any Signal<Args...>, so IsSignal<T>::value is
+    //! true precisely when T is a signal.
+    template<typename ... Args>
+    struct IsSignal<Signal<Args...> > : std::true_type
+    {
+    };
+
+    //! A view is a signal for the purposes of the trait: both are things Object::connect() may be
+    //! given as its source, and callLater() must reject both as a target for the same reason.
+    template<typename ... Args>
+    struct IsSignal<SignalView<Args...> > : std::true_type
+    {
     };
 
     template <typename ... Args>

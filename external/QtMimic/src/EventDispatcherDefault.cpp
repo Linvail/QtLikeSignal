@@ -1,10 +1,16 @@
-#include "EventDispatcherDefault.h"
-#include "Event.h"
-#include "Object.h"
+//! @file
+//!
+//! Cross-platform event dispatcher implementation.
+//!
+//! Copyright 2026 by Garmin Ltd. or its subsidiaries.
+
+#include "EventDispatcherDefault.hpp"
+#include "Event.hpp"
+#include "Object.hpp"
 #include <algorithm>
 #include <unordered_set>
 
-namespace QtLikeSignal
+namespace QtMimic
 {
     //! Constructs a new default event dispatcher.
     EventDispatcherDefault::EventDispatcherDefault() = default;

@@ -35,11 +35,9 @@
 
 #define LIB_HAS_CALL_LATER                 1  //!< Object::callLater()
 #define LIB_HAS_EVENT_DISPATCHER           1  //!< Thread::eventDispatcher(), the Event types
-#define LIB_HAS_CLEANUP_CALLBACKS          1  //!< Object::addCleanupCallback()
 #define LIB_HAS_THREAD_CREATE              1  //!< Thread::create()
 #define LIB_HAS_POST_REJECTED_BEFORE_START 1  //!< post() fails until the dispatcher exists
 #define LIB_HAS_SHUTDOWN_DEFERRED_DELETE   1  //!< pending deleteLater() runs at app shutdown
-#define LIB_HAS_EXTERNAL_DISPATCHER        0  //!< Thread::setDispatcher()/setWaiter()
 
 #include "gtest/gtest.h"
 #include <chrono>

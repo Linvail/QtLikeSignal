@@ -186,21 +186,6 @@ namespace QtLikeSignal
             handle.disconnect();
         }
 
-        // Move the callbacks out from under mCleanupMutex before invoking any of them. Running them
-        // while still holding the lock deadlocks on the non-recursive mutex if a callback calls
-        // addCleanupCallback() on this same object. A callback registered during the loop below is
-        // intentionally dropped -- this object is already being destroyed, so there is no later point
-        // at which it could meaningfully run.
-        std::vector<std::function<void()> > callbacksToRun;
-        {
-            std::lock_guard<std::mutex> lock( mCleanupMutex );
-            callbacksToRun.swap( mCleanupCallbacks );
-        }
-        for( auto& cb : callbacksToRun )
-        {
-            cb();
-        }
-
         {
             std::lock_guard<std::mutex> lock( CallLaterRegistry::sMutex );
             auto& pending = CallLaterRegistry::sPending;
@@ -509,7 +494,14 @@ namespace QtLikeSignal
             {
                 if( auto disp = tData->dispatcher() )
                 {
-                    disp->postEvent( this, static_cast<Event*>( event ) );
+                    // A refusal means the dispatcher is closing, so nothing would ever drain this
+                    // event; postEvent() has already freed it. Fall through to the synchronous
+                    // delete rather than leaking the object.
+                    if( disp->postEvent( this, static_cast<Event*>( event ) ) )
+                    {
+                        return;
+                    }
+                    delete this;
                     return;
                 }
             }
@@ -666,16 +658,6 @@ namespace QtLikeSignal
         }
     }
 
-    //! Registers a callback to be executed when this object is destroyed. Thread-safe.
-    void Object::addCleanupCallback
-        (
-        std::function<void()> aCallback  //!< The function to execute upon destruction.
-        )
-    {
-        std::lock_guard<std::mutex> lock( mCleanupMutex );
-        mCleanupCallbacks.push_back( std::move( aCallback ) );
-    }
-
     //! Dispatches a metacall callback to the target object's event loop based on connection type.
     //! Thread-safe. Returns true if the slot ran (direct) or was queued successfully; false if it
     //! could not be delivered at all, which happens when the target has no thread affinity or its
@@ -757,8 +739,7 @@ namespace QtLikeSignal
         if( auto disp = aData ? aData->dispatcher() : nullptr )
         {
             auto* event = new MetaCallEvent( std::move( aSlot ) );
-            disp->postEvent( aReceiver, static_cast<Event*>( event ) );
-            return true;
+            return disp->postEvent( aReceiver, static_cast<Event*>( event ) );
         }
         return false;
     }

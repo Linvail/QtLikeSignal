@@ -1,5 +1,11 @@
-#ifndef ABSTRACTEVENTDISPATCHER_H
-#define ABSTRACTEVENTDISPATCHER_H
+//! @file
+//!
+//! Abstract interface every event dispatcher implements.
+//!
+//! Copyright 2026 by Garmin Ltd. or its subsidiaries.
+
+#ifndef QT_MIMIC_ABSTRACTEVENTDISPATCHER_HPP
+#define QT_MIMIC_ABSTRACTEVENTDISPATCHER_HPP
 
 #include <deque>
 #include <functional>
@@ -9,7 +15,7 @@
 
 #include <vector>
 
-namespace QtLikeSignal
+namespace QtMimic
 {
     class Event;
     class Object;
@@ -138,4 +144,4 @@ namespace QtLikeSignal
     };
 }
 
-#endif // ABSTRACTEVENTDISPATCHER_H
+#endif // QT_MIMIC_ABSTRACTEVENTDISPATCHER_HPP

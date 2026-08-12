@@ -31,9 +31,7 @@ namespace QtMimic
         if( handle == 0 )
         {
             std::fprintf( stderr, "Thread::start: failed to create thread\n" );
-            std::lock_guard<std::mutex> dataLocker( mData->mMutex );
-            mData->mRunning = false;
-            mData->mAccepting = false;
+            mData->setThreadRunning( false );
             return;
         }
         mHandle = reinterpret_cast<void*>( handle );

@@ -19,6 +19,41 @@ namespace
     using namespace std::chrono_literals;
     using namespace QtMimic;
 
+    //! Posts a marker task and blocks until it has run, proving the thread's loop is up and
+    //! draining.
+    //!
+    //! Needed because post() now goes through the thread's event dispatcher, which threadBody()
+    //! creates as it starts; a post() issued between start() returning and that dispatcher existing
+    //! is refused rather than queued. Retrying is the documented way to wait it out -- the shared
+    //! suites' waitUntilRunning() does exactly this. Before the dispatcher port these tests could
+    //! post straight after start(), because the mailbox lived in ThreadData and existed from
+    //! construction.
+    inline bool waitUntilRunning
+        (
+        Thread& aThread,       //!< The thread to wait for.
+        int aTimeoutMs = 5000  //!< How long to wait before giving up.
+        )
+    {
+        std::promise<void> ran;
+        std::future<void> ranFuture = ran.get_future();
+        const auto deadline = std::chrono::steady_clock::now()
+            + std::chrono::milliseconds( aTimeoutMs );
+
+        while( !aThread.post( [&ran]()
+            {
+                ran.set_value();
+            } ) )
+        {
+            if( std::chrono::steady_clock::now() > deadline )
+            {
+                return false;
+            }
+            std::this_thread::yield();
+        }
+        return ranFuture.wait_for( std::chrono::milliseconds( aTimeoutMs ) ) ==
+               std::future_status::ready;
+    }
+
     // ---------------------------------------------------------------------------------------------
     // Defect: Thread could never be restarted after quit(). mRunning was set true only in the
     // constructor and never reset, so start() called again after a previous quit() spawned a thread
@@ -47,6 +82,10 @@ namespace
         auto runOneCycle = [&thread]()
             {
                 thread.start();
+                if( !waitUntilRunning( thread ) )
+                {
+                    return false; // loop never came up; nothing further to check this cycle
+                }
 
                 std::promise<void> firstRanPromise;
                 auto firstRanFuture = firstRanPromise.get_future();
@@ -96,6 +135,7 @@ namespace
     {
         Thread thread( "restart-worker-2" );
         thread.start();
+        ASSERT_TRUE( waitUntilRunning( thread ) );
 
         // Post a task and wait for it, which also guarantees the loop has actually begun running
         // before quit() is requested below.
@@ -120,6 +160,7 @@ namespace
         // properly fixed -- overwrite a joinable std::thread and call std::terminate(), aborting the
         // whole test process rather than failing gracefully. That abort *is* the failure signal here.
         thread.start();
+        ASSERT_TRUE( waitUntilRunning( thread ) );
 
         std::promise<void> secondRanPromise;
         auto secondRanFuture = secondRanPromise.get_future();
@@ -168,6 +209,7 @@ namespace
     {
         Thread thread( "post-after-stop" );
         thread.start();
+        ASSERT_TRUE( waitUntilRunning( thread ) );
 
         std::promise<void> ranPromise;
         auto ranFuture = ranPromise.get_future();
@@ -197,6 +239,7 @@ namespace
     {
         Thread thread( "deletelater-after-stop" );
         thread.start();
+        ASSERT_TRUE( waitUntilRunning( thread ) );
         thread.quit();
         thread.wait(); // fully stopped before the probe is even constructed on it.
 
@@ -229,6 +272,7 @@ namespace
         {
             Thread thread( "race-worker" );
             thread.start();
+            ASSERT_TRUE( waitUntilRunning( thread ) );
 
             auto* probe = new DefectDeleteLaterProbe( dtorCount );
             probe->moveToThread( &thread );
@@ -322,6 +366,7 @@ namespace
 
         auto* worker = new Thread( "explicit-worker" );
         worker->start();
+        ASSERT_TRUE( waitUntilRunning( *worker ) );
 
         auto* obj = new Object( worker );
         Object::connect( sig, obj, []
@@ -440,6 +485,7 @@ namespace
     {
         auto* worker = new Thread( "post-race-victim" );
         worker->start();
+        ASSERT_TRUE( waitUntilRunning( *worker ) );
 
         WindowProbeReceiver receiver( worker ); // affinity == worker
         Signal<const WindowProbe&> sig;

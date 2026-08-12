@@ -145,9 +145,7 @@ namespace QtMimic
         if( code != 0 )
         {
             std::fprintf( stderr, "Thread::start: thread creation error\n" );
-            std::lock_guard<std::mutex> dataLocker( mData->mMutex );
-            mData->mRunning = false;
-            mData->mAccepting = false;
+            mData->setThreadRunning( false );
             return;
         }
 

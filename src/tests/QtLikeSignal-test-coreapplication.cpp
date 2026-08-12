@@ -27,7 +27,7 @@ using namespace QtLikeSignal;
 
 //! Allocates an Object that sets @p aFlag when it is destroyed.
 //!
-//! Written against the destructor rather than addCleanupCallback(), which only one of the two
+//! Written against the destructor, which every Object has, rather than against any one of the two
 //! libraries has -- a subclass observing its own destruction says the same thing everywhere.
 static Object* newDestructionProbe
     (

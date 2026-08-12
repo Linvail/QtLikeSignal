@@ -11,10 +11,9 @@
 #ifndef QT_MIMIC_TIMER_HPP
 #define QT_MIMIC_TIMER_HPP
 
+#include "Event.hpp"
 #include "Object.hpp"
 #include "Signal.hpp"
-#include "Thread.hpp"
-#include "TimerEvent.hpp"
 
 #include <utility>
 
@@ -324,16 +323,16 @@ namespace QtMimic
         // current thread and posting to start it there otherwise.
         auto* helper = new SingleShotContextHelper( contextData, contextLife, aMsec, aFunctor );
 
-        if( Thread::currentData() == contextData )
+        if( Object::isCurrentThread( contextData ) )
         {
             helper->arm();  // may delete itself; do not touch `helper` afterwards
         }
-        else if( !contextData->post( [helper]()
+        else if( !Object::dispatchMetaCallTo( contextData, helper, [helper]()
             {
                 helper->arm();
             } ) )
         {
-            // The target loop has already stopped, so the task was refused rather than queued into
+            // The target thread has no dispatcher, so the call was refused rather than queued into
             // something nothing will drain. Reclaim the helper here.
             delete helper;
         }
