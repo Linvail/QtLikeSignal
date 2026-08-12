@@ -1,5 +1,5 @@
-#ifndef QT6_PERF_OBJECTS_H
-#define QT6_PERF_OBJECTS_H
+#ifndef QT_LIKE_SIGNAL_QT6_PERF_OBJECTS_H
+#define QT_LIKE_SIGNAL_QT6_PERF_OBJECTS_H
 
 //! @file
 //!
@@ -66,4 +66,4 @@ public:
     }
 };
 
-#endif // QT6_PERF_OBJECTS_H
+#endif // QT_LIKE_SIGNAL_QT6_PERF_OBJECTS_H

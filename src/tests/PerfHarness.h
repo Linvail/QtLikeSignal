@@ -1,5 +1,5 @@
-#ifndef PERF_HARNESS_H
-#define PERF_HARNESS_H
+#ifndef QT_LIKE_SIGNAL_PERF_HARNESS_H
+#define QT_LIKE_SIGNAL_PERF_HARNESS_H
 
 //! @file
 //!
@@ -217,4 +217,4 @@ namespace PerfHarness
     }
 }
 
-#endif // PERF_HARNESS_H
+#endif // QT_LIKE_SIGNAL_PERF_HARNESS_H

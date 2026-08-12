@@ -1,5 +1,5 @@
-#ifndef OBJECT_H
-#define OBJECT_H
+#ifndef QT_LIKE_SIGNAL_OBJECT_H
+#define QT_LIKE_SIGNAL_OBJECT_H
 
 #include "Event.h"
 #include "Global.h"
@@ -1140,4 +1140,4 @@ namespace QtLikeSignal
     }
 }
 
-#endif // OBJECT_H
+#endif // QT_LIKE_SIGNAL_OBJECT_H

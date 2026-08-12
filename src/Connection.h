@@ -1,5 +1,5 @@
-#ifndef CONNECTION_H
-#define CONNECTION_H
+#ifndef QT_LIKE_SIGNAL_CONNECTION_H
+#define QT_LIKE_SIGNAL_CONNECTION_H
 
 #include <atomic>
 #include <memory>
@@ -123,4 +123,4 @@ namespace QtLikeSignal
     };
 }
 
-#endif // CONNECTION_H
+#endif // QT_LIKE_SIGNAL_CONNECTION_H

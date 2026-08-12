@@ -1,5 +1,5 @@
-#ifndef EVENT_H
-#define EVENT_H
+#ifndef QT_LIKE_SIGNAL_EVENT_H
+#define QT_LIKE_SIGNAL_EVENT_H
 
 #include <functional>
 #include <utility>
@@ -123,4 +123,4 @@ namespace QtLikeSignal
     };
 }
 
-#endif  // EVENT_H
+#endif  // QT_LIKE_SIGNAL_EVENT_H

@@ -1,5 +1,5 @@
-#ifndef COREAPPLICATION_H
-#define COREAPPLICATION_H
+#ifndef QT_LIKE_SIGNAL_COREAPPLICATION_H
+#define QT_LIKE_SIGNAL_COREAPPLICATION_H
 
 #include "Object.h"
 #include "Thread.h"
@@ -106,4 +106,4 @@ namespace QtLikeSignal
     };
 }
 
-#endif // COREAPPLICATION_H
+#endif // QT_LIKE_SIGNAL_COREAPPLICATION_H
