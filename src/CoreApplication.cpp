@@ -174,4 +174,20 @@ namespace QtLikeSignal
     {
         exit( 0 );
     }
+
+    //! Queues a task onto the main thread's event loop. Thread-safe.
+    //!
+    //! Static, like exit()/quit(), so any thread can hand work to the main loop without holding a
+    //! pointer to the application. Does nothing if no application exists. The task is dropped if the
+    //! main thread has no dispatcher, exactly as Thread::post() reports.
+    void CoreApplication::post
+        (
+        std::function<void()> aTask  //!< The callable to run on the main thread.
+        )
+    {
+        if( sInstance && sInstance->mMainThread )
+        {
+            sInstance->mMainThread->post( std::move( aTask ) );
+        }
+    }
 }

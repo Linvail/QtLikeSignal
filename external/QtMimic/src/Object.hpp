@@ -878,7 +878,6 @@ namespace QtMimic
             int aTimerId
             );
 
-        std::shared_ptr<ThreadData> threadDataRef() const;
 
         const std::shared_ptr<Affinity> mAffinity;     //!< Affinity holder; never reassigned after ctor
         std::shared_ptr<int> mLife;              //!< Liveness token for queued slots

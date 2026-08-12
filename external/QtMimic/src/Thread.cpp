@@ -431,13 +431,6 @@ namespace QtMimic
         return mPriority;
     }
 
-    //! @brief Check if the calling thread is this Thread.
-    //! @return true if the calling thread is this Thread, false otherwise.
-    bool Thread::isCurrent() const
-    {
-        return sCurrentThread == this;
-    }
-
     //! @return true if this thread is running: start()ed and not yet finished, or adopted.
     //!
     //! Matches Qt's isRunning(), which reads threadState == Running and which an adopted QThread

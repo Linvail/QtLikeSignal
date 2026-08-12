@@ -33,11 +33,6 @@
 //! do. The copy-counting tests assert an exact total, so they need the number rather than a range.
 #define LIB_SIGNAL_EMIT_EXTRA_COPIES       0  //!< own signal implementation
 
-#define LIB_HAS_CALL_LATER                 1  //!< Object::callLater()
-#define LIB_HAS_EVENT_DISPATCHER           1  //!< Thread::eventDispatcher(), the Event types
-#define LIB_HAS_THREAD_CREATE              1  //!< Thread::create()
-#define LIB_HAS_POST_REJECTED_BEFORE_START 1  //!< post() fails until the dispatcher exists
-#define LIB_HAS_SHUTDOWN_DEFERRED_DELETE   1  //!< pending deleteLater() runs at app shutdown
 
 #include "gtest/gtest.h"
 #include <chrono>

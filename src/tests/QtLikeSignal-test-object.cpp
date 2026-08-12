@@ -277,7 +277,6 @@ TEST( ObjectTest, NullReceiverOrContextConnection )
     sig.emit( 7 );
 }
 
-#if LIB_HAS_THREAD_CREATE
 //! Tests low-level timer registration and cleanup.
 //!
 //! Verifies Object::startTimer() returns valid timer IDs and Object::killTimer() stops active
@@ -302,7 +301,6 @@ TEST( ObjectTest, TimerStartAndKill )
     thread->wait();
     delete thread;
 }
-#endif
 
 //! Tests connect() with member function slot when receiver lives in another thread.
 //!
@@ -545,7 +543,6 @@ static void testCallLaterFreeFunc
     g_testFreeFuncCount++;
 }
 
-#if LIB_HAS_CALL_LATER
 //! Tests Object::callLater with a member function slot.
 TEST( ObjectTest, CallLaterMemberFunction )
 {
@@ -573,9 +570,7 @@ TEST( ObjectTest, CallLaterMemberFunction )
     EXPECT_EQ( receiver.lastValue(), 42 );
     EXPECT_EQ( receiver.executedThread(), &workerThread );
 }
-#endif
 
-#if LIB_HAS_CALL_LATER
 //! Tests Object::callLater deduplication and parameter overwriting.
 //!
 //! Verifies that invoking callLater multiple times in the same cycle collapses to a single
@@ -639,10 +634,8 @@ TEST( ObjectTest, CallLaterDeduplicationAndLastArgs )
     EXPECT_EQ( receiver.callCount(), 1 );
     EXPECT_EQ( receiver.lastValue(), 30 );
 }
-#endif
 
 
-#if LIB_HAS_CALL_LATER
 //! Tests Object::callLater with a free function.
 TEST( ObjectTest, CallLaterFreeFunction )
 {
@@ -672,9 +665,7 @@ TEST( ObjectTest, CallLaterFreeFunction )
     EXPECT_EQ( g_testFreeFuncCount, 1 );
     EXPECT_EQ( g_testFreeFuncLastVal, 99 );
 }
-#endif
 
-#if LIB_HAS_CALL_LATER
 //! Tests Object::callLater with a Signal instance.
 TEST( ObjectTest, CallLaterSignal )
 {
@@ -705,9 +696,7 @@ TEST( ObjectTest, CallLaterSignal )
     EXPECT_EQ( receiver.callCount(), 1 );
     EXPECT_EQ( receiver.lastValue(), 777 );
 }
-#endif
 
-#if LIB_HAS_CALL_LATER
 //! Tests Object::callLater execution across multiple event loop cycles.
 TEST( ObjectTest, CallLaterMultipleCycles )
 {
@@ -757,7 +746,6 @@ TEST( ObjectTest, CallLaterMultipleCycles )
     EXPECT_EQ( receiver.callCount(), 2 );
     EXPECT_EQ( receiver.lastValue(), 200 );
 }
-#endif
 
 //! Tests Object::connect with overloaded slots.
 TEST( ObjectTest, ConnectOverloadedSlot )

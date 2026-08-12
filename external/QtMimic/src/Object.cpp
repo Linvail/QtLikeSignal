@@ -144,7 +144,7 @@ namespace QtMimic
     //! refcounted QThreadData rather than a QThread*. Re-read it rather than caching it.
     Thread* Object::thread() const
     {
-        const std::shared_ptr<ThreadData> data = threadDataRef();
+        const std::shared_ptr<ThreadData> data = threadData();
         return data ? data->thread() : nullptr;
     }
 
@@ -185,7 +185,7 @@ namespace QtMimic
         // must not run. The caller is on that outgoing thread (push-only, checked above), so this
         // cannot race its loop's own delivery pass.
         std::vector<AbstractEventDispatcher::TimerRegistration> timersToMove;
-        if( const std::shared_ptr<ThreadData> oldData = threadDataRef() )
+        if( const std::shared_ptr<ThreadData> oldData = threadData() )
         {
             if( auto oldDispatcher = oldData->dispatcher() )
             {
@@ -197,7 +197,7 @@ namespace QtMimic
 
         if( !timersToMove.empty() )
         {
-            const std::shared_ptr<ThreadData> newData = threadDataRef();
+            const std::shared_ptr<ThreadData> newData = threadData();
             if( newData )
             {
                 // Re-register on the destination thread rather than from here: registerTimer() must
@@ -210,7 +210,7 @@ namespace QtMimic
                     this,
                     [this, timersToMove]()
                     {
-                        if( auto tData = threadDataRef() )
+                        if( auto tData = threadData() )
                         {
                             if( auto disp = tData->dispatcher() )
                             {
@@ -277,7 +277,7 @@ namespace QtMimic
             return -1;
         }
 
-        const std::shared_ptr<ThreadData> data = threadDataRef();
+        const std::shared_ptr<ThreadData> data = threadData();
         if( !data )
         {
             // Detached by moveToThread(nullptr): there is no mailbox to schedule against, and no
@@ -333,7 +333,7 @@ namespace QtMimic
 
         const bool wasOurs = forgetTimerId( aTimerId );
 
-        if( const std::shared_ptr<ThreadData> data = threadDataRef() )
+        if( const std::shared_ptr<ThreadData> data = threadData() )
         {
             if( auto dispatcher = data->dispatcher() )
             {
@@ -407,7 +407,7 @@ namespace QtMimic
         }
 
         auto* event = new DeferredDeleteEvent();
-        if( const std::shared_ptr<ThreadData> tData = threadDataRef() )
+        if( const std::shared_ptr<ThreadData> tData = threadData() )
         {
             // Queue only if there is a live thread to dispatch it. A destroyed Thread leaves its
             // ThreadData -- and that ThreadData's still-working dispatcher -- behind, so without
@@ -497,7 +497,7 @@ namespace QtMimic
         // token to check -- the dispatcher holds a raw Object* and calls timerEvent() on it
         // directly -- so this is the only thing standing between a still-running timer and a call
         // into freed memory. It cancels anything already collected for delivery, too.
-        if( const std::shared_ptr<ThreadData> data = threadDataRef() )
+        if( const std::shared_ptr<ThreadData> data = threadData() )
         {
             if( auto dispatcher = data->dispatcher() )
             {
@@ -712,13 +712,6 @@ namespace QtMimic
                 CallLaterRegistry::sPending.erase( aKey );
             }
         }
-    }
-
-    //! @return a strong reference to this object's current affinity. Safe from any thread while
-    //! moveToThread() may be reassigning it (Affinity locks internally).
-    std::shared_ptr<ThreadData> Object::threadDataRef() const
-    {
-        return mAffinity->data();
     }
 
     //================================================================

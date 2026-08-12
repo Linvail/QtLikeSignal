@@ -244,7 +244,7 @@ namespace QtMimic
             return;
         }
 
-        const std::shared_ptr<ThreadData> contextData = aContext->threadDataRef();
+        const std::shared_ptr<ThreadData> contextData = aContext->threadData();
         const std::weak_ptr<int> contextLife = aContext->mLife;
         if( !contextData || contextData->thread() == nullptr || contextLife.expired() )
         {

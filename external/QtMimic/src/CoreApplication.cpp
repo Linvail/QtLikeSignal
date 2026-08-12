@@ -132,8 +132,7 @@ namespace QtMimic
     //! @return The exit code passed to exit() (0 if quit() was used).
     int CoreApplication::exec()
     {
-        Thread* mainThread = thread();
-        if( !mainThread )
+        if( !mMainThread )
         {
             return 0;
         }
@@ -142,13 +141,12 @@ namespace QtMimic
         // would drain the main thread's queue on a foreign thread -- see Thread::processEvents(),
         // which refuses the same thing for the same reason.
         //
-        // Asked via isCurrent(), which compares OS thread ids, rather than by comparing against
-        // currentThread(). Two reasons. currentThread() auto-adopts, so using it here would create
-        // a Thread as a side effect of answering a question. And it reads the per-thread adoption
-        // pointer, which loop() clears when it exits -- so a perfectly legitimate second exec()
-        // after a quit() would find itself compared against a freshly-adopted dummy and be
-        // rejected. isCurrent() is immune to both.
-        if( !mainThread->isCurrent() )
+        // Compared against currentThread() rather than the old isCurrent(). That accessor existed
+        // because loop() used to clear the per-thread registration on its way out, so a legitimate
+        // second exec() after a quit() would have been compared against a freshly-adopted dummy and
+        // rejected. threadBody() no longer clears it for an adopted thread, so the comparison is
+        // sound and isCurrent() is gone.
+        if( Thread::currentThread() != mMainThread )
         {
             std::fprintf( stderr,
                 "CoreApplication::exec: must be called from the main thread\n" );
@@ -170,9 +168,9 @@ namespace QtMimic
         // after a quit(). The main thread is adopted and so never went through Thread::start(),
         // which is where a worker's flag gets cleared. An exit()/quit() issued *before* exec()
         // starts is therefore discarded rather than honoured, which is what Qt does too.
-        mainThread->mExiting.store( false );
+        mMainThread->mExiting.store( false );
 
-        const int returnCode = mainThread->exec();
+        const int returnCode = mMainThread->exec();
 
         mInExec.store( false );
         return returnCode;
@@ -185,12 +183,9 @@ namespace QtMimic
         int aCode
         )
     {
-        if( sInstance )
+        if( sInstance && sInstance->mMainThread )
         {
-            if( Thread* mainThread = sInstance->thread() )
-            {
-                mainThread->exit( aCode );
-            }
+            sInstance->mMainThread->exit( aCode );
         }
     }
 
@@ -207,12 +202,9 @@ namespace QtMimic
         std::function<void()> aTask
         )
     {
-        if( sInstance )
+        if( sInstance && sInstance->mMainThread )
         {
-            if( Thread* mainThread = sInstance->thread() )
-            {
-                mainThread->post( std::move( aTask ) );
-            }
+            sInstance->mMainThread->post( std::move( aTask ) );
         }
     }
 

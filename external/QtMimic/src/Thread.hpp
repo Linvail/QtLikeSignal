@@ -149,8 +149,6 @@ namespace QtMimic
             unsigned long aTime = ULONG_MAX
             );
 
-        bool isCurrent() const;
-
         bool isAdopted() const;
 
         bool isRunning() const;
