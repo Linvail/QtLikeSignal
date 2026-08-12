@@ -1,12 +1,24 @@
-#include <gtest/gtest.h>
+//! @file
+//!
+//! GoogleTest suite for QtLikeSignal::Thread -- lifecycle, exit codes, post() and the subclassing
+//! idiom.
+//!
+//! Deliberately parallel to QtMimic's QtMimic-test-thread.cpp -- same tests, same order, same
+//! names -- so the two can be diffed against each other. See
+//! history/TEST-UNIFICATION-PLAN-20260810.md.
+
+#include "QtLikeSignal-test-types.h"
+
+#include "gtest/gtest.h"
 #include "Thread.h"
 #include "Signal.h"
-#include "EventDispatcherDefault.h"
 #include <chrono>
 #include <future>
 #include <thread>
 #include <vector>
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 
 using namespace QtLikeSignal;
 
@@ -84,13 +96,13 @@ TEST( ThreadTest, LifecycleAndSignals )
 
     Object context;
     Object::connect(
-        thread.started, &context, [&startedFired]()
+        thread.getStarted(), &context, [&startedFired]()
         {
             startedFired = true;
         }, ConnectionType::Direct );
 
     Object::connect(
-        thread.finished,
+        thread.getFinished(),
         &context,
         [&finishedFired]()
         {
@@ -154,7 +166,7 @@ TEST( ThreadTest, CreateReturnsAnUnstartedThread )
     // The window create() exists to preserve: wire up the thread before it runs.
     std::atomic<bool> startedFired { false };
     Object context;
-    Object::connect( threadObj->started, &context, [&startedFired]()
+    Object::connect( threadObj->getStarted(), &context, [&startedFired]()
         {
             startedFired.store( true );
         }, ConnectionType::Direct );
@@ -271,10 +283,7 @@ TEST( ThreadTest, PostRunsTaskOnTargetThread )
 {
     Thread worker;
     worker.start();
-    while( !worker.eventDispatcher() )
-    {
-        std::this_thread::yield();
-    }
+    ASSERT_TRUE( waitUntilRunning( worker ) );
 
     std::promise<Thread*> ranOnPromise;
     auto ranOnFuture = ranOnPromise.get_future();
@@ -300,10 +309,7 @@ TEST( ThreadTest, PostFromOwnThreadStillDefers )
 {
     Thread worker;
     worker.start();
-    while( !worker.eventDispatcher() )
-    {
-        std::this_thread::yield();
-    }
+    ASSERT_TRUE( waitUntilRunning( worker ) );
 
     std::promise<void> orderPromise;
     auto orderFuture = orderPromise.get_future();
@@ -357,13 +363,64 @@ TEST( ThreadTest, PostRejectsEmptyTask )
 {
     Thread worker;
     worker.start();
-    while( !worker.eventDispatcher() )
-    {
-        std::this_thread::yield();
-    }
+    waitUntilRunning( worker );
 
     EXPECT_FALSE( worker.post( std::function<void()>() ) );
 
     worker.quit();
     worker.wait();
+}
+
+//! Verifies isRunning()/isFinished() report the states Qt reports, at the moments Qt reports them.
+//!
+//! Three claims, each of which QtLikeSignal got wrong at some point and Qt is the authority on:
+//!
+//!   - An adopted thread is *running*. Qt's adopting QThread constructor sets threadState =
+//!     Running outright, commenting that the thread "should be running and not finished for the
+//!     lifetime of the application". Thread::currentThread()->isRunning() answering false on the
+//!     main thread was simply a lie.
+//!   - A finished() handler sees isRunning() false and isFinished() true. Qt sets Finishing inside
+//!     finish() and emits finished() immediately afterwards, in that order.
+//!   - wait() returns only once the thread is fully done, which is strictly later than the point
+//!     isFinished() starts reporting true. Qt separates Finishing from Finished for this reason.
+TEST( ThreadTest, RunningAndFinishedFollowQtStateTransitions )
+{
+    Thread* const adopted = Thread::currentThread();
+    ASSERT_NE( adopted, nullptr );
+    EXPECT_TRUE( adopted->isRunning() ) << "an adopted thread is running -- it is executing now";
+    EXPECT_FALSE( adopted->isFinished() );
+
+    Thread worker( "state-transitions" );
+    EXPECT_FALSE( worker.isRunning() ) << "not started yet";
+    EXPECT_FALSE( worker.isFinished() );
+
+    std::atomic<bool> runningInHandler { true };
+    std::atomic<bool> finishedInHandler { false };
+    Object context;
+    Object::connect( worker.getFinished(), &context,
+        [&worker, &runningInHandler, &finishedInHandler]()
+        {
+            runningInHandler.store( worker.isRunning() );
+            finishedInHandler.store( worker.isFinished() );
+        }, ConnectionType::Direct );
+
+    worker.start();
+    ASSERT_TRUE( waitUntilRunning( worker ) );
+    EXPECT_TRUE( worker.isRunning() );
+    EXPECT_FALSE( worker.isFinished() );
+
+    worker.quit();
+
+    // Called as a statement, not asserted on: the untimed call cannot fail, and what matters here
+    // is what it guarantees on return, which the assertions below check. The return value is
+    // exercised by WaitTimeout instead.
+    worker.wait();
+
+    EXPECT_FALSE( runningInHandler.load() )
+        << "finished() ran while the thread still reported itself running";
+    EXPECT_TRUE( finishedInHandler.load() )
+        << "finished() ran before the thread reported itself finished";
+
+    EXPECT_FALSE( worker.isRunning() );
+    EXPECT_TRUE( worker.isFinished() );
 }

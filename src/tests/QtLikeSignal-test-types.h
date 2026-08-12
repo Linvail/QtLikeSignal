@@ -1,0 +1,337 @@
+
+#ifndef QTLIKESIGNAL_TEST_TYPES
+#define QTLIKESIGNAL_TEST_TYPES
+
+//! @file
+//!
+//! Shared test fixtures for the QtLikeSignal suite.
+//!
+//! Deliberately parallel to QtMimic's QtMimic-test-types.hpp: same classes, same members, same
+//! order, so a test written against one compiles against the other. See
+//! history/TEST-UNIFICATION-PLAN-20260810.md.
+
+#include "Object.h"
+#include "Signal.h"
+#include "Thread.h"
+
+// ---------------------------------------------------------------------------------------------
+// Feature macros.
+//
+// The two suites hold the same tests in the same order (see
+// history/TEST-UNIFICATION-PLAN-20260810.md). Where one library has an API the other does not, the
+// test is still written in *both* files and guarded by one of these, so the absence is visible on
+// the side that lacks it instead of the test simply not existing there.
+//
+// Add a macro here rather than deleting a test from one file.
+// ---------------------------------------------------------------------------------------------
+//! Extra argument copies each emit() makes before the slots are reached, on top of the one copy
+//! per receiver that a by-value slot parameter costs.
+//!
+//! Zero for a signal implementation that holds the caller's arguments by reference and hands them
+//! to each slot in turn. boost::signals2 copies them into its combiner state first, which is two
+//! more -- a combiner being a feature for signals whose slots return values, which none of ours
+//! do. The copy-counting tests assert an exact total, so they need the number rather than a range.
+#define LIB_SIGNAL_EMIT_EXTRA_COPIES       0  //!< own signal implementation
+
+
+#include "gtest/gtest.h"
+#include <chrono>
+#include <future>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+
+namespace
+{
+    class Producer : public QtLikeSignal::Object
+    {
+    public:
+        explicit Producer
+            (
+            QtLikeSignal::Thread* aThread = nullptr
+            )
+            : QtLikeSignal::Object( aThread )
+        {
+        }
+
+        QtLikeSignal::Signal<int> produced;
+        QtLikeSignal::Signal<int, int> produced2Args;
+    };
+
+    class Consumer : public QtLikeSignal::Object
+    {
+    public:
+        explicit Consumer
+            (
+            QtLikeSignal::Thread* aThread = nullptr
+            )
+            : QtLikeSignal::Object( aThread )
+        {
+        }
+
+        void onProduced
+            (
+            int aValue
+            )
+        {
+            mLast = aValue;
+            mSlotThread = std::this_thread::get_id();
+            ++mCount;
+        }
+
+        //! Const-qualified slot to verify connect() can resolve it.
+        void onProducedConst
+            (
+            int aValue
+            ) const
+        {
+            mLastConst = aValue;
+        }
+
+        //! Overloaded slot to verify connect() can resolve the correct one.
+        void onProduced
+            (
+            int unused1,
+            int unused2
+            )
+        {
+            mLast = unused1 + unused2;
+            mSlotThread = std::this_thread::get_id();
+            ++mCount;
+        }
+
+        //! Non-void return type to verify connect() can resolve it.
+        int onProducedReturnInt
+            (
+            int aValue
+            )
+        {
+            mLast = aValue;
+            mSlotThread = std::this_thread::get_id();
+            ++mCount;
+            return mLast;
+        }
+
+        std::atomic<int> mLast { 0 };
+        std::atomic<int> mCount { 0 };
+        std::thread::id mSlotThread;
+
+        mutable std::atomic<int> mLastConst { 0 };
+    };
+
+    class ConsumerDerived : public Consumer
+    {
+    public:
+        explicit ConsumerDerived
+            (
+            QtLikeSignal::Thread* aThread = nullptr
+            )
+            : Consumer( aThread )
+        {
+        }
+
+        QtLikeSignal::SignalView<int>& getSignalView() const
+        {
+            return mPrivateSignal.view();
+        }
+
+        void emitPrivateSignal
+            (
+            int aValue
+            )
+        {
+            mPrivateSignal.emit( aValue );
+        }
+
+    private:
+        QtLikeSignal::Signal<int> mPrivateSignal;
+    };
+
+    // Receiver whose slot bumps an atomic counter that is owned by the caller and
+    // therefore outlives the receiver. This lets a test observe (after the receiver
+    // is destroyed) whether the slot ever ran.
+    class ExternalCounter : public QtLikeSignal::Object
+    {
+    public:
+        ExternalCounter
+            (
+            QtLikeSignal::Thread* aThread,
+            std::atomic<int>& aCounter
+            )
+            : QtLikeSignal::Object( aThread )
+            , mCounter( aCounter )
+        {
+        }
+
+        void onProduced
+            (
+            int
+            )
+        {
+            ++mCounter;
+        }
+
+        //! Same bookkeeping, in the no-argument shape a timer needs: Timer::singleShot()'s member
+        //! overload and Timer::timeout both target a slot taking nothing.
+        void onTimeout()
+        {
+            ++mCounter;
+        }
+
+    private:
+        std::atomic<int>& mCounter;
+    };
+
+    class DeleteProbe : public QtLikeSignal::Object
+    {
+    public:
+        DeleteProbe
+            (
+            QtLikeSignal::Thread* aThread,
+            std::mutex& aMutex,
+            std::condition_variable& aCv,
+            bool& aDone,
+            std::thread::id& aDtorThread,
+            std::atomic<int>& aDtorCount
+            )
+            : QtLikeSignal::Object( aThread )
+            , mMutex( aMutex )
+            , mCv( aCv )
+            , mDone( aDone )
+            , mDtorThread( aDtorThread )
+            , mDtorCount( aDtorCount )
+        {
+        }
+
+        ~DeleteProbe() override
+        {
+            mDtorCount.fetch_add( 1 );
+            {
+                std::lock_guard<std::mutex> lock( mMutex );
+                mDtorThread = std::this_thread::get_id();
+                mDone = true;
+            }
+            mCv.notify_one();
+        }
+
+    private:
+        std::mutex& mMutex;
+        std::condition_variable& mCv;
+        bool& mDone;
+        std::thread::id& mDtorThread;
+        std::atomic<int>& mDtorCount;
+    };
+
+
+    // -----------------------------------------------------------------------------------------
+    // Shared helper vocabulary.
+    //
+    // Defined here, once per suite, so every test file on both sides can be written against the
+    // same names. Anything that has to differ between the libraries belongs in this header and
+    // nowhere else -- that is what lets the .cpp bodies be identical text.
+    // -----------------------------------------------------------------------------------------
+
+    //! How long a test waits for something that should happen within a few event-loop turns. Long
+    //! enough that a loaded CI box does not fail spuriously, short enough that a genuine hang is
+    //! still a test failure rather than a timeout at a higher level.
+    constexpr auto kPatience = std::chrono::seconds( 5 );
+
+    //! Posts a task and blocks until it has run, which can only happen once the thread's loop is
+    //! actually draining its queue. Stronger than any isRunning()-style flag: it proves the loop
+    //! is servicing work, which is what every test here depends on.
+    //!
+    //! Retries rather than posting once: a thread whose loop has not come up yet may refuse the
+    //! task outright, which is a "not ready" answer and not a failure.
+    //! @return true if the thread drained the marker task within the timeout.
+    inline bool waitUntilRunning
+        (
+        QtLikeSignal::Thread& aThread,  //!< The thread to wait for.
+        int aTimeoutMs = 5000    //!< How long to wait before giving up.
+        )
+    {
+        std::promise<void> ran;
+        std::future<void> ranFuture = ran.get_future();
+        const auto deadline = std::chrono::steady_clock::now()
+            + std::chrono::milliseconds( aTimeoutMs );
+
+        while( !aThread.post( [&ran]()
+            {
+                ran.set_value();
+            } ) )
+        {
+            if( std::chrono::steady_clock::now() > deadline )
+            {
+                return false;
+            }
+            std::this_thread::yield();
+        }
+        return ranFuture.wait_for( std::chrono::milliseconds( aTimeoutMs ) ) ==
+               std::future_status::ready;
+    }
+
+    //! Runs @p aBody on @p aThread and blocks until it has finished. Timer start()/stop() and
+    //! startTimer()/killTimer() are thread-confined, so most tests need to get onto the worker
+    //! before touching one.
+    template <typename Body> void runOnThread
+        (
+        QtLikeSignal::Thread& aThread,  //!< The thread to run on.
+        Body aBody               //!< The work to run there.
+        )
+    {
+        std::promise<void> done;
+        auto doneFuture = done.get_future();
+        ASSERT_TRUE( aThread.post( [&aBody, &done]()
+            {
+                aBody();
+                done.set_value();
+            } ) ) << "worker refused the task.";
+        ASSERT_EQ( doneFuture.wait_for( kPatience ), std::future_status::ready )
+            << "worker never ran the task.";
+    }
+
+    //! Blocks until everything currently queued on @p aThread has been drained.
+    //!
+    //! Needed before quitting a worker that may still hold a single-shot helper's own
+    //! deleteLater(): quitting while that delete is queued strands the object, which the leak
+    //! checker then reports.
+    inline void drainQueuedTasks
+        (
+        QtLikeSignal::Thread& aThread  //!< The thread to drain.
+        )
+    {
+        std::promise<void> drained;
+        auto drainedFuture = drained.get_future();
+        if( !aThread.post( [&drained]()
+            {
+                drained.set_value();
+            } ) )
+        {
+            return;  // loop already stopped, so there is nothing left to drain
+        }
+        EXPECT_EQ( drainedFuture.wait_for( kPatience ), std::future_status::ready )
+            << "worker event loop did not drain.";
+    }
+
+    //! Spins until @p aPredicate holds or kPatience runs out.
+    //! @return the final value of the predicate.
+    template <typename Predicate> bool waitFor
+        (
+        Predicate aPredicate  //!< Condition to wait for.
+        )
+    {
+        const auto deadline = std::chrono::steady_clock::now() + kPatience;
+        while( !aPredicate() )
+        {
+            if( std::chrono::steady_clock::now() > deadline )
+            {
+                return false;
+            }
+            std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+        }
+        return true;
+    }
+
+}
+
+#endif  // QTLIKESIGNAL_TEST_TYPES

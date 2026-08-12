@@ -1,11 +1,14 @@
-#include <gtest/gtest.h>
+#include "QtLikeSignal-test-types.h"
+#include "TestCpuTime.h"
+
+#include "gtest/gtest.h"
 #include "CoreApplication.h"
 #include "Object.h"
 #include "Signal.h"
 #include "Thread.h"
-#include "TestCpuTime.h"
 #include "Timer.h"
 #include <atomic>
+#include <memory>
 #include <chrono>
 #include <future>
 #include <thread>
@@ -22,6 +25,38 @@ using namespace QtLikeSignal;
 //! left alive would keep that thread's platform dispatcher -- and the singleton instance() reports
 //! -- in place for every test that follows.
 
+//! Allocates an Object that sets @p aFlag when it is destroyed.
+//!
+//! Written against the destructor, which every Object has, rather than against any one of the two
+//! libraries has -- a subclass observing its own destruction says the same thing everywhere.
+static Object* newDestructionProbe
+    (
+    std::shared_ptr<std::atomic<bool> > aFlag  //!< Set to true when the returned object dies.
+    )
+{
+    class DestructionProbe : public Object
+    {
+    public:
+        explicit DestructionProbe
+            (
+            std::shared_ptr<std::atomic<bool> > aTarget
+            )
+            : mTarget( std::move( aTarget ) )
+        {
+        }
+
+        virtual ~DestructionProbe() override
+        {
+            mTarget->store( true );
+        }
+
+    private:
+        std::shared_ptr<std::atomic<bool> > mTarget;
+    };
+
+    return new DestructionProbe( std::move( aFlag ) );
+}
+
 //! Runs the application's event loop and returns once quit() has taken effect.
 //!
 //! Arms a single-shot Timer on the main thread before entering exec(), so the loop stops itself
@@ -35,7 +70,7 @@ static int execUntilQuit
 {
     Timer stopper;
     stopper.setSingleShot( true );
-    Object::connect( stopper.timeout, &stopper, []()
+    Object::connect( stopper.getTimeout(), &stopper, []()
         {
             CoreApplication::quit();
         }, ConnectionType::Direct );
@@ -78,7 +113,7 @@ TEST( CoreApplicationTest, DerivedApplicationRunsAndReturnsExitCode )
 
     Timer stopper;
     stopper.setSingleShot( true );
-    Object::connect( stopper.timeout, &stopper, []()
+    Object::connect( stopper.getTimeout(), &stopper, []()
         {
             CoreApplication::exit( 42 );
         }, ConnectionType::Direct );
@@ -128,8 +163,8 @@ TEST( CoreApplicationTest, ApplicationRunsOnTheAlreadyAdoptedThreadAndLeavesItUs
     // The thread is owned by a thread_local inside Thread, not by the application, so it survives.
     EXPECT_EQ( Thread::currentThread(), adopted );
     EXPECT_NE( adopted->eventDispatcher(), nullptr )
-        << "the application stripped the thread's dispatcher on the way out, which would silently "
-        "break every Object still living on it.";
+        << "the application stripped the thread's dispatcher on the way out, which would "
+        "silently break every Object still living on it.";
 
     // And it still works: a queued call must be deliverable, drained by processEvents() since no
     // loop is running here any more.
@@ -240,7 +275,7 @@ TEST( CoreApplicationTest, LoopStillDispatchesAfterAQuitExecCycle )
     bool timerFired = false;
     Timer timer;
     timer.setSingleShot( true );
-    Object::connect( timer.timeout, &timer, [&timerFired]()
+    Object::connect( timer.getTimeout(), &timer, [&timerFired]()
         {
             timerFired = true;
             CoreApplication::quit();
@@ -279,7 +314,7 @@ TEST( CoreApplicationTest, NestedExecIsRejected )
     int nestedResult = 0;
     Timer stopper;
     stopper.setSingleShot( true );
-    Object::connect( stopper.timeout, &stopper, [&app, &nestedResult]()
+    Object::connect( stopper.getTimeout(), &stopper, [&app, &nestedResult]()
         {
             // Re-entering exec() from inside the running loop must be refused, not honoured.
             nestedResult = app.exec();
@@ -328,11 +363,7 @@ TEST( CoreApplicationTest, DeleteLaterIsProcessedByTheMainLoop )
     CoreApplication app;
 
     auto destroyed = std::make_shared<std::atomic<bool> >( false );
-    Object* victim = new Object();
-    victim->addCleanupCallback( [destroyed]()
-        {
-            destroyed->store( true );
-        } );
+    Object* victim = newDestructionProbe( destroyed );
     victim->deleteLater();
 
     EXPECT_EQ( execUntilQuit( app, 20 ), 0 );
@@ -352,11 +383,7 @@ TEST( CoreApplicationTest, PendingDeleteLaterIsProcessedWhenTheApplicationShutsD
     {
         CoreApplication app;
 
-        Object* victim = new Object();
-        victim->addCleanupCallback( [destroyed]()
-            {
-                destroyed->store( true );
-            } );
+        Object* victim = newDestructionProbe( destroyed );
         victim->deleteLater();
 
         // Deliberately no exec() -- the deferred delete is still queued at destruction.
@@ -372,7 +399,7 @@ TEST( CoreApplicationTest, TimerFiresOnTheMainThreadLoop )
 
     int ticks = 0;
     Timer timer;
-    Object::connect( timer.timeout, &timer, [&ticks]()
+    Object::connect( timer.getTimeout(), &timer, [&ticks]()
         {
             if( ++ticks >= 3 )
             {

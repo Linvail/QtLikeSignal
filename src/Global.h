@@ -1,9 +1,10 @@
-#ifndef QT_LIKE_SIGNAL_GLOBAL_H
-#define QT_LIKE_SIGNAL_GLOBAL_H
+#ifndef GLOBAL_H
+#define GLOBAL_H
+
+#include "Connection.h"
 
 #include <memory>
 #include <type_traits>
-#include <boost/signals2.hpp>
 
 namespace QtLikeSignal
 {
@@ -31,8 +32,60 @@ namespace QtLikeSignal
         Queued
     };
 
-    //! A handle representing a signal-slot connection.
-    using ConnectionHandle = boost::signals2::connection;
+    //! Selects a non-const overload of a member function by its argument types.
+    //!
+    //! `&Receiver::onEvent` is ambiguous when onEvent is overloaded. `nonConstOverload<int>( ... )`
+    //! names which one is meant. Mirrors Qt's qNonConstOverload.
+    template <typename ... Args>
+    struct NonConstOverload
+    {
+        //! Returns @p aPtr, having forced it to resolve to the Args... overload.
+        template <typename R, typename T>
+        constexpr auto operator()
+            (
+            R ( T::* aPtr )( Args... )
+            ) const noexcept -> decltype( aPtr )
+        {
+            return aPtr;
+        }
+    };
+
+    //! Selects a const overload of a member function by its argument types. Mirrors qConstOverload.
+    template <typename ... Args>
+    struct ConstOverload
+    {
+        //! Returns @p aPtr, having forced it to resolve to the const Args... overload.
+        template <typename R, typename T>
+        constexpr auto operator()
+            (
+            R ( T::* aPtr )( Args... ) const
+            ) const noexcept -> decltype( aPtr )
+        {
+            return aPtr;
+        }
+    };
+
+    //! Selects either overload, const or not, plus free functions. Mirrors Qt's qOverload.
+    template <typename ... Args>
+    struct Overload : ConstOverload<Args...>, NonConstOverload<Args...>
+    {
+        using ConstOverload<Args...>::operator();
+        using NonConstOverload<Args...>::operator();
+
+        //! Returns @p aPtr, having forced it to resolve to the Args... free-function overload.
+        template <typename R>
+        constexpr auto operator()
+            (
+            R ( * aPtr )( Args... )
+            ) const noexcept -> decltype( aPtr )
+        {
+            return aPtr;
+        }
+    };
+
+    template <typename ... Args> constexpr Overload<Args...> overload = {};
+    template <typename ... Args> constexpr ConstOverload<Args...> constOverload = {};
+    template <typename ... Args> constexpr NonConstOverload<Args...> nonConstOverload = {};
 
     //! Helper identity struct establishing a non-deduced context for the wrapped type T.
     template<typename T>
@@ -161,4 +214,4 @@ namespace QtLikeSignal
     #endif
 }
 
-#endif // QT_LIKE_SIGNAL_GLOBAL_H
+#endif // GLOBAL_H

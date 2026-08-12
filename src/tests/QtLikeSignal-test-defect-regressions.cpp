@@ -84,6 +84,28 @@ namespace
         std::shared_ptr<std::atomic<bool> > mFlag;
     };
 
+    //! Counts its own destructions, for the tests that must tell "destroyed once" from
+    //! "destroyed twice". DestructionRecorder's bool flag cannot make that distinction.
+    class DestructionCounter : public Object
+    {
+    public:
+        explicit DestructionCounter
+            (
+            std::shared_ptr<std::atomic<int> > aCount
+            )
+            : mCount( std::move( aCount ) )
+        {
+        }
+
+        virtual ~DestructionCounter() override
+        {
+            mCount->fetch_add( 1 );
+        }
+
+    private:
+        std::shared_ptr<std::atomic<int> > mCount;
+    };
+
     //! Creates an Object on a short-lived native thread and returns it after that thread has exited.
     //!
     //! The returned object is "orphaned": auto-adoption gave its creating thread a Thread, and that
@@ -307,7 +329,7 @@ TEST( EventDispatcherDefaultDefectTest, NewShorterTimerWakesPromptly )
     shortTimer.setSingleShot( true ); // configure before the object belongs to another thread
     shortTimer.moveToThread( &workerThread );
     Object::connect(
-        shortTimer.timeout,
+        shortTimer.getTimeout(),
         &context,
         [&firePromise]()
         {
@@ -689,7 +711,7 @@ TEST( ObjectDefectTest, DestroyedReceiverIsDisconnectedFromItsSender )
     // mIncoming entry, so the receiver is not left holding a stale handle to disconnect later.
     {
         Object receiver;
-        ConnectionHandle handle = Object::connect( longLivedSignal, &receiver, []( int )
+        Connection handle = Object::connect( longLivedSignal, &receiver, []( int )
             {
             }, ConnectionType::Direct );
         EXPECT_EQ( longLivedSignal.receivers(), 1u );
@@ -715,75 +737,6 @@ TEST( ObjectDefectTest, DestroyedReceiverIsDisconnectedFromItsSender )
         }, ConnectionType::Direct );
     longLivedSignal.emit( 1 );
     EXPECT_EQ( calls, 1 );
-}
-
-// ---------------------------------------------------------------------------------------------
-// Defect: ~Object() invoked cleanup callbacks while still holding mCleanupMutex, so a callback
-// that called addCleanupCallback() on the same object self-deadlocked on a non-recursive mutex.
-// ---------------------------------------------------------------------------------------------
-
-//! Regression test for the cleanup-callback deadlock in ~Object().
-//!
-//! ~Object() used to run the callbacks inside the mCleanupMutex lock_guard scope. A callback
-//! that re-entered addCleanupCallback() on the same object then blocked forever trying to relock
-//! a mutex its own call stack already held (locking a non-recursive std::mutex recursively is
-//! undefined behavior; deadlock is the usual manifestation). The fix swaps the callback vector out
-//! from under the lock and invokes the copies with the mutex released.
-//!
-//! Deterministic -- there is no timing window here; the old code failed on every run. How that
-//! failure presents is platform-dependent, and both forms were confirmed by temporarily restoring
-//! the old destructor body:
-//!   - MSVC (verified): its std::mutex detects the recursive lock and aborts the test binary with
-//!     exit code 3, before this test can reach any assertion. That abort *is* the failure signal,
-//!     the same way ThreadDefectTest.RestartAfterFinishWithoutWaitDoesNotTerminate's
-//!     std::terminate() is.
-//!   - Implementations that simply block instead (the classic deadlock) are caught by the 5s
-//!     timeout below, which is why the destruction runs on its own thread rather than inline --
-//!     otherwise a regression would hang the whole binary with no output.
-//!
-//! On the timeout path the worker stays blocked forever and is detached, so the process may also
-//! report a leak or hang at exit; the EXPECT_TRUE is the intended signal and the messy exit is a
-//! side effect. Everything the worker touches is owned by it or held via shared_ptr, so nothing
-//! dangles if the test body returns first.
-TEST( ObjectDefectTest, CleanupCallbackRegisteringAnotherDoesNotDeadlock )
-{
-    auto reentrantCallSucceeded = std::make_shared<std::atomic<bool> >( false );
-    auto* subject                = new Object();
-
-    subject->addCleanupCallback(
-        [subject, reentrantCallSucceeded]()
-        {
-            // Pre-fix, this call blocks forever: ~Object() is still holding mCleanupMutex.
-            subject->addCleanupCallback( []()
-            {
-            } );
-            reentrantCallSucceeded->store( true );
-        } );
-
-    std::promise<void> donePromise;
-    auto doneFuture = donePromise.get_future();
-    std::thread destroyer(
-        [subject, p = std::move( donePromise )]() mutable
-        {
-            delete subject;
-            p.set_value();
-        } );
-
-    const bool finished
-        = doneFuture.wait_for( std::chrono::seconds( 5 ) ) == std::future_status::ready;
-    EXPECT_TRUE( finished ) << "~Object() did not finish within 5s -- a cleanup callback that "
-        "re-registers another callback deadlocked on mCleanupMutex.";
-
-    if( finished )
-    {
-        destroyer.join();
-        EXPECT_TRUE( reentrantCallSucceeded->load() )
-            << "the re-entrant addCleanupCallback() never returned.";
-    }
-    else
-    {
-        destroyer.detach();
-    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -987,12 +940,8 @@ TEST( ObjectDefectTest, PendingDeleteLaterIsProcessedWhenThreadStops )
     // The worker is now parked inside the slot above, so nothing below can be dispatched until
     // it is released.
     auto destroyed = std::make_shared<std::atomic<bool> >( false );
-    Object* victim    = new Object();
+    DestructionRecorder* victim = new DestructionRecorder( destroyed );
     victim->moveToThread( &workerThread );
-    victim->addCleanupCallback( [destroyed]()
-        {
-            destroyed->store( true );
-        } );
     victim->deleteLater();
 
     workerThread.quit();
@@ -1067,12 +1016,8 @@ TEST( ObjectDefectTest, DeleteLaterIsDebounced )
     // workerThread is now parked inside the slot above, so nothing posted below can be
     // dispatched -- and victim cannot be deleted -- until it is released.
     auto destroyCount = std::make_shared<std::atomic<int> >( 0 );
-    auto* victim = new Object();
+    auto* victim = new DestructionCounter( destroyCount );
     victim->moveToThread( &workerThread );
-    victim->addCleanupCallback( [destroyCount]()
-        {
-            destroyCount->fetch_add( 1 );
-        } );
 
     std::thread secondCaller( [victim]()
         {
@@ -1213,7 +1158,7 @@ TEST( TimerDefectTest, SingleShotIsStoppedBeforeTimeoutIsEmitted )
     timer.setSingleShot( true );
 
     Object::connect(
-        timer.timeout,
+        timer.getTimeout(),
         &timer,
         [&timer, &activePromise]()
         {

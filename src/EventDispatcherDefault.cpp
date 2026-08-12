@@ -416,7 +416,7 @@ namespace QtLikeSignal
     }
 
     //! Thread-safely posts an event to the dispatcher's queue.
-    void EventDispatcherDefault::postEvent
+    bool EventDispatcherDefault::postEvent
         (
         Object* aReceiver,  //!< The target object receiving the event.
         Event* aEvent       //!< The event to be dispatched.
@@ -425,14 +425,32 @@ namespace QtLikeSignal
         if( !aReceiver || !aEvent )
         {
             delete aEvent;
-            return;
+            return false;
         }
 
         {
             std::lock_guard<std::mutex> lock( mMutex );
+
+            // Tested under the same lock the push uses, so close() cannot slip between the two: a
+            // post either lands entirely before the close or is refused entirely. Refusing here is
+            // what lets deleteLater() fall back to a synchronous delete instead of stranding the
+            // object in a queue nothing will drain.
+            if( !mAcceptingEvents )
+            {
+                delete aEvent;
+                return false;
+            }
             mEventQueue.push_back( { aReceiver, aEvent } );
         }
         wakeWaiter();
+        return true;
+    }
+
+    //! Stops this dispatcher accepting further events. One-way; there is no reopen. Thread-safe.
+    void EventDispatcherDefault::close()
+    {
+        std::lock_guard<std::mutex> lock( mMutex );
+        mAcceptingEvents = false;
     }
 
     //! Removes and deletes all pending events for the specified receiver. Thread-safe.

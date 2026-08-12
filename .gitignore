@@ -16,3 +16,6 @@ compile_commands.json
 # Operating system files
 Thumbs.db
 Desktop.ini
+
+# Local agent/editor configuration.
+.claude/

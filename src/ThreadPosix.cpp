@@ -165,8 +165,50 @@ namespace QtLikeSignal
                             //!< attributes instead and never comes here with it.
         )
     {
-        // No priority scheduling on this platform; the value is recorded and nothing else.
-        ( void )aPriority;
+        #if defined( G_HAS_THREAD_PRIORITY_SCHEDULING )
+            int schedPolicy = 0;
+            sched_param param {};
+            if( pthread_getschedparam( mThreadId, &schedPolicy, &param ) != 0 )
+            {
+                std::fprintf( stderr,
+                    "Thread::setPriority: cannot get scheduler parameters\n" );
+                return;
+            }
+
+            int prio = 0;
+            if( !calculateUnixPriority( aPriority, &schedPolicy, &prio ) )
+            {
+                std::fprintf( stderr,
+                    "Thread::setPriority: cannot determine scheduler priority range\n" );
+                return;
+            }
+
+            param.sched_priority = prio;
+            const int status = pthread_setschedparam( mThreadId, schedPolicy, &param );
+
+            #ifdef SCHED_IDLE
+                // SCHED_IDLE is optional and some kernels reject it. Fall back to the lowest
+                // priority the thread's existing policy allows, which is as close as we can get.
+                //
+                // NOTE: this condition deliberately differs from Qt, which tests
+                // `status == -1 && errno == EINVAL`. pthread_setschedparam() returns the error
+                // number directly and does not touch errno, so Qt's test can never be true and its
+                // fallback is dead code. Testing the return value is what actually reaches it.
+                if( status == EINVAL && schedPolicy == SCHED_IDLE )
+                {
+                    if( pthread_getschedparam( mThreadId, &schedPolicy, &param ) == 0 )
+                    {
+                        param.sched_priority = sched_get_priority_min( schedPolicy );
+                        pthread_setschedparam( mThreadId, schedPolicy, &param );
+                    }
+                }
+            #else
+                ( void )status;
+            #endif
+        #else
+            // No priority scheduling on this platform; the value is recorded and nothing else.
+            ( void )aPriority;
+        #endif
     }
 
     //! Blocks until the thread has finished executing or timeout expires. Thread-safe. Returns
@@ -193,7 +235,7 @@ namespace QtLikeSignal
             std::unique_lock<std::mutex> lock( mWaitMutex );
             const auto hasFinished = [this]
                 {
-                    return mFinished.load();
+                    return mHasFinished.load();
                 };
 
             // The untimed overload rather than wait_for() with a huge duration: what a

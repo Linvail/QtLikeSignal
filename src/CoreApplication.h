@@ -1,9 +1,10 @@
-#ifndef QT_LIKE_SIGNAL_COREAPPLICATION_H
-#define QT_LIKE_SIGNAL_COREAPPLICATION_H
+#ifndef COREAPPLICATION_H
+#define COREAPPLICATION_H
 
 #include "Object.h"
 #include "Thread.h"
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -70,6 +71,15 @@ namespace QtLikeSignal
 
         static void quit();
 
+        //! Queues a task onto the main thread's event loop. Thread-safe.
+        //!
+        //! Static, like exit()/quit(), so any thread can hand work to the main loop without holding
+        //! a pointer to the application. Does nothing if no application exists.
+        static void post
+            (
+            std::function<void()> aTask
+            );
+
         //! The application is bound to the thread it adopted and cannot be re-homed.
         //!
         //! Deleted rather than merely documented: moving it would leave exec() running a loop on a
@@ -96,4 +106,4 @@ namespace QtLikeSignal
     };
 }
 
-#endif // QT_LIKE_SIGNAL_COREAPPLICATION_H
+#endif // COREAPPLICATION_H

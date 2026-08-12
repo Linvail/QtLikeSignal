@@ -1,5 +1,5 @@
-#ifndef QT_LIKE_SIGNAL_THREAD_H
-#define QT_LIKE_SIGNAL_THREAD_H
+#ifndef THREAD_H
+#define THREAD_H
 
 #include "Object.h"
 #include "Signal.h"
@@ -10,6 +10,8 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <thread>
 
 #if !defined( _WIN32 )
     // For pthread_t only. Included here rather than hidden behind an opaque handle because this
@@ -27,9 +29,21 @@ namespace QtLikeSignal
     class Thread : public Object
     {
     public:
-        Thread();
+        //! Constructs an unstarted thread with an optional name.
+        //!
+        //! The name is descriptive only -- it is not pushed to the OS and nothing keys off it. It
+        //! exists so a thread can identify itself in a log or a test failure, which matters most
+        //! exactly when several are running at once.
+        explicit Thread
+            (
+            const std::string& aName = std::string()
+            );
 
         virtual ~Thread() override;
+
+        const std::string& name() const;
+
+        std::thread::id id() const;
 
         //! Scheduling priority of a thread, mirroring QThread::Priority.
         //!
@@ -104,11 +118,9 @@ namespace QtLikeSignal
             std::function<void()> aTask
             );
 
-        //! Signal emitted when the thread starts running.
-        Signal<> started;
+        SignalView<>& getStarted() const;
 
-        //! Signal emitted when the thread finishes execution.
-        Signal<> finished;
+        SignalView<>& getFinished() const;
 
         //! Creates a Thread that will execute the specified function. Function is the callable
         //! type and Args its argument types. Thread-safe.
@@ -190,8 +202,32 @@ namespace QtLikeSignal
             bool mJoinable { false };
         #endif
 
+        std::string mName;                        //!< Descriptive name; see the constructor.
+
+        //! The running OS thread's std::thread::id, published by threadBody() before anything
+        //! else. Default-constructed -- and so equal to no live thread -- until then.
+        std::atomic<std::thread::id> mId {};
         std::shared_ptr<ThreadData> mData;        //!< This thread's dispatcher-holding data.
-        std::atomic<bool> mFinished { false };     //!< True once the OS thread has finished.
+        //! True once the run body has finished and the OS thread has been reaped. This is what
+        //! wait() waits for, and it is deliberately NOT what isFinished() reports -- see mFinishing.
+        std::atomic<bool> mHasFinished { false };
+
+        //! True from the moment the run body starts winding down, before finished() is emitted.
+        //!
+        //! Qt draws exactly this distinction: threadState goes Running -> Finishing -> Finished,
+        //! isFinished() tests >= Finishing, and wait() waits for Finished. One flag cannot do both
+        //! jobs. Reporting "finished" only at the later point would tell a finished() handler that
+        //! the thread is still running; waking wait() at the earlier one would release a waiter
+        //! while the thread is still tearing itself down, and the caller could then destroy the
+        //! Thread out from under it.
+        std::atomic<bool> mFinishing { false };
+
+        //! Emitted when the event loop starts running. Private, handed out by getStarted() as a
+        //! view: only this thread may announce that it started.
+        Signal<> mStarted;
+
+        //! Emitted when the event loop has exited. Private for the same reason as mStarted.
+        Signal<> mFinished;
         std::atomic<bool> mExiting { false };      //!< Set by exit()/quit() to stop exec()'s loop.
         std::atomic<int> mExitCode { 0 };          //!< Return code passed to exit(), reported by exec().
         mutable std::mutex mWaitMutex;             //!< Guards mWaitCv's predicate.
@@ -240,6 +276,17 @@ namespace QtLikeSignal
         //! Thread's own Object base is simply built with no affinity and bindAffinityToSelf() points
         //! it at itself immediately afterwards.
         static thread_local bool sAdopting;
+
+        //! The Thread this thread is registered as, or nullptr if it is not registered.
+        //!
+        //! currentThread() answers the same question but adopts the caller when the answer would
+        //! be nullptr, which makes it unusable anywhere that must not allocate or must not run
+        //! during thread_local teardown -- ~Object()'s misuse diagnostic is both. Adopting there
+        //! re-enters the very unique_ptr being destroyed.
+        static Thread* currentThreadOrNull()
+        {
+            return sCurrentThread;
+        }
         friend class CoreApplication;
         //! Grants Object access to threadData() when adopting or releasing thread affinity.
         friend class Object;
@@ -290,4 +337,4 @@ namespace QtLikeSignal
     }
 }
 
-#endif // QT_LIKE_SIGNAL_THREAD_H
+#endif // THREAD_H

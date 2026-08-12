@@ -1,5 +1,5 @@
-#ifndef QT_LIKE_SIGNAL_EVENTDISPATCHERDEFAULT_H
-#define QT_LIKE_SIGNAL_EVENTDISPATCHERDEFAULT_H
+#ifndef EVENTDISPATCHERDEFAULT_H
+#define EVENTDISPATCHERDEFAULT_H
 
 #include "AbstractEventDispatcher.h"
 #include <deque>
@@ -30,6 +30,8 @@ namespace QtLikeSignal
 
         virtual void interrupt() override;
 
+        virtual void close() override;
+
         virtual void processDeferredDeletes() override;
 
         virtual void setWakeCallback
@@ -54,7 +56,7 @@ namespace QtLikeSignal
             int aTimerId
             ) override;
 
-        virtual void postEvent
+        virtual bool postEvent
             (
             Object* aReceiver,
             Event* aEvent
@@ -125,6 +127,14 @@ namespace QtLikeSignal
         std::mutex mMutex;                    //!< Guards every other member of this class.
         std::condition_variable mCv;          //!< Wakes processEvents() out of its wait.
         std::atomic<bool>       mInterrupt { false };  //!< Set by interrupt() to stop the loop.
+
+        //! False once close() has run, after which postEvent() refuses every event.
+        //!
+        //! Atomic rather than guarded by mMutex so postEvent() can reject without taking the lock,
+        //! and so close() cannot be ordered after a post that already passed the check -- the
+        //! rejection and the queue push both happen under mMutex below, which is what makes the
+        //! pairing atomic with respect to a concurrent close().
+        bool mAcceptingEvents { true };
         // Set (under mMutex) whenever a timer is registered or unregistered, so a processEvents()
         // call currently sleeping in wait_for() re-evaluates its wait deadline instead of sleeping
         // for the stale duration computed before the change.
@@ -168,4 +178,4 @@ namespace QtLikeSignal
     };
 }
 
-#endif // QT_LIKE_SIGNAL_EVENTDISPATCHERDEFAULT_H
+#endif // EVENTDISPATCHERDEFAULT_H

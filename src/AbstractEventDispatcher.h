@@ -1,5 +1,5 @@
-#ifndef QT_LIKE_SIGNAL_ABSTRACTEVENTDISPATCHER_H
-#define QT_LIKE_SIGNAL_ABSTRACTEVENTDISPATCHER_H
+#ifndef ABSTRACTEVENTDISPATCHER_H
+#define ABSTRACTEVENTDISPATCHER_H
 
 #include <deque>
 #include <functional>
@@ -60,6 +60,18 @@ namespace QtLikeSignal
             std::function<void()> aCallback  //!< Invoked on post; nullptr clears.
             ) = 0;
 
+        //! Stops the dispatcher accepting further events, before its final drain.
+        //!
+        //! Closes the shutdown race: a thread finishing used to drain its deferred deletes and only
+        //! then release the dispatcher, so a deleteLater() landing between those two steps was
+        //! accepted by a queue nothing would drain again. The event was freed with the dispatcher
+        //! and its receiver never deleted -- neither run nor deleted, i.e. leaked. Refusing posts
+        //! first makes postEvent() report failure instead, and deleteLater() then falls back to
+        //! deleting synchronously.
+        //!
+        //! One-way: there is no reopen. Thread-safe.
+        virtual void close() = 0;
+
         //! Dispatches any pending deferred-delete events, destroying their receivers.
         //!
         //! Called when an event loop is shutting down, before the dispatcher itself goes away. Without
@@ -96,7 +108,9 @@ namespace QtLikeSignal
             ) = 0;
 
         //! Thread-safely posts an event to the dispatcher's queue.
-        virtual void postEvent
+        //! @return true if the event was queued; false if the dispatcher is closed, in which case
+        //!         the event is deleted and the caller must handle the failure.
+        virtual bool postEvent
             (
             Object* aReceiver,  //!< The object that will receive the event.
             Event* aEvent       //!< The event to be processed.
@@ -124,4 +138,4 @@ namespace QtLikeSignal
     };
 }
 
-#endif // QT_LIKE_SIGNAL_ABSTRACTEVENTDISPATCHER_H
+#endif // ABSTRACTEVENTDISPATCHER_H

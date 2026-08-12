@@ -1,7 +1,42 @@
+import os
+
+# Where a locally-built Qt 6 is expected. The Qt 6 benchmarks are compiled into the performance
+# binary only when this is present, so a machine without Qt still builds everything else.
+QT6_PREFIX = "/usr/local/Qt-6.11.1"
+
+
+def _find_qt6(bld):
+    """
+    Locate a usable Qt 6 for the performance benchmarks.
+
+    Returns a dict of paths, or None when Qt 6 is unavailable. Qt is only wired in for native Linux
+    builds: the cross-compile to Windows would not find these host paths, and the benchmarks are a
+    development tool rather than something the shipped tests depend on.
+    """
+    if bld.env.DEST_OS != "linux":
+        return None
+
+    moc = os.path.join(QT6_PREFIX, "libexec", "moc")
+    include = os.path.join(QT6_PREFIX, "include")
+    lib = os.path.join(QT6_PREFIX, "lib")
+
+    if not os.path.exists(moc):
+        return None
+    if not os.path.exists(os.path.join(include, "QtCore", "QObject")):
+        return None
+
+    return {"moc": moc, "include": include, "lib": lib}
+
+
 def build(bld):
     kw = {}
     kw["features"] = ["cxx", "cxxprogram", "debug-info"]
-    kw["source"] = bld.path.ant_glob("*.cpp")
+    # The performance benchmarks are their own binary with their own main(), and are far too slow
+    # to belong in the correctness suite. Excluded here on both counts.
+    kw["source"] = bld.path.ant_glob(
+        "*.cpp",
+        excl=["test_QtLikeSignal_Performance.cpp", "test_Qt6_Performance.cpp"],
+    )
     kw["includes"] = ["."]
     kw["use"] = ["QtLikeSignal", "google-test"]
 
@@ -9,3 +44,43 @@ def build(bld):
         kw["lib"] = ["user32"]
 
     bld(target="QtLikeSignal-Tests", **kw)
+
+    kw = {}
+    kw["features"] = ["cxx", "cxxprogram", "debug-info"]
+    kw["source"] = ["test_QtLikeSignal_Performance.cpp"]
+    kw["includes"] = ["."]
+    kw["use"] = ["QtLikeSignal", "google-test"]
+
+    if bld.env.DEST_OS == "win32":
+        kw["lib"] = ["user32"]
+
+    qt6 = _find_qt6(bld)
+    if qt6:
+        # A Qt signal has no body until moc writes one. Generate that into an ordinary .cpp and add
+        # it to the sources, rather than the commoner trick of #include-ing a .moc at the bottom of
+        # the file: the generated node is then a declared output, so waf knows to run moc before the
+        # compile instead of that ordering being incidental.
+        moc_output = bld.path.find_or_declare("moc_Qt6PerfObjects.cpp")
+        bld(
+            name="moc_Qt6PerfObjects",
+            rule="%s -I%s ${SRC} -o ${TGT}" % (qt6["moc"], qt6["include"]),
+            source="Qt6PerfObjects.h",
+            target=moc_output,
+        )
+
+        kw["source"] += ["test_Qt6_Performance.cpp", moc_output]
+        kw["includes"] += [qt6["include"], os.path.join(qt6["include"], "QtCore")]
+        kw["libpath"] = [qt6["lib"]]
+        kw["lib"] = kw.get("lib", []) + ["Qt6Core"]
+        # Qt 6 is built position-independent, and rpath keeps the binary runnable without the
+        # caller having to set LD_LIBRARY_PATH.
+        kw["cxxflags"] = ["-fPIC"]
+        kw["rpath"] = [qt6["lib"]]
+    else:
+        bld.msg(
+            "Qt 6 performance benchmarks",
+            "skipped (no Qt 6 at %s)" % QT6_PREFIX,
+            color="YELLOW",
+        )
+
+    bld(target="QtLikeSignal-Performance-Tests", **kw)

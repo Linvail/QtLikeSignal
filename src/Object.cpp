@@ -95,14 +95,18 @@ namespace QtLikeSignal
     std::deque<int> TimerIdPool::sFree;
     int TimerIdPool::sNextFresh = 1;
 
-    //! Constructs an object.
-    Object::Object()
+    //! Constructs an object living in the given thread, or in the calling thread if none is given.
+    Object::Object
+        (
+        Thread* aThread  //!< Thread this object lives in; null means the calling thread.
+        )
         : mLife( std::make_shared<int>( 0 ) )
         // Store the thread's ThreadData, not the Thread itself: it outlives the Thread, so this
         // object's affinity can never become a dangling pointer. Held in an Affinity box read at
         // emit time, so a later moveToThread() redirects existing connections too.
         , mAffinity( std::make_shared<Affinity>(
-            Thread::currentThread() ? Thread::currentThread()->threadData() : nullptr ) )
+            aThread ? aThread->threadData()
+            : ( Thread::currentThread() ? Thread::currentThread()->threadData() : nullptr ) ) )
     {
     }
 
@@ -132,9 +136,17 @@ namespace QtLikeSignal
         // (owner->isRunning()) would have reintroduced exactly the dangling-pointer hazard the
         // Affinity indirection exists to remove: thread() can hand back a pointer that a
         // concurrent ~Thread() frees before the call lands.
+        //
+        // Asked with currentThreadOrNull(), never currentThread(): the latter adopts the calling
+        // thread when it has no Thread yet, and this runs during thread_local teardown -- an
+        // adopted Thread being destroyed as its native thread exits -- where adopting re-enters
+        // the unique_ptr already being destroyed. A diagnostic must not allocate. A null answer
+        // means the caller is not registered, in which case there is nothing to compare and
+        // nothing to warn about.
         const std::shared_ptr<ThreadData> ownerData = mAffinity->data();
-        if( ownerData && ownerData->isThreadRunning()
-            && ownerData->thread() != Thread::currentThread() )
+        Thread* const callerThread = Thread::currentThreadOrNull();
+        if( ownerData && callerThread && ownerData->isThreadRunning()
+            && ownerData->thread() != callerThread )
         {
             std::fprintf( stderr,
                 "Object::~Object: object destroyed from a thread other than the one it lives "
@@ -164,7 +176,7 @@ namespace QtLikeSignal
         // disconnect() would nest our mutex inside boost's signal mutex, the reverse of the order
         // ~Cleanup takes them in (boost destroys slots with its signal mutex held), and there is no
         // reason to invite that inversion when a swap avoids it entirely.
-        std::vector<ConnectionHandle> incoming;
+        std::vector<Connection> incoming;
         {
             std::lock_guard<std::mutex> lock( mIncomingMutex );
             incoming.swap( mIncoming );
@@ -172,21 +184,6 @@ namespace QtLikeSignal
         for( auto& handle : incoming )
         {
             handle.disconnect();
-        }
-
-        // Move the callbacks out from under mCleanupMutex before invoking any of them. Running them
-        // while still holding the lock deadlocks on the non-recursive mutex if a callback calls
-        // addCleanupCallback() on this same object. A callback registered during the loop below is
-        // intentionally dropped -- this object is already being destroyed, so there is no later point
-        // at which it could meaningfully run.
-        std::vector<std::function<void()> > callbacksToRun;
-        {
-            std::lock_guard<std::mutex> lock( mCleanupMutex );
-            callbacksToRun.swap( mCleanupCallbacks );
-        }
-        for( auto& cb : callbacksToRun )
-        {
-            cb();
         }
 
         {
@@ -453,7 +450,6 @@ namespace QtLikeSignal
     //! Gets the object's descriptive name. Thread-safe.
     std::string Object::objectName() const
     {
-        std::lock_guard<std::mutex> lock( mNameMutex );
         return mObjectName;
     }
 
@@ -463,7 +459,6 @@ namespace QtLikeSignal
         const std::string& aName  //!< The new object name.
         )
     {
-        std::lock_guard<std::mutex> lock( mNameMutex );
         mObjectName = aName;
     }
 
@@ -499,7 +494,14 @@ namespace QtLikeSignal
             {
                 if( auto disp = tData->dispatcher() )
                 {
-                    disp->postEvent( this, static_cast<Event*>( event ) );
+                    // A refusal means the dispatcher is closing, so nothing would ever drain this
+                    // event; postEvent() has already freed it. Fall through to the synchronous
+                    // delete rather than leaking the object.
+                    if( disp->postEvent( this, static_cast<Event*>( event ) ) )
+                    {
+                        return;
+                    }
+                    delete this;
                     return;
                 }
             }
@@ -656,16 +658,6 @@ namespace QtLikeSignal
         }
     }
 
-    //! Registers a callback to be executed when this object is destroyed. Thread-safe.
-    void Object::addCleanupCallback
-        (
-        std::function<void()> aCallback  //!< The function to execute upon destruction.
-        )
-    {
-        std::lock_guard<std::mutex> lock( mCleanupMutex );
-        mCleanupCallbacks.push_back( std::move( aCallback ) );
-    }
-
     //! Dispatches a metacall callback to the target object's event loop based on connection type.
     //! Thread-safe. Returns true if the slot ran (direct) or was queued successfully; false if it
     //! could not be delivered at all, which happens when the target has no thread affinity or its
@@ -747,8 +739,7 @@ namespace QtLikeSignal
         if( auto disp = aData ? aData->dispatcher() : nullptr )
         {
             auto* event = new MetaCallEvent( std::move( aSlot ) );
-            disp->postEvent( aReceiver, static_cast<Event*>( event ) );
-            return true;
+            return disp->postEvent( aReceiver, static_cast<Event*>( event ) );
         }
         return false;
     }

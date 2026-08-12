@@ -4,11 +4,9 @@
 //! (Object::startTimer()/killTimer()/timerEvent(), the timer list in EventDispatcherDefault, and
 //! the event loop's timer-aware wait).
 //!
-//! Kept deliberately parallel to QtMimic's QtMimic-test-timer.cpp: same tests, same order, same
-//! names, so the two can be diffed against each other. Where they differ it is because the APIs
-//! differ, and the difference is called out where it happens.
-//!
 //! Copyright 2026 by Garmin Ltd. or its subsidiaries.
+
+#include "QtLikeSignal-test-types.h"
 
 #include "Event.h"
 #include "Object.h"
@@ -29,80 +27,6 @@ namespace
     using namespace std::chrono_literals;
     using namespace QtLikeSignal;
 
-    //! How long a test waits for something that should happen within a few timer intervals. Long
-    //! enough that a loaded CI box does not fail spuriously, short enough that a genuine hang is
-    //! still a test failure rather than a timeout at a higher level.
-    constexpr auto kPatience = 5s;
-
-    //! Posts a task and blocks until it has run, which can only happen once the thread's loop is
-    //! actually draining its queue. Thread::isRunning() would answer a weaker question -- the
-    //! thread exists -- where a round-trip through post() also proves the dispatcher is up and
-    //! servicing work, which is what every timer here depends on.
-    //! @return true if the thread drained the marker task in time.
-    bool waitUntilRunning
-        (
-        Thread& aThread  //!< The thread to wait for.
-        )
-    {
-        std::promise<void> running;
-        auto runningFuture = running.get_future();
-        const auto deadline = std::chrono::steady_clock::now() + kPatience;
-        while( !aThread.post( [&running]()
-            {
-                running.set_value();
-            } ) )
-        {
-            if( std::chrono::steady_clock::now() > deadline )
-            {
-                return false;
-            }
-            std::this_thread::yield();
-        }
-        return runningFuture.wait_for( kPatience ) == std::future_status::ready;
-    }
-
-    //! Runs @p aBody on @p aThread and blocks until it has finished. Timer start()/stop() are
-    //! thread-confined, so nearly every test here needs to get onto the worker before touching one.
-    template <typename Body> void runOnThread
-        (
-        Thread& aThread,  //!< The thread to run on.
-        Body aBody        //!< The work to run there.
-        )
-    {
-        std::promise<void> done;
-        auto doneFuture = done.get_future();
-        ASSERT_TRUE( aThread.post( [&aBody, &done]()
-            {
-                aBody();
-                done.set_value();
-            } ) ) << "worker refused the task.";
-        ASSERT_EQ( doneFuture.wait_for( kPatience ), std::future_status::ready )
-            << "worker never ran the task.";
-    }
-
-    //! Blocks until everything currently queued on @p aThread has been drained.
-    //!
-    //! Needed before quitting a worker that may still hold a single-shot helper's own
-    //! deleteLater(): quitting while that delete is queued strands the object, which the leak
-    //! checker then reports.
-    void drainQueuedTasks
-        (
-        Thread& aThread  //!< The thread to drain.
-        )
-    {
-        std::promise<void> drained;
-        auto drainedFuture = drained.get_future();
-        if( !aThread.post( [&drained]()
-            {
-                drained.set_value();
-            } ) )
-        {
-            return;  // loop already stopped, so there is nothing left to drain
-        }
-        EXPECT_EQ( drainedFuture.wait_for( kPatience ), std::future_status::ready )
-            << "worker event loop did not drain.";
-    }
-
     //! Counts how often it is timed out, and on which thread.
     class CountingReceiver : public Object
     {
@@ -111,13 +35,8 @@ namespace
             (
             Thread* aThread = nullptr
             )
+            : Object( aThread )
         {
-            // QtLikeSignal's Object has no thread-taking constructor, so affinity is pushed here
-            // instead. Same end state as QtMimic's Object( aThread ).
-            if( aThread )
-            {
-                moveToThread( aThread );
-            }
         }
 
         //! Slot for Timer::timeout, and target for the singleShot member-function overload.
@@ -153,13 +72,8 @@ namespace
             (
             Thread* aThread = nullptr
             )
+            : Object( aThread )
         {
-            // QtLikeSignal's Object has no thread-taking constructor, so affinity is pushed here
-            // instead. Same end state as QtMimic's Object( aThread ).
-            if( aThread )
-            {
-                moveToThread( aThread );
-            }
         }
 
         //! @return how many expiries have been delivered for @p aTimerId.
@@ -216,13 +130,9 @@ namespace
             (
             Thread* aThread  //!< The thread this receiver lives in.
             )
-            : mExpectedThread( aThread )
+            : Object( aThread )
+            , mExpectedThread( aThread )
         {
-            // See CountingReceiver: affinity is pushed rather than passed to the constructor.
-            if( aThread )
-            {
-                moveToThread( aThread );
-            }
         }
 
         //! Queued slot: one metacall carrying emitter @p aSender's @p aSequence counter.
@@ -379,25 +289,6 @@ namespace
 
     };
 
-    //! Spins until @p aPredicate holds or kPatience runs out.
-    //! @return the final value of the predicate.
-    template <typename Predicate> bool waitFor
-        (
-        Predicate aPredicate  //!< Condition to wait for.
-        )
-    {
-        const auto deadline = std::chrono::steady_clock::now() + kPatience;
-        while( !aPredicate() )
-        {
-            if( std::chrono::steady_clock::now() > deadline )
-            {
-                return false;
-            }
-            std::this_thread::sleep_for( 1ms );
-        }
-        return true;
-    }
-
     //================================================================
     // Timer configuration
     //================================================================
@@ -418,13 +309,13 @@ namespace
     //! start() makes the timer active with a positive id, stop() takes it back to inactive/-1.
     TEST( TimerTest, StartAndStopTrackState )
     {
-        Thread worker;
+        Thread worker( "timer-state" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
         runOnThread( worker, [&worker]()
             {
-                Timer timer;
+                Timer timer( &worker );
                 EXPECT_FALSE( timer.isActive() );
 
                 timer.start( 150 );
@@ -441,10 +332,44 @@ namespace
         worker.wait();
     }
 
+    //! QTimer restarts an active timer when setInterval() is called, even for the same interval.
+    TEST( TimerTest, SetIntervalRestartsActiveTimerWithNewId )
+    {
+        Thread worker( "timer-change-interval" );
+        worker.start();
+        ASSERT_TRUE( waitUntilRunning( worker ) );
+
+        runOnThread( worker, [&worker]()
+            {
+                Timer timer( &worker );
+                timer.start( 1000 );
+                const int oldId = timer.timerId();
+
+                timer.setInterval( 1000 );
+
+                EXPECT_EQ( timer.interval(), 1000 );
+                EXPECT_TRUE( timer.isActive() );
+                EXPECT_GT( timer.timerId(), 0 );
+                EXPECT_NE( timer.timerId(), oldId );
+                timer.stop();
+            } );
+
+        worker.quit();
+        worker.wait();
+    }
+
+    //! Qt 6.10 and later clamp negative timer intervals to one millisecond.
+    TEST( TimerTest, NegativeIntervalIsClampedToOneMillisecond )
+    {
+        Timer timer;
+        timer.setInterval( -1 );
+        EXPECT_EQ( timer.interval(), 1 );
+    }
+
     //! A repeating timer keeps emitting timeout until it is stopped.
     TEST( TimerTest, RepeatingTimerFiresRepeatedly )
     {
-        Thread worker;
+        Thread worker( "timer-repeat" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
@@ -453,8 +378,8 @@ namespace
 
         runOnThread( worker, [&]()
             {
-                timer = new Timer();
-                Object::connect( timer->timeout, &receiver, &CountingReceiver::onTimeout );
+                timer = new Timer( &worker );
+                Object::connect( timer->getTimeout(), &receiver, &CountingReceiver::onTimeout );
                 timer->start( 5 );
             } );
 
@@ -477,7 +402,7 @@ namespace
     //! A single-shot timer fires exactly once and reports itself inactive afterwards.
     TEST( TimerTest, SingleShotTimerFiresOnce )
     {
-        Thread worker;
+        Thread worker( "timer-single" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
@@ -486,9 +411,9 @@ namespace
 
         runOnThread( worker, [&]()
             {
-                timer = new Timer();
+                timer = new Timer( &worker );
                 timer->setSingleShot( true );
-                Object::connect( timer->timeout, &receiver, &CountingReceiver::onTimeout );
+                Object::connect( timer->getTimeout(), &receiver, &CountingReceiver::onTimeout );
                 timer->start( 5 );
             } );
 
@@ -514,7 +439,7 @@ namespace
     //! stop() actually stops it: no further timeout is emitted.
     TEST( TimerTest, StoppedTimerStopsFiring )
     {
-        Thread worker;
+        Thread worker( "timer-stop" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
@@ -523,8 +448,8 @@ namespace
 
         runOnThread( worker, [&]()
             {
-                timer = new Timer();
-                Object::connect( timer->timeout, &receiver, &CountingReceiver::onTimeout );
+                timer = new Timer( &worker );
+                Object::connect( timer->getTimeout(), &receiver, &CountingReceiver::onTimeout );
                 timer->start( 5 );
             } );
 
@@ -556,7 +481,7 @@ namespace
     //! involved at all.
     TEST( TimerTest, TimerEventIgnoresForeignIds )
     {
-        Thread worker;
+        Thread worker( "timer-manual" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
@@ -567,10 +492,9 @@ namespace
                 const int id = timer.timerId();
                 ASSERT_GT( id, 0 );
 
-                Object context;
-                context.moveToThread( &worker );
+                Object context( &worker );
                 int emitted = 0;
-                Object::connect( timer.timeout, &context, [&emitted]()
+                Object::connect( timer.getTimeout(), &context, [&emitted]()
                 {
                     ++emitted;
                 }, ConnectionType::Direct );
@@ -597,7 +521,7 @@ namespace
     //! startTimer() hands out distinct positive ids, and each one is delivered to timerEvent().
     TEST( ObjectTimerTest, ConcurrentTimersDeliverDistinctIds )
     {
-        Thread worker;
+        Thread worker( "obj-timer-ids" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
@@ -633,7 +557,7 @@ namespace
     //! startTimer() from a thread other than the object's own is refused, as in Qt.
     TEST( ObjectTimerTest, StartTimerFromForeignThreadIsRefused )
     {
-        Thread worker;
+        Thread worker( "obj-timer-foreign" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
@@ -664,7 +588,7 @@ namespace
     //! delivered, so this only works if killTimer() reaches into the batch being dispatched.
     TEST( ObjectTimerTest, KillFromHandlerCancelsSiblingInSameBatch )
     {
-        Thread worker;
+        Thread worker( "obj-timer-batch" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
@@ -708,14 +632,14 @@ namespace
     //! into freed memory.
     TEST( ObjectTimerTest, DestroyingReceiverStopsItsTimers )
     {
-        Thread worker;
+        Thread worker( "obj-timer-destroy" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
         RecordingObject* receiver = nullptr;
         runOnThread( worker, [&]()
             {
-                receiver = new RecordingObject();
+                receiver = new RecordingObject( &worker );
                 receiver->startTimer( 5 );
             } );
 
@@ -741,8 +665,8 @@ namespace
     //! delivering it on the thread the object left. Qt documents exactly this.
     TEST( ObjectTimerTest, MoveToThreadCarriesRunningTimers )
     {
-        Thread source;
-        Thread destination;
+        Thread source( "obj-timer-src" );
+        Thread destination( "obj-timer-dst" );
         source.start();
         destination.start();
         ASSERT_TRUE( waitUntilRunning( source ) );
@@ -753,8 +677,8 @@ namespace
 
         runOnThread( source, [&]()
             {
-                timer = new Timer();
-                Object::connect( timer->timeout, &receiver, &CountingReceiver::onTimeout,
+                timer = new Timer( &source );
+                Object::connect( timer->getTimeout(), &receiver, &CountingReceiver::onTimeout,
                 ConnectionType::Direct );
                 timer->start( 5 );
             } );
@@ -799,7 +723,7 @@ namespace
     //! singleShot(int, Functor) runs its functor on the calling thread's loop.
     TEST( TimerSingleShotTest, PlainFunctorRuns )
     {
-        Thread worker;
+        Thread worker( "single-plain" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
@@ -826,12 +750,11 @@ namespace
     //! singleShot(int, context, Functor) hops to the context's thread and runs there exactly once.
     TEST( TimerSingleShotTest, ContextFunctorRunsOnContextThread )
     {
-        Thread worker;
+        Thread worker( "single-context" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
-        Object context;
-        context.moveToThread( &worker );
+        Object context( &worker );
 
         std::promise<Thread*> fired;
         auto firedFuture = fired.get_future();
@@ -867,7 +790,7 @@ namespace
     //! thread, and tolerates a null receiver.
     TEST( TimerSingleShotTest, MemberFunctionRunsOnce )
     {
-        Thread worker;
+        Thread worker( "single-member" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
@@ -896,12 +819,11 @@ namespace
     //! not run somewhere else.
     TEST( TimerSingleShotTest, ContextOnStoppedThreadIsDropped )
     {
-        Thread worker;
+        Thread worker( "single-stopped" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
-        Object context;
-        context.moveToThread( &worker );
+        Object context( &worker );
 
         worker.quit();
         worker.wait();
@@ -916,6 +838,115 @@ namespace
         EXPECT_EQ( runs.load(), 0 ) << "the functor ran even though its thread had stopped.";
     }
 
+    //! A context-bound single shot is cancelled when its context is destroyed before expiry.
+    //!
+    //! The counter deliberately lives outside the context and is owned by the functor, not the
+    //! context, so the cancellation is observable without touching freed memory: if the liveness
+    //! check in the helper were removed, this counter would simply reach 1 and the test would fail
+    //! outright rather than relying on a sanitizer to notice.
+    TEST( TimerSingleShotTest, DestroyedContextCancelsFunctor )
+    {
+        Thread worker( "single-destroyed-context" );
+        worker.start();
+        ASSERT_TRUE( waitUntilRunning( worker ) );
+
+        std::atomic<int> runs { 0 };
+
+        // Created and destroyed on the worker, which is the only thread allowed to do either.
+        Object* context = nullptr;
+        runOnThread( worker, [&]()
+            {
+                context = new Object( &worker );
+            } );
+        ASSERT_NE( context, nullptr );
+
+        Timer::singleShot( 100, context, [&runs]()
+            {
+                runs.fetch_add( 1 );
+            } );
+
+        runOnThread( worker, [&]()
+            {
+                delete context;
+                context = nullptr;
+            } );
+
+        std::this_thread::sleep_for( 150ms );
+        drainQueuedTasks( worker );
+        worker.quit();
+        worker.wait();
+
+        EXPECT_EQ( runs.load(), 0 )
+            << "the functor ran even though its context was destroyed before the delay elapsed.";
+    }
+
+    //! The member-function overload takes the same cancellation path, on the receiver it would
+    //! otherwise have called into.
+    //!
+    //! What this adds over the functor test above is the bound-member closure, which captures a raw
+    //! receiver pointer and would dereference it if the liveness check ever stopped running. The
+    //! counter is an ExternalCounter's, owned here and not by the receiver, so it survives the
+    //! receiver and can be asserted on afterwards -- the same technique
+    //! ObjectTest.ReceiverDestroyedBeforeDeliveryNoCrash uses to observe a slot that must not have
+    //! run. A regression bumps it to 1 and fails here outright, rather than only under a sanitizer.
+    TEST( TimerSingleShotTest, DestroyedContextDoesNotCallIntoFreedReceiver )
+    {
+        Thread worker( "single-destroyed-receiver" );
+        worker.start();
+        ASSERT_TRUE( waitUntilRunning( worker ) );
+
+        std::atomic<int> invocations { 0 };
+
+        ExternalCounter* receiver = nullptr;
+        runOnThread( worker, [&]()
+            {
+                receiver = new ExternalCounter( &worker, invocations );
+            } );
+        ASSERT_NE( receiver, nullptr );
+
+        Timer::singleShot( 100, receiver, &ExternalCounter::onTimeout );
+
+        runOnThread( worker, [&]()
+            {
+                delete receiver;
+                receiver = nullptr;
+            } );
+
+        std::this_thread::sleep_for( 150ms );
+        drainQueuedTasks( worker );
+        worker.quit();
+        worker.wait();
+
+        EXPECT_EQ( invocations.load(), 0 )
+            << "the member function was called on a receiver that had already been destroyed.";
+    }
+
+    //! Every entry point that takes an interval corrects a negative one to 1 ms rather than
+    //! dropping the call, so singleShot() does not silently do nothing where start() would run.
+    TEST( TimerSingleShotTest, NegativeIntervalStillRuns )
+    {
+        Thread worker( "single-negative" );
+        worker.start();
+        ASSERT_TRUE( waitUntilRunning( worker ) );
+
+        Object context( &worker );
+
+        std::atomic<int> runs { 0 };
+        Timer::singleShot( -1, &context, [&runs]()
+            {
+                runs.fetch_add( 1 );
+            } );
+
+        EXPECT_TRUE( waitFor( [&runs]()
+            {
+                return runs.load() >= 1;
+            } ) ) << "a negative interval dropped the single shot instead of clamping it to 1 ms.";
+
+        drainQueuedTasks( worker );
+        worker.quit();
+        worker.wait();
+    }
+
     //================================================================
     // Event loop interaction
     //================================================================
@@ -926,7 +957,7 @@ namespace
     //! at all -- this is what the timeout plumbed through loop() buys.
     TEST( ThreadTimerTest, IdleLoopWakesForTimerDeadline )
     {
-        Thread worker;
+        Thread worker( "loop-idle" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
@@ -959,7 +990,7 @@ namespace
     //! computed before the timer existed.
     TEST( ThreadTimerTest, TimerAddedWhileLoopSleepsIsHonoured )
     {
-        Thread worker;
+        Thread worker( "loop-resleep" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
@@ -1033,11 +1064,26 @@ namespace
         constexpr int kPerEmitter = 250;
         constexpr int kExpectedMetaCalls = kEmitters * kPerEmitter;
 
-        Thread worker;
+        // Enough work per metacall that the load provably outlasts the timer intervals below.
+        //
+        // Without it the assertions here are a race rather than a test. The load is what sets the
+        // observation window: the timers are armed, the metacalls are delivered, and timerFires()
+        // is sampled the moment the last one lands. Trivial metacalls make that window ~0.9-2.8 ms
+        // against a 1 ms shortest interval -- roughly 280 us of margin at the median -- so a few
+        // percent of runs finish before any timer is due and correctly report zero expiries. That
+        // reads as "the timers were starved" when nothing was starved at all; they were not yet
+        // owed anything. Measured at 11 failures in 300 runs before this, none in 300 after.
+        //
+        // 5 us x 1000 metacalls puts the window at ~5-7 ms, several times the shortest interval,
+        // so any expiry that fails to get through really is one the mailbox crowded out.
+        constexpr int kWorkMicros = 5;
+
+        Thread worker( "mixed-load" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
         MixedLoadReceiver receiver( &worker );
+        receiver.setMetaCallWorkMicros( kWorkMicros );
 
         Signal<int, int> metaCall;
         Object::connect( metaCall, &receiver, &MixedLoadReceiver::onMetaCall,
@@ -1060,7 +1106,7 @@ namespace
         std::vector<std::thread> emitters;
         for( int sender = 0; sender < kEmitters; ++sender )
         {
-            emitters.emplace_back( [&metaCall, sender]()
+            emitters.emplace_back( [&metaCall, sender, kPerEmitter]()
                 {
                     for( int sequence = 0; sequence < kPerEmitter; ++sequence )
                     {
@@ -1073,7 +1119,7 @@ namespace
             emitter.join();
         }
 
-        EXPECT_TRUE( waitFor( [&receiver]()
+        EXPECT_TRUE( waitFor( [&receiver, kExpectedMetaCalls]()
             {
                 return receiver.metaCalls() >= kExpectedMetaCalls;
             } ) ) << "only " << receiver.metaCalls() << " of " << kExpectedMetaCalls
@@ -1112,7 +1158,7 @@ namespace
     //! runs it before looking at the timers, so a timer cannot interleave *within* a batch -- queue
     //! 400 slow metacalls in one go and exactly one expiry gets through, however long the batch
     //! takes. That is the same granularity Qt has (sendPostedEvents drains the list, then timers are
-    //! processed) and what QtLikeSignal's dispatcher does. The guarantee is per pass, so the load
+    //! processed) and what QtMimic's loop does. The guarantee is per pass, so the load
     //! here arrives in rounds: each round is queued while the previous is still being chewed, which
     //! keeps every pass non-empty while still giving the loop many passes to be measured over.
     TEST( ThreadTimerTest, TimersKeepFiringWhileMailboxNeverEmpties )
@@ -1121,7 +1167,7 @@ namespace
         constexpr int kPerRound = 10;
         constexpr int kWorkMicros = 200;  // 2 ms of work per round, fed every 1 ms
 
-        Thread worker;
+        Thread worker( "mixed-saturated" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
@@ -1150,7 +1196,7 @@ namespace
             std::this_thread::sleep_for( 1ms );
         }
 
-        ASSERT_TRUE( waitFor( [&receiver]()
+        ASSERT_TRUE( waitFor( [&receiver, kRounds, kPerRound]()
             {
                 return receiver.metaCalls() >= kRounds * kPerRound;
             } ) ) << "the timer starved the mailbox: only " << receiver.metaCalls() << " of "
@@ -1183,7 +1229,7 @@ namespace
     {
         constexpr int kPosts = 200;
 
-        Thread worker;
+        Thread worker( "mixed-zero" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
@@ -1205,7 +1251,7 @@ namespace
             metaCall.emit( 0, sequence );
         }
 
-        EXPECT_TRUE( waitFor( [&receiver]()
+        EXPECT_TRUE( waitFor( [&receiver, kPosts]()
             {
                 return receiver.metaCalls() >= kPosts;
             } ) ) << "a zero-interval timer starved the mailbox: only " << receiver.metaCalls()
@@ -1232,7 +1278,7 @@ namespace
     //! numbers.
     TEST( ThreadTimerTest, HandlersMayPostAndRetimeDuringDelivery )
     {
-        Thread worker;
+        Thread worker( "mixed-reentrant" );
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
