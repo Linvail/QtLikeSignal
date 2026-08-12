@@ -140,7 +140,25 @@ namespace QtLikeSignal
             Receiver* aReceiver,
             Slot aSlot,
             ConnectionType aType = ConnectionType::Auto
-            );
+            )
+        {
+            using SlotClass = typename MemberFunctionTraits<Slot>::class_type;
+
+            static_assert(
+                std::is_base_of<Object, Receiver>::value, "Receiver must be an instance of Object." );
+            static_assert( MemberFunctionTraits<Slot>::is_member_function,
+                "Slot must be a member function pointer." );
+            static_assert( std::is_base_of<SlotClass, Receiver>::value,
+                "Slot must be a member function of Receiver or one of its base classes." );
+
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
+                {
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                };
+
+            return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
+        }
+
 
         //! Connect Overload 2: connects an overloaded void member function slot inherited from a
         //! base class.
@@ -152,7 +170,16 @@ namespace QtLikeSignal
         connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             void ( SlotClass::*aSlot )( SignalArgs... ),
-            ConnectionType aType = ConnectionType::Auto );
+            ConnectionType aType = ConnectionType::Auto )
+        {
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
+                {
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                };
+
+            return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
+        }
+
 
         //! Connect Overload 3: connects an overloaded const void member function slot inherited
         //! from a base class.
@@ -164,7 +191,16 @@ namespace QtLikeSignal
         connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             void ( SlotClass::*aSlot )( SignalArgs... ) const,
-            ConnectionType aType = ConnectionType::Auto );
+            ConnectionType aType = ConnectionType::Auto )
+        {
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
+                {
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                };
+
+            return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
+        }
+
 
         //! Connect Overload 4: connects an overloaded non-void returning member function slot
         //! inherited from a base class.
@@ -177,7 +213,16 @@ namespace QtLikeSignal
         connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             Ret ( SlotClass::*aSlot )( SignalArgs... ),
-            ConnectionType aType = ConnectionType::Auto );
+            ConnectionType aType = ConnectionType::Auto )
+        {
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
+                {
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                };
+
+            return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
+        }
+
 
         //! Connect Overload 5: connects an overloaded non-void returning const member function
         //! slot inherited from a base class.
@@ -190,7 +235,16 @@ namespace QtLikeSignal
         connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             Ret ( SlotClass::*aSlot )( SignalArgs... ) const,
-            ConnectionType aType = ConnectionType::Auto );
+            ConnectionType aType = ConnectionType::Auto )
+        {
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
+                {
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                };
+
+            return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
+        }
+
 
         //! Connect Overload 6: connects an overloaded void member function slot defined directly
         //! on the receiver.
@@ -199,7 +253,16 @@ namespace QtLikeSignal
         connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             void ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ),
-            ConnectionType aType = ConnectionType::Auto );
+            ConnectionType aType = ConnectionType::Auto )
+        {
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
+                {
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                };
+
+            return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
+        }
+
 
         //! Connect Overload 7: connects an overloaded const void member function slot defined
         //! directly on the receiver.
@@ -208,7 +271,16 @@ namespace QtLikeSignal
         connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             void ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ) const,
-            ConnectionType aType = ConnectionType::Auto );
+            ConnectionType aType = ConnectionType::Auto )
+        {
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
+                {
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                };
+
+            return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
+        }
+
 
         //! Connect Overload 8: connects an overloaded non-void returning member function slot
         //! defined directly on the receiver.
@@ -219,7 +291,16 @@ namespace QtLikeSignal
         connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             Ret ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ),
-            ConnectionType aType = ConnectionType::Auto );
+            ConnectionType aType = ConnectionType::Auto )
+        {
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
+                {
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                };
+
+            return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
+        }
+
 
         //! Connect Overload 9: connects an overloaded non-void returning const member function
         //! slot defined directly on the receiver.
@@ -230,7 +311,16 @@ namespace QtLikeSignal
         connect( SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
             Ret ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ) const,
-            ConnectionType aType = ConnectionType::Auto );
+            ConnectionType aType = ConnectionType::Auto )
+        {
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
+                {
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                };
+
+            return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
+        }
+
         //! Connect Overload 10: connects a signal to a free function, lambda, or general functor
         //! slot.
         template <typename Signal, typename Functor>
@@ -242,7 +332,16 @@ namespace QtLikeSignal
             Object* aContext,
             Functor aSlot,
             ConnectionType aType = ConnectionType::Auto
-            );
+            )
+        {
+            auto adapter = [aSlot]( auto&&... aCallArgs )
+                {
+                    aSlot( std::forward<decltype( aCallArgs )>( aCallArgs )... );
+                };
+
+            return connectImpl( aSignal, aContext, std::move( adapter ), aType );
+        }
+
 
         static void disconnect
             (
@@ -427,6 +526,44 @@ namespace QtLikeSignal
             }
 
         };
+        //! Builds the key and the invoker for one deferred call, then schedules it.
+        //!
+        //! The eleven callLater() overloads differ only in how the compiler has to be told to name
+        //! the target -- overloaded, inherited, const, non-void returning, free function, signal.
+        //! What each one then *does* is identical, and this is that: hash the target into a
+        //! deduplication key, pack the arguments into a tuple the invoker owns, and hand both to
+        //! scheduleCallLater().
+        //!
+        //! @tparam KeyType The type hashed into the key. Deliberately separate from Target: the
+        //!         inherited-slot overloads hash the *declared* member-pointer signature rather
+        //!         than a deduced type, so that naming one slot through a base class and through
+        //!         the receiver yields the same key and therefore deduplicates against itself.
+        template <typename KeyType, typename Target, typename Caller, typename ... Args>
+        static void dispatchCallLater
+            (
+            Object* aContext,      //!< Context owning the call; also the key's identity.
+            const Target& aTarget,  //!< The callable being deferred, hashed by value into the key.
+            Caller aCaller,         //!< Performs the call, given the unpacked arguments.
+            Args&&... aArgs         //!< Arguments to copy and replay when the call runs.
+            )
+        {
+            static_assert( sizeof( Target ) <= 32, "callLater target exceeds the key size limit." );
+
+            CallLaterKey key;
+            key.mContext = aContext;
+            key.mTypeHash = typeid( KeyType ).hash_code();
+            key.mTargetSize = sizeof( Target );
+            std::memcpy( key.mTargetBytes.data(), &aTarget, sizeof( Target ) );
+
+            auto invoker =
+                [aCaller, tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... )]() mutable
+                {
+                    std::apply( aCaller, std::move( tupleArgs ) );
+                };
+
+            scheduleCallLater( aContext, key, invoker );
+        }
+
         static void
         scheduleCallLater
             (
@@ -669,239 +806,6 @@ namespace QtLikeSignal
         mutable std::mutex mRunningTimerIdsMutex;
     };
 
-    //! Connect Overload 1 definition. This is the primary overload for standard member functions.
-    //! Because the target slot is not overloaded, the compiler can directly deduce the Slot type
-    //! without needing explicit template resolution.
-    template <typename Signal, typename Receiver, typename Slot>
-    std::enable_if_t<MemberFunctionTraits<Slot>::is_member_function, Connection>Object::
-    connect
-        (
-        Signal& aSignal,          //!< The signal to connect.
-        Receiver* aReceiver,      //!< The object receiving the signal (must derive from Object).
-        Slot aSlot,                //!< The member function to call when the signal is emitted.
-        ConnectionType aType   //!< The type of connection.
-        )
-    {
-        using SlotClass = typename MemberFunctionTraits<Slot>::class_type;
-
-        static_assert(
-            std::is_base_of<Object, Receiver>::value, "Receiver must be an instance of Object." );
-        static_assert( MemberFunctionTraits<Slot>::is_member_function,
-            "Slot must be a member function pointer." );
-        static_assert( std::is_base_of<SlotClass, Receiver>::value,
-            "Slot must be a member function of Receiver or one of its base classes." );
-
-        return connectImpl( aSignal, aReceiver,
-            [aReceiver, aSlot]( auto&&... aCallArgs )
-            {
-                ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
-            },
-            aType );
-    }
-
-    //! Connect Overload 2 definition. If the target slot is overloaded, the compiler cannot deduce
-    //! Slot in Overload 1. When the overloaded slot is defined in a base class of the receiver,
-    //! type deduction fails. This overload explicitly resolves the base class pointer so you can
-    //! connect inherited overloaded methods seamlessly. SignalArgs are the signal's parameter
-    //! types, used to select the slot overload; Receiver must derive from Object; SlotClass is
-    //! the base class owning the member function slot.
-    template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename SlotClass>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
-        std::is_base_of<SlotClass, Receiver>::value &&
-        !std::is_same<SlotClass, Receiver>::value,
-        Connection>Object::connect
-        (
-        SignalSource<SignalArgs...>& aSignal,           //!< The signal to connect.
-        Receiver* aReceiver,                        //!< The object receiving the signal.
-        void ( SlotClass::*aSlot )
-        (
-        SignalArgs...
-        ),                                          //!< The member function pointer matching SignalArgs.
-        ConnectionType aType                     //!< The type of connection.
-        )
-    {
-        return connectImpl( aSignal, aReceiver,
-            [aReceiver, aSlot]( auto&&... aCallArgs )
-            {
-                ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
-            },
-            aType );
-    }
-
-    //! Connect Overload 3 definition. Same as Overload 2, but specifically for const member
-    //! functions; C++ requires separate template matching for const qualifiers on member
-    //! function pointers.
-    template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename SlotClass>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
-        std::is_base_of<SlotClass, Receiver>::value &&
-        !std::is_same<SlotClass, Receiver>::value,
-        Connection>Object::connect
-        (
-        SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
-        Receiver* aReceiver,                  //!< The object receiving the signal.
-        void ( SlotClass::*aSlot )( SignalArgs... ) const,  //!< The const member function pointer matching SignalArgs.
-        ConnectionType aType               //!< The type of connection.
-        )
-    {
-        return connectImpl( aSignal, aReceiver,
-            [aReceiver, aSlot]( auto&&... aCallArgs )
-            {
-                ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
-            },
-            aType );
-    }
-
-    //! Connect Overload 4 definition. If an overloaded inherited slot returns a value (e.g. bool),
-    //! it won't match the void-returning Overloads 2 and 3. This overload explicitly catches
-    //! non-void slots from base classes; the return value is safely discarded during emission.
-    //! Ret is that discarded return type.
-    template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename SlotClass, typename Ret>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
-        std::is_base_of<SlotClass, Receiver>::value &&
-        !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
-        Connection>Object::connect
-        (
-        SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
-        Receiver* aReceiver,                  //!< The object receiving the signal.
-        Ret ( SlotClass::*aSlot )
-        (
-        SignalArgs...
-        ),                                    //!< The member function pointer matching SignalArgs and returning Ret.
-        ConnectionType aType               //!< The type of connection.
-        )
-    {
-        return connectImpl( aSignal, aReceiver,
-            [aReceiver, aSlot]( auto&&... aCallArgs )
-            {
-                ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
-            },
-            aType );
-    }
-
-    //! Connect Overload 5 definition. Same as Overload 4, but specifically for const member
-    //! functions.
-    template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename SlotClass, typename Ret>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
-        std::is_base_of<SlotClass, Receiver>::value &&
-        !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
-        Connection>Object::connect
-        (
-        SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
-        Receiver* aReceiver,                  //!< The object receiving the signal.
-        Ret ( SlotClass::*aSlot )( SignalArgs... ) const,  //!< The const member function pointer matching SignalArgs and returning Ret.
-        ConnectionType aType               //!< The type of connection.
-        )
-    {
-        return connectImpl( aSignal, aReceiver,
-            [aReceiver, aSlot]( auto&&... aCallArgs )
-            {
-                ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
-            },
-            aType );
-    }
-
-    //! Connect Overload 6 definition. If the target slot is overloaded (e.g. onEvent() and
-    //! onEvent(int)), the compiler cannot deduce Slot in Overload 1. Using NonDeduced<Receiver>
-    //! forces the compiler to use SignalArgs from the signal to perfectly select the right
-    //! overload pointer. SignalArgs is used both to deduce and to select the slot overload.
-    template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value, Connection>Object::connect
-        (
-        SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
-        Receiver* aReceiver,                  //!< The object receiving the signal.
-        void ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ),  //!< The member function pointer matching SignalArgs.
-        ConnectionType aType               //!< The type of connection.
-        )
-    {
-        return connectImpl( aSignal, aReceiver,
-            [aReceiver, aSlot]( auto&&... aCallArgs )
-            {
-                ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
-            },
-            aType );
-    }
-
-    //! Connect Overload 7 definition. Same as Overload 6, but specifically matches const member
-    //! functions.
-    template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value, Connection>Object::connect
-        (
-        SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
-        Receiver* aReceiver,                  //!< The object receiving the signal.
-        void ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ) const,  //!< The const member function pointer matching SignalArgs.
-        ConnectionType aType               //!< The type of connection.
-        )
-    {
-        return connectImpl( aSignal, aReceiver,
-            [aReceiver, aSlot]( auto&&... aCallArgs )
-            {
-                ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
-            },
-            aType );
-    }
-
-    //! Connect Overload 8 definition. If an overloaded slot returns a value (e.g. bool), it won't
-    //! match the void-returning Overload 6. This overload ensures connecting an overloaded method
-    //! that returns Ret compiles successfully.
-    template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename Ret>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value && !std::is_same<Ret, void>::value,
-        Connection>Object::connect
-        (
-        SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
-        Receiver* aReceiver,                  //!< The object receiving the signal.
-        Ret ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ),  //!< The member function pointer matching SignalArgs and returning Ret.
-        ConnectionType aType               //!< The type of connection.
-        )
-    {
-        return connectImpl( aSignal, aReceiver,
-            [aReceiver, aSlot]( auto&&... aCallArgs )
-            {
-                ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
-            },
-            aType );
-    }
-
-    //! Connect Overload 9 definition. Same as Overload 8, but specifically for const member
-    //! functions.
-    template <template <typename ...> class SignalSource, typename ... SignalArgs, typename Receiver, typename Ret>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value && !std::is_same<Ret, void>::value,
-        Connection>Object::connect
-        (
-        SignalSource<SignalArgs...>& aSignal,     //!< The signal to connect.
-        Receiver* aReceiver,                  //!< The object receiving the signal.
-        Ret ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ) const,  //!< The const member function pointer matching SignalArgs and returning Ret.
-        ConnectionType aType               //!< The type of connection.
-        )
-    {
-        return connectImpl( aSignal, aReceiver,
-            [aReceiver, aSlot]( auto&&... aCallArgs )
-            {
-                ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
-            },
-            aType );
-    }
-
-    //! Connect Overload 10 definition. Captures anything that is not a member function: free
-    //! functions, lambdas, or general functors. Binds the functor's lifetime and thread affinity
-    //! to the provided context object.
-    template <typename Signal, typename Functor>
-    std::enable_if_t<!MemberFunctionTraits<Functor>::is_member_function, Connection>Object::
-    connect
-        (
-        Signal& aSignal,           //!< The signal to connect.
-        Object* aContext,         //!< The Object context defining thread affinity and lifetime.
-        Functor aSlot,             //!< The slot functor (lambda, std::function, etc.).
-        ConnectionType aType    //!< The type of connection.
-        )
-    {
-        return connectImpl( aSignal, aContext,
-            [aSlot]( auto&&... aCallArgs )
-            {
-                aSlot( std::forward<decltype( aCallArgs )>( aCallArgs )... );
-            },
-            aType );
-    }
-
     //! Disconnects a signal connection using a connection handle. Thread-safe.
     inline void Object::disconnect
         (
@@ -940,24 +844,12 @@ namespace QtLikeSignal
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( Slot ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<Slot>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 2 definition. If the target slot is overloaded and inherited from a base
@@ -982,24 +874,12 @@ namespace QtLikeSignal
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( void ( SlotClass::* )( Args... ) ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<void ( SlotClass::* )( Args... )>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 3 definition. Same as Overload 2, but specifically for const member
@@ -1020,24 +900,12 @@ namespace QtLikeSignal
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( void ( SlotClass::* )( Args... ) const ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<void ( SlotClass::* )( Args... ) const>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 4 definition. If an overloaded inherited slot returns a value, it won't
@@ -1062,24 +930,12 @@ namespace QtLikeSignal
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( Ret ( SlotClass::* )( Args... ) ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<Ret ( SlotClass::* )( Args... )>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 5 definition. Same as Overload 4, but specifically for const member
@@ -1100,24 +956,12 @@ namespace QtLikeSignal
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( Ret ( SlotClass::* )( Args... ) const ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<Ret ( SlotClass::* )( Args... ) const>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 6 definition. If the target slot is overloaded, the compiler cannot
@@ -1136,24 +980,12 @@ namespace QtLikeSignal
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( void ( Receiver::* )( Args... ) ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<void ( Receiver::* )( Args... )>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 7 definition. Same as Overload 6, but specifically for const member
@@ -1171,24 +1003,12 @@ namespace QtLikeSignal
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( void ( Receiver::* )( Args... ) const ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<void ( Receiver::* )( Args... ) const>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 8 definition. If an overloaded slot returns a value, it won't match the
@@ -1209,24 +1029,12 @@ namespace QtLikeSignal
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( Ret ( Receiver::* )( Args... ) ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<Ret ( Receiver::* )( Args... )>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 9 definition. Same as Overload 8, but specifically for const member
@@ -1245,24 +1053,12 @@ namespace QtLikeSignal
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( Ret ( Receiver::* )( Args... ) const ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<Ret ( Receiver::* )( Args... ) const>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 10 definition. Captures static and free functions, binding their
@@ -1285,24 +1081,12 @@ namespace QtLikeSignal
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aContext;
-        key.mTypeHash = typeid( Func ).hash_code();
-        key.mTargetSize = sizeof( aFunc );
-        static_assert( sizeof( aFunc ) <= 32, "Function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aFunc, sizeof( aFunc ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aFunc, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<Func>( aContext, aFunc,
+            [aFunc]( auto&&... a )
             {
-                std::apply( [aFunc]( auto&&... a )
-                    {
-                        (*aFunc )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aContext, key, invoker );
+                (*aFunc )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 11 definition. Allows callLater to queue a signal emission
@@ -1326,24 +1110,12 @@ namespace QtLikeSignal
 
         Signal<SignalArgs...>* sigPtr = &aSignal;
 
-        CallLaterKey key;
-        key.mContext = aContext;
-        key.mTypeHash = typeid( Signal<SignalArgs...> ).hash_code();
-        key.mTargetSize = sizeof( sigPtr );
-        static_assert( sizeof( sigPtr ) <= 32, "Signal pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &sigPtr, sizeof( sigPtr ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [sigPtr, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<Signal<SignalArgs...>>( aContext, sigPtr,
+            [sigPtr]( auto&&... a )
             {
-                std::apply( [sigPtr]( auto&&... a )
-                    {
-                        sigPtr->emit( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aContext, key, invoker );
+                sigPtr->emit( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 12 definition. callLater relies on hashing the target address for

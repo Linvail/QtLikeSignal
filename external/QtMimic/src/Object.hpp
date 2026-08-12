@@ -814,6 +814,44 @@ namespace QtMimic
             }
 
         };
+        //! Builds the key and the invoker for one deferred call, then schedules it.
+        //!
+        //! The eleven callLater() overloads differ only in how the compiler has to be told to name
+        //! the target -- overloaded, inherited, const, non-void returning, free function, signal.
+        //! What each one then *does* is identical, and this is that: hash the target into a
+        //! deduplication key, pack the arguments into a tuple the invoker owns, and hand both to
+        //! scheduleCallLater().
+        //!
+        //! @tparam KeyType The type hashed into the key. Deliberately separate from Target: the
+        //!         inherited-slot overloads hash the *declared* member-pointer signature rather
+        //!         than a deduced type, so that naming one slot through a base class and through
+        //!         the receiver yields the same key and therefore deduplicates against itself.
+        template <typename KeyType, typename Target, typename Caller, typename ... Args>
+        static void dispatchCallLater
+            (
+            Object* aContext,      //!< Context owning the call; also the key's identity.
+            const Target& aTarget,  //!< The callable being deferred, hashed by value into the key.
+            Caller aCaller,         //!< Performs the call, given the unpacked arguments.
+            Args&&... aArgs         //!< Arguments to copy and replay when the call runs.
+            )
+        {
+            static_assert( sizeof( Target ) <= 32, "callLater target exceeds the key size limit." );
+
+            CallLaterKey key;
+            key.mContext = aContext;
+            key.mTypeHash = typeid( KeyType ).hash_code();
+            key.mTargetSize = sizeof( Target );
+            std::memcpy( key.mTargetBytes.data(), &aTarget, sizeof( Target ) );
+
+            auto invoker =
+                [aCaller, tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... )]() mutable
+                {
+                    std::apply( aCaller, std::move( tupleArgs ) );
+                };
+
+            scheduleCallLater( aContext, key, invoker );
+        }
+
         static void
         scheduleCallLater
             (
@@ -954,24 +992,12 @@ namespace QtMimic
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( Slot ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<Slot>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 2 definition. If the target slot is overloaded and inherited from a base
@@ -996,24 +1022,12 @@ namespace QtMimic
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( void ( SlotClass::* )( Args... ) ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<void ( SlotClass::* )( Args... )>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 3 definition. Same as Overload 2, but specifically for const member
@@ -1034,24 +1048,12 @@ namespace QtMimic
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( void ( SlotClass::* )( Args... ) const ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<void ( SlotClass::* )( Args... ) const>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 4 definition. If an overloaded inherited slot returns a value, it won't
@@ -1076,24 +1078,12 @@ namespace QtMimic
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( Ret ( SlotClass::* )( Args... ) ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<Ret ( SlotClass::* )( Args... )>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 5 definition. Same as Overload 4, but specifically for const member
@@ -1114,24 +1104,12 @@ namespace QtMimic
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( Ret ( SlotClass::* )( Args... ) const ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<Ret ( SlotClass::* )( Args... ) const>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 6 definition. If the target slot is overloaded, the compiler cannot
@@ -1150,24 +1128,12 @@ namespace QtMimic
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( void ( Receiver::* )( Args... ) ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<void ( Receiver::* )( Args... )>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 7 definition. Same as Overload 6, but specifically for const member
@@ -1185,24 +1151,12 @@ namespace QtMimic
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( void ( Receiver::* )( Args... ) const ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<void ( Receiver::* )( Args... ) const>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 8 definition. If an overloaded slot returns a value, it won't match the
@@ -1223,24 +1177,12 @@ namespace QtMimic
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( Ret ( Receiver::* )( Args... ) ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<Ret ( Receiver::* )( Args... )>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 9 definition. Same as Overload 8, but specifically for const member
@@ -1259,24 +1201,12 @@ namespace QtMimic
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aReceiver;
-        key.mTypeHash = typeid( Ret ( Receiver::* )( Args... ) const ).hash_code();
-        key.mTargetSize = sizeof( aSlot );
-        static_assert( sizeof( aSlot ) <= 32, "Member function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aSlot, sizeof( aSlot ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aReceiver, aSlot, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<Ret ( Receiver::* )( Args... ) const>( aReceiver, aSlot,
+            [aReceiver, aSlot]( auto&&... a )
             {
-                std::apply( [aReceiver, aSlot]( auto&&... a )
-                    {
-                        ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aReceiver, key, invoker );
+                ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 10 definition. Captures static and free functions, binding their
@@ -1299,24 +1229,12 @@ namespace QtMimic
             return;
         }
 
-        CallLaterKey key;
-        key.mContext = aContext;
-        key.mTypeHash = typeid( Func ).hash_code();
-        key.mTargetSize = sizeof( aFunc );
-        static_assert( sizeof( aFunc ) <= 32, "Function pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &aFunc, sizeof( aFunc ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [aFunc, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<Func>( aContext, aFunc,
+            [aFunc]( auto&&... a )
             {
-                std::apply( [aFunc]( auto&&... a )
-                    {
-                        (*aFunc )( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aContext, key, invoker );
+                (*aFunc )( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 11 definition. Allows callLater to queue a signal emission
@@ -1340,24 +1258,12 @@ namespace QtMimic
 
         Signal<SignalArgs...>* sigPtr = &aSignal;
 
-        CallLaterKey key;
-        key.mContext = aContext;
-        key.mTypeHash = typeid( Signal<SignalArgs...> ).hash_code();
-        key.mTargetSize = sizeof( sigPtr );
-        static_assert( sizeof( sigPtr ) <= 32, "Signal pointer exceeds key size limit." );
-        std::memcpy( key.mTargetBytes.data(), &sigPtr, sizeof( sigPtr ) );
-
-        auto tupleArgs = std::make_tuple( std::forward<Args>( aArgs )... );
-        auto invoker = [sigPtr, tupleArgs = std::move( tupleArgs )]() mutable
+        dispatchCallLater<Signal<SignalArgs...>>( aContext, sigPtr,
+            [sigPtr]( auto&&... a )
             {
-                std::apply( [sigPtr]( auto&&... a )
-                    {
-                        sigPtr->emit( std::forward<decltype( a )>( a )... );
-                    },
-                    std::move( tupleArgs ) );
-            };
-
-        scheduleCallLater( aContext, key, invoker );
+                sigPtr->emit( std::forward<decltype( a )>( a )... );
+            },
+            std::forward<Args>( aArgs )... );
     }
 
     //! CallLater Overload 12 definition. callLater relies on hashing the target address for
