@@ -57,7 +57,7 @@ no runtime probe was written.
 
 **Severity: High. Confirmed by probe. This was the most serious finding in this pass.**
 
-> **Resolution (2026-08-08).** Ported QtMimic's two-sided teardown. `Object` gained
+> **Resolution (2026-08-08).** Ported the reference implementation's two-sided teardown. `Object` gained
 > `mIncoming` (+ its mutex) recording every connection where it is the receiver, and `~Object()`
 > swaps that vector out and disconnects each handle — after `mLife.reset()`, so the `Cleanup`
 > destructors it triggers bail out instead of re-entering `mIncoming`. Each connection's closure
@@ -70,7 +70,7 @@ no runtime probe was written.
 > Re-running the same probe: **RSS growth 672036 kB → 32 kB, emit 326844 us → 30 us.**
 >
 > Covered by `ObjectDefectTest.DestroyedReceiverIsDisconnectedFromItsSender`, which asserts through
-> a new read-only `Signal::receivers()` accessor (mirroring `QObject::receivers()` and QtMimic's
+> a new read-only `Signal::receivers()` accessor (mirroring `QObject::receivers()` and the reference implementation's
 > `Signal::receivers()`) rather than by measuring memory. Verified to catch the regression:
 > disabling the disconnect loop makes it report 501 accumulated dead slots.
 
@@ -95,14 +95,14 @@ emit=326844us       live_calls=1
 deliver to the one slot that was still alive.** Roughly 3.4 KB of retained state per dead
 connection. Neither figure recovers — the growth is permanent for the lifetime of the signal.
 
-This is a genuine regression relative to `external/QtMimic`, which solves it explicitly:
+This is a genuine regression relative to the reference implementation, which solves it explicitly:
 `Object::mIncoming` records every connection where the object is the receiver, and `~Object()`
 walks it calling `handle.disconnect()`; a `Cleanup` token captured by each slot prunes the entry
 from the other direction when the connection ends first. Qt does the equivalent in `~QObject()` by
 walking `cd->senders` and removing each connection. QtLikeSignal is the only one of the three with
 no teardown path at all.
 
-Fixing it means porting QtMimic's `mIncoming` + `Cleanup` pair (the two halves are both needed —
+Fixing it means porting the reference implementation's `mIncoming` + `Cleanup` pair (the two halves are both needed —
 `mIncoming` alone leaks entries for connections disconnected manually before the receiver dies).
 Note this interacts with R20 and with the boost re-entrancy that motivated the `Affinity` port:
 `disconnect()` from `~Object()` does not wait for an in-flight emit, which is exactly why the
@@ -213,7 +213,7 @@ ran=1  ranOnEmitterThread=1   (Qt would DROP this)
 
 Qt is explicit that this should not happen — *"If a QObject has no thread affinity (that is, if
 `thread()` returns zero) ... then it cannot receive queued signals or posted events"*
-(`qobject.cpp`, "Thread Affinity"). QtMimic implements exactly that, dropping the call rather than
+(`qobject.cpp`, "Thread Affinity"). The reference implementation implements exactly that, dropping the call rather than
 falling back to a direct one, and calls the fallback out as deliberate:
 
 ```cpp
@@ -221,7 +221,7 @@ if( ctxData == nullptr || ctxData->thread() == nullptr ) return;  // deliberatel
 ```
 
 The structural reason QtLikeSignal ends up here is that it does **not** auto-adopt native threads.
-`Thread::currentThread()` returns `nullptr` outside a `Thread`, whereas QtMimic's
+`Thread::currentThread()` returns `nullptr` outside a `Thread`, whereas the reference implementation's
 `Thread::current()` creates a dummy adopted `Thread` so every object always has affinity.
 
 This is load-bearing in the current test suite, which is why it cannot simply be changed: the test
@@ -383,18 +383,18 @@ thread died:
 `deleteLater()` had the same split, and there it was worse: on an adopted-thread orphan it queued a
 `DeferredDeleteEvent` nothing would run, so **the object leaked outright**.
 
-QtMimic forecloses all of this and was the model for the fix. Measured side by side over five rounds
-of 200k emits: QtMimic grows 276 kB on round one and then flattens (even returning memory);
+the reference implementation forecloses all of this and was the model for the fix. Measured side by side over five rounds
+of 200k emits: the reference implementation grows 276 kB on round one and then flattens (even returning memory);
 QtLikeSignal grew ~30 MB every round without bound.
 
-> **Resolution (2026-08-08).** Three layers, mirroring QtMimic's:
+> **Resolution (2026-08-08).** Three layers, mirroring the reference implementation's:
 >   1. `~Thread()` drains deferred deletes and releases the dispatcher **before** nulling the
->      back-pointer, so the two owners can no longer disagree. QtMimic states the same invariant for
+>      back-pointer, so the two owners can no longer disagree. The reference implementation states the same invariant for
 >      its mailbox: *"Done BEFORE clearing the back-pointer, so the invariant 'thread() == nullptr
 >      implies not accepting' holds."*
 >   2. `dispatchMetaCallTo()` drops a queued call when the target thread is gone. Placed after the
 >      `Auto` resolution and outside the `Direct` path, since `DirectConnection` means "run now
->      regardless of affinity" — QtMimic puts its guard at the same point.
+>      regardless of affinity" — the reference implementation puts its guard at the same point.
 >   3. `deleteLater()` falls back to a synchronous delete rather than queueing into a dead thread.
 >
 > Covered by `ObjectDefectTest.DeleteLaterOnAnOrphanedObjectDeletesItSynchronously` (deterministic)
@@ -402,7 +402,7 @@ QtLikeSignal grew ~30 MB every round without bound.
 
 > **Testing note.** The growth test samples **per round**, not once. A single measurement cannot
 > distinguish a leak from allocator arena high-water — correct code grows on the first round too,
-> which is exactly how QtMimic was (correctly) cleared of the same suspicion. It also skips under
+> which is exactly how the reference implementation was (correctly) cleared of the same suspicion. It also skips under
 > AddressSanitizer: ASan's quarantine retains freed blocks, and emitting allocates one `std::function`
 > per call even when the metacall is properly dropped, so 800k emits report ~37 MB for healthy code.
 > Confirmed by re-running with `ASAN_OPTIONS=quarantine_size_mb=1`, which passes.

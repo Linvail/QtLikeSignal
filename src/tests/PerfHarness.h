@@ -84,8 +84,8 @@ namespace PerfHarness
     //! never set back. Whichever benchmark first starts a worker thread therefore makes every
     //! allocation after it more expensive, for every library, for the rest of the run.
     //!
-    //! That was not hypothetical: with the cross-thread scenarios running first, QtMimic's direct
-    //! emit measured 40.3 ns alone but 63.2 ns after QtLikeSignal's queued test and 64.3 ns after
+    //! That was not hypothetical: with the cross-thread scenarios running first, a direct
+    //! emit measured 40.3 ns alone but 63.2 ns after a queued test and 64.3 ns after
     //! Qt6's -- the same penalty regardless of which library spawned the thread. Qt6's own direct
     //! emit was unaffected, because it does not allocate per emit, and the size of the penalty
     //! tracked each library's allocations per emit. Left alone, the table would have measured test

@@ -1,6 +1,6 @@
 //! @file
 //!
-//! Dispatch-overhead benchmarks for Qt 6 itself, run alongside the QtLikeSignal and QtMimic ones so
+//! Dispatch-overhead benchmarks for Qt 6 itself, run alongside the QtLikeSignal ones so
 //! all three appear in a single comparison table.
 //!
 //! Qt is the thing this project is imitating, so it is the reference the other two should be read

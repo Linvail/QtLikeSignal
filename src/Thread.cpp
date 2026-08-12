@@ -49,9 +49,8 @@ namespace QtLikeSignal
 
         // Drain deferred deletes, then release the dispatcher -- BEFORE clearing the back-pointer
         // below, so there is never a moment where thread() reports nullptr while a working
-        // dispatcher is still reachable through this ThreadData. QtMimic states the same invariant
-        // for its mailbox: "Done BEFORE clearing the back-pointer, so the invariant 'thread() ==
-        // nullptr implies not accepting' holds."
+        // dispatcher is still reachable through this ThreadData. The invariant is that
+        // thread() == nullptr implies the queue is closed.
         //
         // threadBody() already does both for a worker that ran a loop, so this is normally a no-op
         // there. It exists for the case that had no equivalent: an *adopted* thread, whose Thread is

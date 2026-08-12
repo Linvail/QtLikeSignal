@@ -4,10 +4,6 @@
 //! touches an Object becomes a Thread on demand, so every Object has a thread affinity, and a
 //! thread running its own native loop can drain our queue with processEvents() /
 //! setWakeCallback().
-//!
-//! Deliberately parallel to QtMimic's QtMimic-test-thread-adoption.cpp -- same tests, same order,
-//! same names -- so the two can be diffed against each other. See
-//! history/TEST-UNIFICATION-PLAN-20260810.md.
 
 #include "QtLikeSignal-test-types.h"
 

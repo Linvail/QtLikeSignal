@@ -2,10 +2,6 @@
 //!
 //! GoogleTest stress suite for the QtLikeSignal framework: connection lifetime under concurrent
 //! connect/disconnect/emit, fan-in from many threads, and argument copying on the queued path.
-//!
-//! Deliberately parallel to QtMimic's QtMimic-test-stress.cpp -- same tests, same order, same
-//! names -- so the two can be diffed against each other. See
-//! history/TEST-UNIFICATION-PLAN-20260810.md.
 
 #include "QtLikeSignal-test-types.h"
 

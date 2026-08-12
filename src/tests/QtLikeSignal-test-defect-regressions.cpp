@@ -1195,20 +1195,18 @@ TEST( TimerDefectTest, SingleShotIsStoppedBeforeTimeoutIsEmitted )
 // when the target thread is gone, and ~Thread() drains deferred deletes and releases the dispatcher
 // before nulling the back-pointer, so the two can no longer disagree.
 //
-// QtMimic forecloses this. ~Thread() closes the mailbox *before* nulling the back-pointer, stating
-// the invariant outright -- "Done BEFORE clearing the back-pointer, so the invariant 'thread() ==
-// nullptr implies not accepting' holds" -- and connectImpl() additionally drops when
-// ctxData->thread() == nullptr. Measured side by side over five rounds of 200k emits, QtMimic grows
-// 276 kB then flattens; QtLikeSignal grows ~30 MB every round without bound.
+// The invariant that forecloses it: ~Thread() must close the queue *before* nulling the
+// back-pointer, so that thread() == nullptr implies the queue is closed, and connectImpl()
+// additionally drops when ctxData->thread() == nullptr. Without both, five rounds of 200k emits
+// grew ~30 MB every round without bound instead of flattening.
 // ---------------------------------------------------------------------------------------------
 
 //! Verifies deleteLater() on an orphaned object deletes it instead of leaking it.
 //!
 //! Deterministic -- no timing, no sampling. Before the fix this queued a DeferredDeleteEvent into
 //! the dead thread's still-live dispatcher, reported success, and the object was never destroyed.
-//! It now falls back to a synchronous delete, the same trade QtMimic makes when its post() refuses
-//! the task: "Doing nothing here would leak self forever, which is strictly worse than the
-//! thread-affinity violation of deleting it synchronously."
+//! It now falls back to a synchronous delete: doing nothing would leak the object forever, which
+//! is strictly worse than the thread-affinity violation of deleting it synchronously.
 TEST( ObjectDefectTest, DeleteLaterOnAnOrphanedObjectDeletesItSynchronously )
 {
     auto destroyed = std::make_shared<std::atomic<bool> >( false );

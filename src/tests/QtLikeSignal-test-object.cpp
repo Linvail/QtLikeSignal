@@ -2,10 +2,6 @@
 //!
 //! GoogleTest suite for QtLikeSignal::Object -- connections, thread affinity, lifetime and the
 //! callLater() family.
-//!
-//! Deliberately parallel to QtMimic's QtMimic-test-object.cpp -- same tests, same order, same
-//! names -- so the two can be diffed against each other. See
-//! history/TEST-UNIFICATION-PLAN-20260810.md.
 
 #include "QtLikeSignal-test-types.h"
 
@@ -864,7 +860,7 @@ static void waitForOneDelivery
 }
 
 // =================================================================================================
-// Tests originating in QtMimic's object suite.
+// Further object tests.
 //
 // The two suites were written independently and shared not one test name, so this is the union
 // rather than a reconciliation: nothing was dropped from either side on a judgment that some other

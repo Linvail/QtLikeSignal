@@ -17,5 +17,3 @@ compile_commands.json
 Thumbs.db
 Desktop.ini
 
-# Local agent/editor configuration.
-.claude/

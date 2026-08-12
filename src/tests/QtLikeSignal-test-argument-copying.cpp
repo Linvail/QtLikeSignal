@@ -5,8 +5,7 @@
 //! This is a behavioural contract, not a micro-optimisation: a signal carrying anything bigger than
 //! an int pays these copies on every emit, per receiver. The counts are asserted exactly rather than
 //! bounded, so a regression shows up as a number rather than as a vague slowdown nobody notices.
-//!
-//! Modelled on QtMimic's DeepArgumentCopying tests, which cover the same contract for that library.
+
 
 #include <gtest/gtest.h>
 #include "Object.h"
@@ -225,7 +224,7 @@ TEST( ObjectArgumentCopyingTest, QueuedConnectionCopiesOncePerReceiver )
 
 //! Events still queued when a thread dies must release the arguments they captured.
 //!
-//! Modelled on QtMimic's BlackHole test. A dispatcher that frees its pending events without
+//! A dispatcher that frees its pending events without
 //! destroying their captured state would leak every argument still in flight, which is invisible to
 //! LeakSanitizer for as long as the queue itself is reachable.
 TEST( ObjectArgumentCopyingTest, UnprocessedEventsReleaseTheirArguments )

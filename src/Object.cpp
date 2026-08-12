@@ -487,9 +487,8 @@ namespace QtLikeSignal
             // ThreadData -- and that ThreadData's still-working dispatcher -- behind, so without
             // this check the event is accepted by a queue nothing will ever drain and the object is
             // leaked outright rather than deleted. Falling through to the synchronous delete below
-            // is the lesser evil, and the same trade QtMimic makes when its post() refuses the task:
-            // "Doing nothing here would leak self forever, which is strictly worse than the
-            // thread-affinity violation of deleting it synchronously."
+            // is the lesser evil: doing nothing here would leak the object forever, which is
+            // strictly worse than the thread-affinity violation of deleting it synchronously.
             if( tData->thread() != nullptr )
             {
                 if( auto disp = tData->dispatcher() )

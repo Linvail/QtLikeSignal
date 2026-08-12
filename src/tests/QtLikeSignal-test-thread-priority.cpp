@@ -2,10 +2,6 @@
 //!
 //! GoogleTest suite for QtLikeSignal::Thread's scheduling-priority setter/getter, start(Priority),
 //! and the native-OS-thread creation that backs them.
-//!
-//! Deliberately parallel to QtMimic's QtMimic-test-thread-priority.cpp -- same tests, same order,
-//! same names -- so the two can be diffed against each other. See
-//! history/TEST-UNIFICATION-PLAN-20260810.md.
 
 #include "QtLikeSignal-test-types.h"
 
@@ -217,9 +213,8 @@ namespace
     //!
     //! mStarted is emitted from inside loop(), which run() only reaches after its priority
     //! fix-up step, so sampling from a connectStarted() callback observes the same ordering
-    //! guarantee QtLikeSignal's tests observe by overriding a virtual run() -- QtMimic has no
-    //! such override point, since a Thread's work is defined by posted tasks rather than a
-    //! subclassed run(). Checking after the fact (e.g. from a posted task) would pass even if the
+    //! guarantee these tests observe by overriding a virtual run().
+    //! Checking after the fact (e.g. from a posted task) would pass even if the
     //! priority arrived late, because posted tasks only run after mStarted has already fired.
     TEST( ThreadPriority, PriorityIsInEffectBeforeStartedSignal )
     {

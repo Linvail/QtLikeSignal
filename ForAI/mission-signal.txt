@@ -18,12 +18,11 @@ The surface we use from boost is tiny. The whole dependency is:
                                            num_slots(), empty()
   boost::signals2::connection              disconnect(), connected(), operator==,
                                            default-construct, copy
-  connect_extended()                       QtMimic's connectReflective(): the slot also receives
+  connect_extended()                       connectReflective(): the slot also receives
                                            its own connection
 
-That is it. Six functions and one handle type, in exactly two files -- src/Signal.h and
-external/QtMimic/src/Signal.hpp -- plus the `using Connection = boost::signals2::connection` in
-src/Global.h and QtMimic's Signal.hpp.
+That is it. Six functions and one handle type, in src/Signal.h, plus the
+`using Connection = boost::signals2::connection` in src/Global.h.
 
 So the typing is not the problem. The problem is that boost is currently supplying four
 *guarantees* that the rest of both libraries quietly lean on, and three of them are not obvious
@@ -38,7 +37,7 @@ same names and semantics:
 
   Signal<Args...>
       connect( std::function<void(Args...)> )   -> Connection
-      connectReflective( callable )             -> Connection   (QtMimic only, see below)
+      connectReflective( callable )             -> Connection   (see below)
       emit( args... )                           perfect-forwarding, NOT by value -- see 1a
       operator()( args... )
       disconnect( const Connection& )           (QtLikeSignal only; a forwarder)
@@ -59,10 +58,9 @@ same names and semantics:
 argument per emit before boost had even seen them; it was fixed on 2026-08-11 and
 ObjectTest.DeepArgumentCopying_QueuedEventsMinimizeCopies is what caught it. Do not regress it.
 
-1b. connectReflective() exists only in QtMimic, where Object::connectImpl() uses it. Check whether
-it is still needed before reimplementing it -- QtLikeSignal does the same job without it. If it is
-not needed, delete it and let the two Signal implementations converge, which is worth more than
-the feature.
+1b. connectReflective() is only used where Object::connectImpl() needs the slot to receive its own
+connection. Check whether it is still needed before reimplementing it -- the same job can be done
+without it. If it is not needed, delete it rather than carrying the feature.
 
 
 === 2. The four guarantees boost is silently providing ===
@@ -81,7 +79,7 @@ the comment before deciding your implementation satisfies it.
     Everything downstream assumes this: a slot may connect, disconnect, emit the same signal
     again, post to another thread, or destroy an object -- all of which reach back into the signal
     or into Object's own mutexes. Hold a lock across invocation and you will deadlock immediately.
-    Read the long comment on QtMimic's Affinity class in ThreadData.hpp; it documents this
+    Read the long comment on the Affinity class in ThreadData.hpp; it documents this
     property and the ASan-confirmed use-after-free that motivated the current design.
 
 2c. The consequence of 2b, which is the dangerous one: disconnect() does NOT wait for an
@@ -135,8 +133,7 @@ have already gone away.
 
 === 4. Order of work ===
 
-Do it in QtLikeSignal first, all the way to green, and only then port to QtMimic. The two Signal
-files are near-identical and the second one takes an hour once the first is proven.
+Take it all the way to green before moving on to anything that depends on it.
 
   1. Write the new Signal<>/SignalView<>/Connection behind the existing names, in a new header,
      not yet wired in.
@@ -149,8 +146,6 @@ files are near-identical and the second one takes an hour once the first is prov
      --enable-thread-sanitizer-on-Linux and the default AddressSanitizer build. A signal
      implementation is exactly the kind of code where one sanitizer sees nothing and the other
      screams.
-  5. Port to QtMimic. tools/compare-test-suites.sh must still pass; the two Signal headers should
-     end up as close to identical as the rest of the tree already is.
   6. Delete the boost submodule reference from the build if nothing else uses it. Check first --
      grep the wscripts.
 
@@ -166,7 +161,7 @@ files are near-identical and the second one takes an hour once the first is prov
     from. The whole value of that test is that it is exact.
 
 5b. Performance must be measured, not assumed.
-    src/tests/test_QtLikeSignal_Performance.cpp compares against Qt 6 and against QtMimic. Take a
+    src/tests/test_QtLikeSignal_Performance.cpp compares against Qt 6. Take a
     baseline BEFORE starting and compare after. History says the direct-emit path is the one that
     matters and that it is easy to regress by accident -- see history/PERFORMANCE-20260808.md, and
     note the measurement traps recorded there: never benchmark the -O0 sanitizer build, and settle

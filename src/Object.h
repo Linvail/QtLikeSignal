@@ -1,5 +1,5 @@
-#ifndef OBJECT_H
-#define OBJECT_H
+#ifndef QT_LIKE_SIGNAL_OBJECT_H
+#define QT_LIKE_SIGNAL_OBJECT_H
 
 #include "Event.h"
 #include "Global.h"
@@ -649,8 +649,8 @@ namespace QtLikeSignal
         //! The overloads above differ only in what the compiler needs in order to *name* the slot:
         //! whether it is overloaded, inherited, const, or returns a value. None of them differs in
         //! what the resulting connection does. So each one binds the receiver and the slot into a
-        //! small adapter and hands it here, exactly as QtMimic's overloads hand theirs to its
-        //! connectImpl(); everything that is actually a connection -- the life token, the affinity
+        //! small adapter and hands it here; everything that is actually a connection -- the
+        //! life token, the affinity
         //! box, the cleanup token, the emit-time wrapper and the incoming-connection bookkeeping --
         //! is written once, here.
         //!
@@ -722,8 +722,8 @@ namespace QtLikeSignal
                     // it was only checked at emit time and the receiver may be destroyed before the
                     // loop reaches it.
                     //
-                    // Held in the closure itself, not boxed behind a make_shared tuple the way
-                    // QtMimic does it. The shared_ptr costs a second heap allocation on each queued
+                    // Held in the closure itself, rather than boxed behind a make_shared tuple.
+                    // The shared_ptr costs a second heap allocation on each queued
                     // emit and buys nothing here: dispatchMetaCallTo() takes the std::function by
                     // value and moves it into the MetaCallEvent, so the tuple is built once and
                     // never copied. Measured at -O2: 3.90 -> 2.86 allocations and ~1030 -> ~850 ns
@@ -1140,4 +1140,4 @@ namespace QtLikeSignal
     }
 }
 
-#endif // OBJECT_H
+#endif // QT_LIKE_SIGNAL_OBJECT_H

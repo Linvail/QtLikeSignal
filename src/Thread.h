@@ -1,5 +1,5 @@
-#ifndef THREAD_H
-#define THREAD_H
+#ifndef QT_LIKE_SIGNAL_THREAD_H
+#define QT_LIKE_SIGNAL_THREAD_H
 
 #include "Object.h"
 #include "Signal.h"
@@ -337,4 +337,4 @@ namespace QtLikeSignal
     }
 }
 
-#endif // THREAD_H
+#endif // QT_LIKE_SIGNAL_THREAD_H

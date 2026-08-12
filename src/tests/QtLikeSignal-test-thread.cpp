@@ -2,10 +2,6 @@
 //!
 //! GoogleTest suite for QtLikeSignal::Thread -- lifecycle, exit codes, post() and the subclassing
 //! idiom.
-//!
-//! Deliberately parallel to QtMimic's QtMimic-test-thread.cpp -- same tests, same order, same
-//! names -- so the two can be diffed against each other. See
-//! history/TEST-UNIFICATION-PLAN-20260810.md.
 
 #include "QtLikeSignal-test-types.h"
 

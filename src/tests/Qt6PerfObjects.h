@@ -13,7 +13,7 @@
 //! of ordering that works until it doesn't.
 //!
 //! Only ever included by the Qt6 translation unit. Qt defines `emit` as an empty macro, so pulling
-//! Qt headers into a file that also calls `sig.emit( 1 )` on QtLikeSignal or QtMimic would turn
+//! Qt headers into a file that also calls `sig.emit( 1 )` on QtLikeSignal would turn
 //! those into syntax errors.
 
 #include <QtCore/QObject>
@@ -36,7 +36,7 @@ public:
     //! Fires the signal with @p aValue.
     //!
     //! A plain method rather than `emit` at the call site, purely so the benchmark bodies read the
-    //! same as their QtLikeSignal and QtMimic counterparts.
+    //! same as their QtLikeSignal counterparts.
     void fire
         (
         int aValue   //!< Value to pass to connected slots.

@@ -9,9 +9,7 @@
 //!
 //! Four of them matter, and they are the four ForAI/mission-signal.txt identified as the reason
 //! replacing boost::signals2 was delicate. Each one fails silently rather than at compile time.
-//!
-//! Not paired with a QtMimic file: QtMimic is still on boost::signals2, so this suite is about an
-//! implementation only one library has. It becomes a pair the day QtMimic is ported.
+
 
 #include "QtLikeSignal-test-types.h"
 

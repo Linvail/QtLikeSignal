@@ -144,8 +144,8 @@ namespace QtLikeSignal
             // Take the whole queue in one move rather than copying it out entry by entry. The old
             // loop cost a copy per event plus the growth reallocations of the destination, all of
             // it under mMutex and therefore in the way of every thread trying to post. Qt walks its
-            // postEventList in place and QtMimic swaps its deque; this is the same idea. mEventQueue
-            // is left empty, which is exactly what the drain loop left behind too.
+            // postEventList in place; this is the same idea. mEventQueue is left empty, which is
+            // exactly what the drain loop left behind too.
             eventsToProcess.swap( mEventQueue );
 
             // Publish the batch so unregisterTimer() can cancel entries in it while the handlers

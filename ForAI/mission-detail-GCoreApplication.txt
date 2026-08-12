@@ -30,7 +30,7 @@ int main(...)
 
 * OS/platform integration.
 The CoreApplication has another important responsibility - receiving OS/platform messages/events.
-In QtMimic, it is done by CoreApplication::setEventDispatcher().
+One way to do it is a CoreApplication::setEventDispatcher().
 
 On Linux Wayland/X11, it might be simpler because we can use FD.
 We can use a separate thread to listen on the FD while keep the main thread wait (no CPU-spin).
@@ -51,7 +51,7 @@ This is a very important helper function, although it is directly related to QCo
 It is more like a helper function put in QCoreApplication.
 
 It provides a way to let `adopted` thread to process the our events.
-QtMimic achieves this by another mean. It has the following interfaces in Thread:
+Another way is these interfaces on Thread:
 ```
 void processEvents();
 
@@ -72,8 +72,8 @@ MyObject::MyObject()
     thread()->setWakeCallback(
         []()
         {
-            // Wake the thread by sending EVENT_TYPE_QT_MIMIC.
-            SendEventToThread( threadId, EVENT_TYPE_QT_MIMIC );
+            // Wake the thread by sending EVENT_TYPE_OURS.
+            SendEventToThread( threadId, EVENT_TYPE_OURS );
         }
     )
 }
@@ -87,9 +87,9 @@ int MyObject::mainLoop() // <-- this runs in the thread whose Id is threadId.
 
     if(event & EVENT_TYPE_B) {}
 
-    (event & EVENT_TYPE_QT_MIMIC)
+    (event & EVENT_TYPE_OURS)
     {
-        // In QtMimic, they do:
+        // With the interfaces above:
         thread()->processEvents();
 
         // If it is Qt6, it should look like:

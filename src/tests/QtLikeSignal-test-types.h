@@ -5,25 +5,11 @@
 //! @file
 //!
 //! Shared test fixtures for the QtLikeSignal suite.
-//!
-//! Deliberately parallel to QtMimic's QtMimic-test-types.hpp: same classes, same members, same
-//! order, so a test written against one compiles against the other. See
-//! history/TEST-UNIFICATION-PLAN-20260810.md.
 
 #include "Object.h"
 #include "Signal.h"
 #include "Thread.h"
 
-// ---------------------------------------------------------------------------------------------
-// Feature macros.
-//
-// The two suites hold the same tests in the same order (see
-// history/TEST-UNIFICATION-PLAN-20260810.md). Where one library has an API the other does not, the
-// test is still written in *both* files and guarded by one of these, so the absence is visible on
-// the side that lacks it instead of the test simply not existing there.
-//
-// Add a macro here rather than deleting a test from one file.
-// ---------------------------------------------------------------------------------------------
 //! Extra argument copies each emit() makes before the slots are reached, on top of the one copy
 //! per receiver that a by-value slot parameter costs.
 //!

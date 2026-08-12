@@ -7,19 +7,19 @@ including generating code.
 The idea is:
 1. Make some preprocessors.
 
-#define QT_MIMIC_SIGNAL
+#define QLS_SIGNAL
 
 In a class, write
 `
-QT_MIMIC_SIGNAL void valueChanged(int aValue);
+QLS_SIGNAL void valueChanged(int aValue);
 `
 
 2. Create a waf feature, send a list of file to that feature for code generation.
 
-Search for `QT_MIMIC_SIGNAL` text.
+Search for `QLS_SIGNAL` text.
 Try to generates more code for:
 `
-QT_MIMIC_SIGNAL void valueChanged(int aValue);
+QLS_SIGNAL void valueChanged(int aValue);
 `
 But, how to write those code? We need to survey how Qt does.
 /home/evan/Projects/qtbase-everywhere-src-6.11.1
@@ -181,7 +181,7 @@ There are real, non-performance arguments for it, and they should be the stated 
     not anything is connected. Qt pays one pointer per object no matter how many signals it
     declares. For a library aimed at embedded-ish use this is a stronger argument than speed.
 
-4b. Ergonomics. `QT_MIMIC_SIGNAL void valueChanged(int)` reads like Qt, and it would let
+4b. Ergonomics. `QLS_SIGNAL void valueChanged(int)` reads like Qt, and it would let
     connect(&Sender::valueChanged, ...) take a member-function pointer the way Qt's does, instead
     of requiring the caller to name a member object, `sender.valueChanged`.
 
@@ -193,7 +193,7 @@ And the costs, which are not small:
   - A build-time tool that every consumer of the library must run, and a waf feature to drive it.
     Anyone using the library with CMake or plain make now needs an equivalent.
   - Generated code that clangd and the debugger have to be taught about.
-  - A parser. `QT_MIMIC_SIGNAL void f(const std::map<int, std::string>& x = {});` will find every
+  - A parser. `QLS_SIGNAL void f(const std::map<int, std::string>& x = {});` will find every
     weakness in a regex-based scan. moc is a real C++ parser for a reason. Restricting the
     accepted grammar aggressively -- and *failing loudly* on anything outside it, never silently
     skipping -- is the only version of this that is safe.
@@ -210,9 +210,8 @@ Suggested shape if it goes ahead:
      put logic in the generated text; put it in the runtime the generated text calls.
   3. Signals-as-member-functions is the point of the exercise. If the generator produces something
      that still requires a Signal<> member, it has bought the costs above and none of 4a or 4b.
-  4. Do it in QtLikeSignal only, and only after 3a, so the two are not confounded. Keep QtMimic on
-     the plain Signal<> as the control: having one library of each kind is worth more than having
-     two of the same.
+  4. Do it only after 3a, so the two changes are not confounded. Keep a plain Signal<> build as
+     the control: having one of each kind to compare is worth more than converting everything.
 
 
 === 5. Recommendation ===
