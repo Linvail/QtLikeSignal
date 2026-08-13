@@ -1,12 +1,11 @@
-
-#ifndef QT_MIMIC_TEST_TYPES
-#define QT_MIMIC_TEST_TYPES
-
 //! @file
 //!
 //! GoogleTest suite for the QtMimic framework.
 //!
 //! Copyright 2026 by Garmin Ltd. or its subsidiaries.
+
+#ifndef QT_MIMIC_TEST_TYPES
+#define QT_MIMIC_TEST_TYPES
 
 #include "Object.hpp"
 #include "Thread.hpp"
@@ -14,12 +13,8 @@
 // ---------------------------------------------------------------------------------------------
 // Feature macros.
 //
-// The two suites hold the same tests in the same order (see
-// history/TEST-UNIFICATION-PLAN-20260810.md). Where one library has an API the other does not, the
-// test is still written in *both* files and guarded by one of these, so the absence is visible on
-// the side that lacks it instead of the test simply not existing there.
+// Some features are not supported yet, we use these macros to conditionally compile tests.
 //
-// Add a macro here rather than deleting a test from one file.
 // ---------------------------------------------------------------------------------------------
 //! Extra argument copies each emit() makes before the slots are reached, on top of the one copy
 //! per receiver that a by-value slot parameter costs.

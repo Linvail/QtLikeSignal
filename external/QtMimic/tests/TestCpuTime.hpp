@@ -1,6 +1,3 @@
-#ifndef TEST_CPU_TIME_H
-#define TEST_CPU_TIME_H
-
 //! @file
 //!
 //! Process CPU time, for tests that need to tell "blocked" apart from "spinning".
@@ -13,6 +10,11 @@
 //! Linux, where glibc's clock() is conforming.
 //!
 //! There is no portable standard-library call for this, so each platform gets its own.
+//!
+//! Copyright 2026 by Garmin Ltd. or its subsidiaries.
+
+#ifndef QT_MIMIC_TEST_CPU_TIME_H
+#define QT_MIMIC_TEST_CPU_TIME_H
 
 #if defined( _WIN32 )
     #ifndef WIN32_LEAN_AND_MEAN
@@ -41,7 +43,7 @@ namespace TestSupport
             FILETIME kernelTime {};
             FILETIME userTime {};
             if( GetProcessTimes( GetCurrentProcess(), &creationTime, &exitTime, &kernelTime,
-                &userTime ) == 0 )
+            &userTime ) == 0 )
             {
                 return 0.0;
             }
@@ -73,4 +75,4 @@ namespace TestSupport
     }
 }
 
-#endif // TEST_CPU_TIME_H
+#endif // QT_MIMIC_TEST_CPU_TIME_H

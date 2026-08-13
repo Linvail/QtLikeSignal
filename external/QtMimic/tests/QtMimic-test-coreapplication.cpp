@@ -1,3 +1,7 @@
+//! @file
+//!
+//! Copyright 2026 by Garmin Ltd. or its subsidiaries.
+
 #include "QtMimic-test-types.hpp"
 #include "TestCpuTime.hpp"
 
@@ -17,8 +21,7 @@ using namespace QtMimic;
 
 //! @file
 //!
-//! Tests for CoreApplication, which had no coverage at all before this file existed -- which is
-//! how a 100% CPU spin in exec() (R18) survived unnoticed.
+//! Tests for CoreApplication.
 //!
 //! Every test here constructs its own CoreApplication and lets it go out of scope before
 //! returning. That matters more than usual: gtest runs every test on one thread, and an application
@@ -193,7 +196,7 @@ TEST( CoreApplicationTest, ArgumentsAreCapturedOnlyByTheArgcArgvConstructor )
     }
 }
 
-//! Regression test for R18: exec() after a quit() used to spin at 100% CPU.
+//! Test for re-entering exec() after a quit(). It shouldn't spin at 100% CPU.
 //!
 //! EventDispatcherDefault::mInterrupt was latched true by interrupt() and never cleared by
 //! anything, so once quit() had interrupted the dispatcher every later processEvents() returned

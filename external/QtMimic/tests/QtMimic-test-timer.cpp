@@ -1157,9 +1157,9 @@ namespace
     //! runs it before looking at the timers, so a timer cannot interleave *within* a batch -- queue
     //! 400 slow metacalls in one go and exactly one expiry gets through, however long the batch
     //! takes. That is the same granularity Qt has (sendPostedEvents drains the list, then timers are
-    //! processed) and what QtLikeSignal's loop does. The guarantee is per pass, so the load
-    //! here arrives in rounds: each round is queued while the previous is still being chewed, which
-    //! keeps every pass non-empty while still giving the loop many passes to be measured over.
+    //! processed). The guarantee is per pass, so the load here arrives in rounds: each round is
+    //! queued while the previous is still being chewed, which keeps every pass non-empty while
+    //! still giving the loop many passes to be measured over.
     TEST( ThreadTimerTest, TimersKeepFiringWhileMailboxNeverEmpties )
     {
         constexpr int kRounds = 60;

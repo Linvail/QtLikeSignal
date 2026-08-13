@@ -3,9 +3,7 @@
 //! GoogleTest suite for QtMimic::Thread -- lifecycle, exit codes, post() and the subclassing
 //! idiom.
 //!
-//! Deliberately parallel to QtLikeSignal's QtLikeSignal-test-thread.cpp -- same tests, same order, same
-//! names -- so the two can be diffed against each other. See
-//! history/TEST-UNIFICATION-PLAN-20260810.md.
+//! Copyright 2026 by Garmin Ltd. or its subsidiaries.
 
 #include "QtMimic-test-types.hpp"
 
@@ -373,7 +371,7 @@ TEST( ThreadTest, PostRejectsEmptyTask )
 
 //! Verifies isRunning()/isFinished() report the states Qt reports, at the moments Qt reports them.
 //!
-//! Three claims, each of which QtLikeSignal got wrong at some point and Qt is the authority on:
+//! Three claims, same as Qt's behavior.
 //!
 //!   - An adopted thread is *running*. Qt's adopting QThread constructor sets threadState =
 //!     Running outright, commenting that the thread "should be running and not finished for the

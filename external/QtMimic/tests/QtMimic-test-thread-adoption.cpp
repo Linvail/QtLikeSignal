@@ -5,9 +5,7 @@
 //! thread running its own native loop can drain our queue with processEvents() /
 //! setWakeCallback().
 //!
-//! Deliberately parallel to QtLikeSignal's QtLikeSignal-test-thread-adoption.cpp -- same tests, same order,
-//! same names -- so the two can be diffed against each other. See
-//! history/TEST-UNIFICATION-PLAN-20260810.md.
+//! Copyright 2026 by Garmin Ltd. or its subsidiaries.
 
 #include "QtMimic-test-types.hpp"
 
@@ -56,7 +54,7 @@ TEST( ThreadAdoptionTest, ObjectsAlwaysHaveAThreadAffinity )
         {
             Object there;
             hadAffinity.store( there.thread() != nullptr
-                && there.thread() == Thread::currentThread() );
+            && there.thread() == Thread::currentThread() );
         } );
     worker.join();
 

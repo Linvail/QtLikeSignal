@@ -3,9 +3,7 @@
 //! GoogleTest stress suite for the QtMimic framework: connection lifetime under concurrent
 //! connect/disconnect/emit, fan-in from many threads, and argument copying on the queued path.
 //!
-//! Deliberately parallel to QtLikeSignal's QtLikeSignal-test-stress.cpp -- same tests, same order, same
-//! names -- so the two can be diffed against each other. See
-//! history/TEST-UNIFICATION-PLAN-20260810.md.
+//! Copyright 2026 by Garmin Ltd. or its subsidiaries.
 
 #include "QtMimic-test-types.hpp"
 
@@ -538,8 +536,6 @@ namespace
         }
 
         // THE VALIDATION:
-        // Exactly one copy per connected receiver, and nothing else.
-        //
         // The signal is Signal<HeavyPayload>, so each slot's std::function takes the payload by
         // value: that parameter is the one copy, and it is the copy the receiver needs, since a
         // queued invocation has to own its arguments. Emission itself copies nothing -- it holds

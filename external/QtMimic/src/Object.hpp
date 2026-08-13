@@ -504,9 +504,7 @@ namespace QtMimic
 
         //! CallLater Overload 1: schedules a non-overloaded member function slot to run deferred.
         template <typename Receiver, typename Slot, typename ... Args>
-        static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
-            MemberFunctionTraits<Slot>::is_member,
-            void>
+        static std::enable_if_t<is_obj<Receiver> && MemberFunctionTraits<Slot>::is_member, void>
         callLater
             (
             Receiver* aReceiver,
@@ -517,21 +515,15 @@ namespace QtMimic
         //! CallLater Overload 2: schedules an overloaded void member function slot inherited from
         //! a base class.
         template <typename Receiver, typename SlotClass, typename ... Args>
-        static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
-            std::is_base_of<SlotClass, Receiver>::value &&
-            !std::is_same<SlotClass, Receiver>::value,
-            void>
-        callLater( Receiver* aReceiver, void ( SlotClass::*aSlot )( NonDeduced<Args>... ), Args&&
-            ...
-            aArgs );
+        static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, void>
+        callLater( Receiver* aReceiver,
+            void ( SlotClass::*aSlot ) ( NonDeduced<Args>... ),
+            Args&& ... aArgs );
 
         //! CallLater Overload 3: schedules an overloaded const void member function slot inherited
         //! from a base class.
         template <typename Receiver, typename SlotClass, typename ... Args>
-        static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
-            std::is_base_of<SlotClass, Receiver>::value &&
-            !std::is_same<SlotClass, Receiver>::value,
-            void>
+        static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, void>
         callLater( Receiver* aReceiver,
             void ( SlotClass::*aSlot )( NonDeduced<Args>... ) const,
             Args&&... aArgs );
@@ -539,11 +531,7 @@ namespace QtMimic
         //! CallLater Overload 4: schedules an overloaded non-void returning member function slot
         //! inherited from a base class.
         template <typename Receiver, typename SlotClass, typename Ret, typename ... Args>
-        static std::enable_if_t<
-            std::is_base_of<Object, Receiver>::value && std::is_base_of<SlotClass, Receiver>::
-            value &&
-            !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
-            void>
+        static std::enable_if_t<obj_is_child_of<Receiver, SlotClass> && !is_void<Ret>, void>
         callLater( Receiver* aReceiver, Ret ( SlotClass::*aSlot )( NonDeduced<Args>... ), Args&&
             ...
             aArgs );
@@ -551,11 +539,7 @@ namespace QtMimic
         //! CallLater Overload 5: schedules an overloaded non-void returning const member function
         //! slot inherited from a base class.
         template <typename Receiver, typename SlotClass, typename Ret, typename ... Args>
-        static std::enable_if_t<
-            std::is_base_of<Object, Receiver>::value && std::is_base_of<SlotClass, Receiver>::
-            value &&
-            !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
-            void>
+        static std::enable_if_t<obj_is_child_of<Receiver, SlotClass> && !is_void<Ret>, void>
         callLater( Receiver* aReceiver,
             Ret ( SlotClass::*aSlot )( NonDeduced<Args>... ) const,
             Args&&... aArgs );
@@ -563,7 +547,7 @@ namespace QtMimic
         //! CallLater Overload 6: schedules an overloaded void member function slot defined
         //! directly on the receiver.
         template <typename Receiver, typename ... Args>
-        static std::enable_if_t<std::is_base_of<Object, Receiver>::value, void>
+        static std::enable_if_t<is_obj<Receiver>, void>
         callLater( Receiver* aReceiver,
             void ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ),
             Args&&... aArgs );
@@ -571,7 +555,7 @@ namespace QtMimic
         //! CallLater Overload 7: schedules an overloaded const void member function slot defined
         //! directly on the receiver.
         template <typename Receiver, typename ... Args>
-        static std::enable_if_t<std::is_base_of<Object, Receiver>::value, void>
+        static std::enable_if_t<is_obj<Receiver>, void>
         callLater( Receiver* aReceiver,
             void ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ) const,
             Args&&... aArgs );
@@ -579,9 +563,7 @@ namespace QtMimic
         //! CallLater Overload 8: schedules an overloaded non-void returning member function slot
         //! defined directly on the receiver.
         template <typename Receiver, typename Ret, typename ... Args>
-        static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
-            !std::is_same<Ret, void>::value,
-            void>
+        static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, void>
         callLater( Receiver* aReceiver,
             Ret ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ),
             Args&&... aArgs );
@@ -589,23 +571,22 @@ namespace QtMimic
         //! CallLater Overload 9: schedules an overloaded non-void returning const member function
         //! slot defined directly on the receiver.
         template <typename Receiver, typename Ret, typename ... Args>
-        static std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
-            !std::is_same<Ret, void>::value,
-            void>
+        static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, void>
         callLater( Receiver* aReceiver,
             Ret ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ) const,
             Args&&... aArgs );
+
         //! CallLater Overload 10: schedules a static or free function to run deferred.
         template <typename Func, typename ... Args>
         static std::enable_if_t<std::is_pointer<Func>::value &&
             std::is_function<std::remove_pointer_t<Func> >::value,
             void>
         callLater
-            (
+        (
             Object* aContext,
             Func aFunc,
             Args&&... aArgs
-            );
+        );
 
         //! CallLater Overload 11: schedules a Signal emission to run deferred.
         //!
@@ -613,11 +594,11 @@ namespace QtMimic
         //! which is exactly what a view exists to withhold.
         template <typename ... SignalArgs, typename ... Args>
         static void callLater
-            (
+        (
             Object* aContext,
             Signal<SignalArgs...>& aSignal,
             Args&&... aArgs
-            );
+        );
 
         //! CallLater Overload 12: fallback overload producing a compile-time error for unsupported
         //! targets (e.g. lambdas).
@@ -628,11 +609,11 @@ namespace QtMimic
             !IsSignal<std::decay_t<Target> >::value,
             void>
         callLater
-            (
+        (
             Object* aContext,
             Target&& aTarget,
             Args&&... aArgs
-            );
+        );
 
     protected:
         //! Construct an Object directly on stable thread data. Used by internal helpers that must
@@ -967,7 +948,7 @@ namespace QtMimic
     //! functions. Because the target slot is not overloaded, the compiler can directly deduce the
     //! Slot type.
     template <typename Receiver, typename Slot, typename ... Args>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
+    std::enable_if_t<is_obj<Receiver> &&
         MemberFunctionTraits<Slot>::is_member,
         void>Object::callLater
         (
@@ -979,7 +960,7 @@ namespace QtMimic
         using SlotClass = typename MemberFunctionTraits<Slot>::class_type;
 
         static_assert(
-            std::is_base_of<Object, Receiver>::value, "Receiver must be an instance of Object." );
+            is_obj<Receiver>, "Receiver must be an instance of Object." );
         static_assert( MemberFunctionTraits<Slot>::is_member,
             "Slot must be a member function pointer." );
         static_assert( std::is_base_of<SlotClass, Receiver>::value,
@@ -1004,10 +985,7 @@ namespace QtMimic
     //! class, type deduction fails. This overload explicitly resolves the base class pointer so
     //! you can defer execution of inherited overloaded methods.
     template <typename Receiver, typename SlotClass, typename ... Args>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
-        std::is_base_of<SlotClass, Receiver>::value &&
-        !std::is_same<SlotClass, Receiver>::value,
-        void>Object::callLater
+    std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, void>Object::callLater
         (
         Receiver* aReceiver,  //!< Target object receiving the call.
         void ( SlotClass::*aSlot )
@@ -1022,7 +1000,10 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<void ( SlotClass::* )( Args... )>( aReceiver, aSlot,
+        dispatchCallLater<void ( SlotClass::* )
+            (
+            Args...
+            )>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1033,10 +1014,7 @@ namespace QtMimic
     //! CallLater Overload 3 definition. Same as Overload 2, but specifically for const member
     //! functions.
     template <typename Receiver, typename SlotClass, typename ... Args>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
-        std::is_base_of<SlotClass, Receiver>::value &&
-        !std::is_same<SlotClass, Receiver>::value,
-        void>Object::callLater
+    std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, void>Object::callLater
         (
         Receiver* aReceiver,                                             //!< Target object receiving the call.
         void ( SlotClass::*aSlot )( NonDeduced<Args>... ) const,       //!< Const member function pointer.
@@ -1048,7 +1026,10 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<void ( SlotClass::* )( Args... ) const>( aReceiver, aSlot,
+        dispatchCallLater<void ( SlotClass::* )
+            (
+            Args...
+            ) const>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1060,10 +1041,7 @@ namespace QtMimic
     //! match the void-returning overloads. This overload explicitly catches non-void slots from
     //! base classes; the return value is safely discarded upon invocation.
     template <typename Receiver, typename SlotClass, typename Ret, typename ... Args>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
-        std::is_base_of<SlotClass, Receiver>::value &&
-        !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
-        void>Object::callLater
+    std::enable_if_t<obj_is_child_of<Receiver, SlotClass> && !is_void<Ret>, void>Object::callLater
         (
         Receiver* aReceiver,  //!< Target object receiving the call.
         Ret ( SlotClass::*aSlot )
@@ -1078,7 +1056,10 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<Ret ( SlotClass::* )( Args... )>( aReceiver, aSlot,
+        dispatchCallLater<Ret ( SlotClass::* )
+            (
+            Args...
+            )>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1089,10 +1070,7 @@ namespace QtMimic
     //! CallLater Overload 5 definition. Same as Overload 4, but specifically for const member
     //! functions.
     template <typename Receiver, typename SlotClass, typename Ret, typename ... Args>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
-        std::is_base_of<SlotClass, Receiver>::value &&
-        !std::is_same<SlotClass, Receiver>::value && !std::is_same<Ret, void>::value,
-        void>Object::callLater
+    std::enable_if_t<obj_is_child_of<Receiver, SlotClass> && !is_void<Ret>, void>Object::callLater
         (
         Receiver* aReceiver,                                        //!< Target object receiving the call.
         Ret ( SlotClass::*aSlot )( NonDeduced<Args>... ) const,   //!< Const member function pointer.
@@ -1104,7 +1082,10 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<Ret ( SlotClass::* )( Args... ) const>( aReceiver, aSlot,
+        dispatchCallLater<Ret ( SlotClass::* )
+            (
+            Args...
+            ) const>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1116,7 +1097,7 @@ namespace QtMimic
     //! deduce Slot in Overload 1. Using NonDeduced<Receiver>, this overload forces the compiler
     //! to use the passed args types to select the right overload.
     template <typename Receiver, typename ... Args>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value, void>Object::callLater
+    std::enable_if_t<is_obj<Receiver>, void>Object::callLater
         (
         Receiver* aReceiver,                                                  //!< Target object receiving the call.
         void ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ),   //!< Member function pointer.
@@ -1128,7 +1109,10 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<void ( Receiver::* )( Args... )>( aReceiver, aSlot,
+        dispatchCallLater<void ( Receiver::* )
+            (
+            Args...
+            )>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1139,7 +1123,7 @@ namespace QtMimic
     //! CallLater Overload 7 definition. Same as Overload 6, but specifically for const member
     //! functions.
     template <typename Receiver, typename ... Args>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value, void>Object::callLater
+    std::enable_if_t<is_obj<Receiver>, void>Object::callLater
         (
         Receiver* aReceiver,                                                        //!< Target object receiving the call.
         void ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ) const,   //!< Const member function pointer.
@@ -1151,7 +1135,10 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<void ( Receiver::* )( Args... ) const>( aReceiver, aSlot,
+        dispatchCallLater<void ( Receiver::* )
+            (
+            Args...
+            ) const>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1163,9 +1150,7 @@ namespace QtMimic
     //! void-returning Overload 6. This ensures deferring overloaded methods that return Ret
     //! compiles successfully.
     template <typename Receiver, typename Ret, typename ... Args>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value &&
-        !std::is_same<Ret, void>::value,
-        void>Object::callLater
+    std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, void>Object::callLater
         (
         Receiver* aReceiver,                                                 //!< Target object receiving the call.
         Ret ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ),   //!< Member function pointer.
@@ -1177,7 +1162,10 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<Ret ( Receiver::* )( Args... )>( aReceiver, aSlot,
+        dispatchCallLater<Ret ( Receiver::* )
+            (
+            Args...
+            )>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1188,8 +1176,7 @@ namespace QtMimic
     //! CallLater Overload 9 definition. Same as Overload 8, but specifically for const member
     //! functions.
     template <typename Receiver, typename Ret, typename ... Args>
-    std::enable_if_t<std::is_base_of<Object, Receiver>::value && !std::is_same<Ret, void>::value,
-        void>Object::callLater
+    std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, void>Object::callLater
         (
         Receiver* aReceiver,                                                       //!< Target object receiving the call.
         Ret ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ) const,   //!< Const member function pointer.
@@ -1201,7 +1188,10 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<Ret ( Receiver::* )( Args... ) const>( aReceiver, aSlot,
+        dispatchCallLater<Ret ( Receiver::* )
+            (
+            Args...
+            ) const>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1213,8 +1203,7 @@ namespace QtMimic
     //! execution to the provided context object's thread loop.
     template <typename Func, typename ... Args>
     std::enable_if_t<std::is_pointer<Func>::value &&
-        std::is_function<std::remove_pointer_t<Func> >::value,
-        void>Object::callLater
+        std::is_function<std::remove_pointer_t<Func> >::value, void> Object::callLater
         (
         Object* aContext,  //!< Target Object defining thread affinity and lifetime.
         Func aFunc,          //!< Function pointer.
@@ -1258,7 +1247,7 @@ namespace QtMimic
 
         Signal<SignalArgs...>* sigPtr = &aSignal;
 
-        dispatchCallLater<Signal<SignalArgs...>>( aContext, sigPtr,
+        dispatchCallLater<Signal<SignalArgs...> >( aContext, sigPtr,
             [sigPtr]( auto&&... a )
             {
                 sigPtr->emit( std::forward<decltype( a )>( a )... );
