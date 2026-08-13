@@ -1714,21 +1714,26 @@ TEST( ObjectDefectTest, DeferredDeleteInTheSameBatchDoesNotDeleteAnAlreadyDelete
 }
 
 // ---------------------------------------------------------------------------------------------
-// Defect (R31, fixed 2026-08-13): three dispatcher paths ran the wake callback with mMutex held.
+// Contract change (R31, 2026-08-13): a wake callback may now re-enter the dispatcher.
 //
-// wakeWaiter() may invoke the callback installed by Thread::setWakeCallback(), which is user code.
-// postEvent(), wakeUp() and interrupt() released mMutex before calling it; registerTimer(),
-// unregisterTimer() and takeTimersForReceiver() did not. A callback that posts back into the same
-// dispatcher -- the obvious thing to write, and the thing every test exercised -- therefore worked
-// until the first time a timer woke the loop, and then self-deadlocked on a non-recursive mutex.
+// **Not a bug fix.** The old contract said the opposite -- Thread::setWakeCallback() documented
+// that the callback "must not block or re-enter the dispatcher" -- so a callback that re-entered
+// was misuse, and the deadlock it hit was the caller's. This file is otherwise regression tests for
+// defects; this one is here because it guards a promise, not because it once failed.
+//
+// The constraint was withdrawn because it was inconsistent and untestable. wakeWaiter() may invoke
+// the callback, and postEvent(), wakeUp() and interrupt() already released mMutex before calling
+// it; only registerTimer(), unregisterTimer() and takeTimersForReceiver() held it. So a re-entrant
+// callback passed every test anyone would write -- postEvent() is the path you reach for -- and
+// deadlocked the first time a timer happened to wake the loop. Now every path releases first.
 // ---------------------------------------------------------------------------------------------
 
 //! Verifies a wake callback may call back into the dispatcher, whatever woke it.
 //!
-//! Structured to fail rather than hang. With the defect present the worker never returns from
-//! registerTimer(), so the future times out, the test fails with a message, and the thread is
-//! detached onto a deliberately leaked dispatcher -- detaching it onto a stack object would leave
-//! it holding a pointer into this frame.
+//! Structured to fail rather than hang. If the wake moves back under the lock the worker never
+//! returns from registerTimer(), so the future times out, the test fails with a message, and the
+//! thread is detached onto a deliberately leaked dispatcher -- detaching it onto a stack object
+//! would leave it holding a pointer into this frame.
 TEST( EventDispatcherDefaultDefectTest, WakeCallbackMayReEnterTheDispatcherFromEveryPath )
 {
     // Heap-allocated and released only on success; see above.

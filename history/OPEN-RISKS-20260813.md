@@ -16,8 +16,8 @@ probe was written.
 > **Baseline.** `./waf build` succeeds and the suite passes: **164 tests, 0 failures** (2026-08-13,
 > `linux64-clang`, debug, no sanitizer). No existing test caught any of these.
 >
-> After the R28, R30 and R31 fixes and their five regression tests: **169 tests, 0 failures**, in
-> declaration order and under `--gtest_shuffle`.
+> After the R28 and R30 fixes, the R31 contract change, and their five tests: **169 tests, 0
+> failures**, in declaration order and under `--gtest_shuffle`.
 
 > **`src/tests/QtLikeSignal-test-known-defects.cpp` is still empty.** R28 went straight to
 > `QtLikeSignal-test-defect-regressions.cpp` because it was fixed in the same pass that found it;
@@ -29,7 +29,7 @@ probe was written.
 | R28 | An object destroyed during a dispatch pass still receives the rest of that batch | **High** | Probe — two segfaults — **Fixed 2026-08-13** |
 | R29 | ~~`connectImpl()` publishes the `Connection` handle outside `mIncomingMutex`~~ | — | **Withdrawn 2026-08-13 — not a defect** |
 | R30 | `unregisterEventSource()` does not stop a callback that is already in flight | Low-Med | Inspection — **Fixed 2026-08-13** |
-| R31 | Three dispatcher paths run the wake callback with `mMutex` held; `postEvent()` does not | Low | Inspection — **Fixed 2026-08-13** |
+| R31 | Three dispatcher paths run the wake callback with `mMutex` held; `postEvent()` does not | — | **Not a defect** — contract widened 2026-08-13 |
 
 Still open from earlier passes, restated at the end: R9, R15, R22 (Windows residual), R25.
 
@@ -271,11 +271,25 @@ from the dispatcher's own thread, and that a callback may still run once otherwi
 guarantee is wanted, give each source a generation counter checked under `mMutex` immediately before
 the callback is invoked.
 
-## R31 — three dispatcher paths run the wake callback with `mMutex` held *(fixed 2026-08-13)*
+## R31 — three dispatcher paths run the wake callback with `mMutex` held *(contract widened 2026-08-13)*
 
-**Severity: Low. Inspection. Filed as a consistency defect; it is a reachable deadlock.**
+**Not a defect. Inspection. Recorded as one; that was the wrong label, see below.**
 
-> **Resolution (2026-08-13).** `registerTimer()`, `unregisterTimer()` and `takeTimersForReceiver()`
+> **This was never a bug, and the entry originally said it was.** The constraint was documented:
+> `Thread::setWakeCallback()` said the callback "must not block or re-enter the dispatcher". A
+> callback that re-entered was therefore misuse, and the deadlock that followed was the caller's,
+> not ours. This project does not treat the consequences of ignoring a stated precondition as
+> defects, and this entry should not have been an exception. An earlier draft called it "a reachable
+> deadlock", which asserts the opposite.
+>
+> What was actually wrong with it is worth keeping, because it is why the change was still made: the
+> constraint was **inconsistent and untestable**. Three of the six paths did not need it, and the one
+> a callback author would naturally test against — `postEvent()` — was among them. So a violating
+> callback passed every test and deadlocked the first time a timer happened to wake the loop. A
+> precondition that only bites on a path you did not exercise is a trap, not a contract. Widening
+> the contract removes the trap; it does not fix a defect.
+
+> **Change (2026-08-13).** `registerTimer()`, `unregisterTimer()` and `takeTimersForReceiver()`
 > now scope their lock and call `wakeWaiter()` after releasing it, matching `postEvent()`. Only
 > `unregisterTimer()` needed restructuring, and its body moved into a `takeTimerLocked()` helper so
 > the early returns stay readable.
@@ -285,13 +299,15 @@ the callback is invoked.
 > `EventDispatcherDefault::wakeWaiter()`. A wake callback may call back into the dispatcher; it
 > should still not block, because it runs on the poster's thread on the critical path of every post.
 >
-> Filed as "a consistency defect rather than a demonstrated failure". It is demonstrable:
-> `EventDispatcherDefaultDefectTest.WakeCallbackMayReEnterTheDispatcherFromEveryPath` installs a
-> callback that posts back into the dispatcher and then drives all three paths. With the wake put
-> back inside `registerTimer()`'s lock it deadlocks, and the test **fails in 5 s with the reason
-> attached** rather than hanging: the work runs on a worker thread behind a future, and the failure
-> path detaches that thread onto a deliberately leaked dispatcher rather than letting it hold a
-> pointer into a dead stack frame.
+> `EventDispatcherDefaultDefectTest.WakeCallbackMayReEnterTheDispatcherFromEveryPath` pins the new
+> contract rather than proving an old defect. It installs a callback that posts back into the
+> dispatcher and drives all three paths. With the wake put back inside `registerTimer()`'s lock it
+> deadlocks, and the test **fails in 5 s with the reason attached** rather than hanging: the work
+> runs on a worker thread behind a future, and the failure path detaches that thread onto a
+> deliberately leaked dispatcher rather than letting it hold a pointer into a dead stack frame.
+>
+> Keeping the test matters more than it would for a bug fix. A widened contract is only worth the
+> paper it is written on if something fails when it narrows again by accident.
 
 `wakeWaiter()` may invoke `mWakeCallback`, which is user code
 ([EventDispatcherDefault.cpp:270-295](src/EventDispatcherDefault.cpp#L270-L295)). Its own comment
@@ -313,11 +329,11 @@ problem is that `postEvent()`, the path a callback author will actually test aga
 permissive one. A callback that posts back into the same dispatcher works in every test and
 self-deadlocks the first time a timer is started, because the mutex is not recursive.
 
-**Fix:** pick one. Releasing the lock before `wakeWaiter()` in the three timer paths matches
+**Options:** pick one. Releasing the lock before `wakeWaiter()` in the three timer paths matches
 `postEvent()` and lets the documented contract be relaxed; keeping them and documenting the strict
 contract on `AbstractEventDispatcher` as well is the smaller change. The first was taken — see the
-resolution above. A callback that must not touch the dispatcher is a rule nobody can test their way
-into remembering, and the Windows dispatcher would have had to honour it too.
+change above. A callback that must not touch the dispatcher is a rule nobody can test their way into
+remembering, and the Windows dispatcher would have had to honour it too.
 
 ---
 
@@ -340,19 +356,25 @@ Re-checked against the current tree, not re-probed.
 
 ## Suggested order
 
-1. ~~**R28**~~ — done 2026-08-13.
+1. ~~**R28**~~ — fixed 2026-08-13.
 2. ~~**R29**~~ — withdrawn 2026-08-13; there was no defect.
-3. ~~**R31**~~ — done 2026-08-13.
-4. ~~**R30**~~ — done 2026-08-13.
+3. ~~**R31**~~ — contract widened 2026-08-13; there was no defect here either.
+4. ~~**R30**~~ — fixed 2026-08-13.
 
 Everything filed in this pass is now closed. R9, R15, R22-residual and R25 remain from earlier
 passes, and the performance items in `PERFORMANCE-20260813.md` are untouched — P7 (quadratic
 teardown) is the largest thing still open anywhere.
 
-**One finding in four was wrong.** R29 was filed from inspection alone, and inspection is what got
-it wrong: the reasoning was local to one function and the disproof was one ownership fact from
-three lines above. The three that survived were all confirmed by running something. That ratio is
-the argument for probing before filing, not after.
+**Two of the four were not defects, and both were filed from inspection alone.** R29 was simply
+wrong: the reasoning was local to one function and the disproof was one ownership fact three lines
+above it. R31 was real but mislabelled — the constraint it violated was documented, so breaking it
+was misuse, and this project does not count the consequences of misuse as defects. The two that
+were defects, R28 and R30, were both confirmed by running something.
+
+That is the rule this pass earned: **an inspection finding is a hypothesis.** Probe it before
+filing it, and before filing it, check whether the behaviour it complains about is already written
+down as a precondition. A documented precondition moves the fault to the caller; what it does not
+excuse is a precondition that is inconsistent or untestable, which is what R31 turned out to be.
 
 ## Follow-up the R28 fix exposed but did not close
 
