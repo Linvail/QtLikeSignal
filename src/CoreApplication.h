@@ -93,7 +93,18 @@ namespace QtLikeSignal
     private:
         void adoptMainThread();
 
-        static CoreApplication* sInstance;  //!< The process-wide application instance.
+        //! The process-wide application instance.
+        //!
+        //! Atomic because instance(), exit(), quit() and post() are all callable from any thread
+        //! and all read it, while the constructor and destructor write it from the main thread. A
+        //! plain pointer made every one of those a data race, which is what the "Thread-safe" on
+        //! each of them promised it was not.
+        //!
+        //! Qt 6 has the identical plain pointer and works around it: QCoreApplication keeps a
+        //! second, atomic g_self for its own use, and documents instanceExists() as "a Qt 6
+        //! thread-safe (no data races) version of instance() != nullptr". Qt 7 makes the pointer
+        //! itself atomic, behind a #warning to audit the call sites. This is that change.
+        static std::atomic<CoreApplication*> sInstance;
 
         //! The adopted main thread. Non-owning: the thread_local inside Thread owns it, and
         //! releases it when the native thread exits.

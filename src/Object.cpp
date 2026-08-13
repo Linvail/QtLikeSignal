@@ -447,13 +447,21 @@ namespace QtLikeSignal
         return true;
     }
 
-    //! Gets the object's descriptive name. Thread-safe.
+    //! Gets the object's descriptive name.
+    //!
+    //! **Not thread-safe: must be called from this object's own thread.** The name is a plain
+    //! std::string with no lock, so a concurrent setObjectName() is a data race. This said
+    //! "Thread-safe" until 2026-08-13 and was never true -- see mObjectName for why the member is
+    //! deliberately unguarded, which is the same reason QObject::objectName() has no locking either.
     std::string Object::objectName() const
     {
         return mObjectName;
     }
 
-    //! Sets the object's descriptive name. Thread-safe.
+    //! Sets the object's descriptive name.
+    //!
+    //! **Not thread-safe: must be called from this object's own thread**, for the same reason as
+    //! objectName() above.
     void Object::setObjectName
         (
         const std::string& aName  //!< The new object name.

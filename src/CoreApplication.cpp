@@ -13,7 +13,7 @@
 
 namespace QtLikeSignal
 {
-    CoreApplication* CoreApplication::sInstance = nullptr;
+    std::atomic<CoreApplication*> CoreApplication::sInstance { nullptr };
 
     //! Constructs the application and adopts the calling thread as the main thread.
     CoreApplication::CoreApplication()
@@ -48,15 +48,15 @@ namespace QtLikeSignal
         // Qt asserts here ("there should be only one application object"). Warn rather than abort:
         // a diagnostic is more useful than killing the process, and the first instance stays the
         // one instance() reports so the damage is contained and visible.
-        if( sInstance )
+        //
+        // One compare-exchange rather than a test and a store, so that "the first one wins" stays
+        // true even for the misuse this branch exists to report.
+        CoreApplication* noInstanceYet = nullptr;
+        if( !sInstance.compare_exchange_strong( noInstanceYet, this ) )
         {
             std::fprintf( stderr,
                 "CoreApplication: there should be only one application object; the existing one "
                 "is kept and this one will not be reachable through instance()\n" );
-        }
-        else
-        {
-            sInstance = this;
         }
 
         // The calling thread is already adopted -- this object's own Object base asked for
@@ -110,17 +110,17 @@ namespace QtLikeSignal
         mDispatcher.reset();
         mMainThread = nullptr;
 
-        if( sInstance == this )
-        {
-            sInstance = nullptr;
-        }
+        // Clears the pointer only if it is still ours, which is what a second application object
+        // being destroyed first must not do.
+        CoreApplication* self = this;
+        sInstance.compare_exchange_strong( self, nullptr );
     }
 
     //! Returns the global application instance, or nullptr if none has been constructed.
     //! Thread-safe.
     CoreApplication* CoreApplication::instance()
     {
-        return sInstance;
+        return sInstance.load();
     }
 
     //! Runs the main thread's event loop until exit()/quit() is called; returns the exit code.
@@ -163,9 +163,10 @@ namespace QtLikeSignal
         int aReturnCode  //!< Value exec() should return.
         )
     {
-        if( sInstance && sInstance->mMainThread )
+        CoreApplication* app = sInstance.load();
+        if( app && app->mMainThread )
         {
-            sInstance->mMainThread->exit( aReturnCode );
+            app->mMainThread->exit( aReturnCode );
         }
     }
 
@@ -185,9 +186,10 @@ namespace QtLikeSignal
         std::function<void()> aTask  //!< The callable to run on the main thread.
         )
     {
-        if( sInstance && sInstance->mMainThread )
+        CoreApplication* app = sInstance.load();
+        if( app && app->mMainThread )
         {
-            sInstance->mMainThread->post( std::move( aTask ) );
+            app->mMainThread->post( std::move( aTask ) );
         }
     }
 }

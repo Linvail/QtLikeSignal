@@ -77,6 +77,9 @@ namespace QtLikeSignal
             Thread* aThread
             );
 
+        //! **Not thread-safe: both must be called from this object's own thread.** Stated here as
+        //! well as on the definitions, because the member these two touch is documented as
+        //! unguarded further down this file and the two comments have to agree.
         std::string objectName() const;
 
         void setObjectName
