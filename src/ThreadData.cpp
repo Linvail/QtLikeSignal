@@ -1,7 +1,20 @@
 #include "ThreadData.hpp"
 
+#include "Event.h"
+
+#include <algorithm>
+
 namespace QtLikeSignal
 {
+    //! Frees any events parked for a dispatcher that never arrived.
+    ThreadData::~ThreadData()
+    {
+        for( const ParkedEvent& parked : mParkedEvents )
+        {
+            delete parked.mEvent;
+        }
+    }
+
     //! @return the Thread this data describes, or nullptr once that Thread has been destroyed.
     //! Safe to call at any time: the ThreadData itself is kept alive by whoever holds it.
     Thread* ThreadData::thread() const
@@ -46,13 +59,69 @@ namespace QtLikeSignal
         return mDispatcher;
     }
 
-    //! Installs or clears this thread's dispatcher. Thread-safe.
+    //! Installs or clears this thread's dispatcher, and hands it anything parked. Thread-safe.
     void ThreadData::setDispatcher
         (
         std::shared_ptr<AbstractEventDispatcher> aDispatcher    //!< Dispatcher to install; nullptr clears it.
         )
     {
+        std::vector<ParkedEvent> parked;
+        std::shared_ptr<AbstractEventDispatcher> installed;
+
+        {
+            std::lock_guard<std::mutex> lock( mDispatcherMutex );
+            mDispatcher = std::move( aDispatcher );
+            installed   = mDispatcher;
+            if( installed )
+            {
+                parked.swap( mParkedEvents );
+            }
+        }
+
+        // Posted with mDispatcherMutex released. postEvent() ends in wakeWaiter(), which may run
+        // the thread's wake callback -- user code, which is free to call back in here.
+        for( const ParkedEvent& event : parked )
+        {
+            // postEvent() deletes the event itself when it refuses, so a dispatcher that is already
+            // closing loses nothing and leaks nothing.
+            installed->postEvent( event.mReceiver, event.mEvent );
+        }
+    }
+
+    //! Hands back the dispatcher to post to, or takes ownership of @p aEvent until one exists.
+    std::shared_ptr<AbstractEventDispatcher> ThreadData::dispatcherOrPark
+        (
+        Object* aReceiver,  //!< The event's receiver.
+        Event* aEvent       //!< The event; ownership passes here only when it is parked.
+        )
+    {
         std::lock_guard<std::mutex> lock( mDispatcherMutex );
-        mDispatcher = std::move( aDispatcher );
+        if( mDispatcher )
+        {
+            return mDispatcher;
+        }
+        mParkedEvents.push_back( { aReceiver, aEvent } );
+        return nullptr;
+    }
+
+    //! Drops any parked events for @p aReceiver. Thread-safe.
+    void ThreadData::removeParkedEventsFor
+        (
+        Object* aReceiver  //!< The receiver whose parked events should be dropped.
+        )
+    {
+        std::lock_guard<std::mutex> lock( mDispatcherMutex );
+        auto it = std::remove_if( mParkedEvents.begin(),
+            mParkedEvents.end(),
+            [aReceiver]( const ParkedEvent& aParked )
+            {
+                if( aParked.mReceiver == aReceiver )
+                {
+                    delete aParked.mEvent;
+                    return true;
+                }
+                return false;
+            } );
+        mParkedEvents.erase( it, mParkedEvents.end() );
     }
 }

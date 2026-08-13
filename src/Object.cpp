@@ -236,6 +236,10 @@ namespace QtLikeSignal
                 {
                     dispatcher->removeEventsForReceiver( this );
                 }
+
+                // Events moved here before this thread had a dispatcher are not in any queue yet,
+                // so the strip above cannot see them. See ThreadData::mParkedEvents.
+                threadDataCopy->removeParkedEventsFor( this );
             }
         }
 
@@ -446,8 +450,11 @@ namespace QtLikeSignal
         // Resolve the new thread's data and store it in the Affinity box in one step, so concurrent
         // readers of thread()/threadData() (notably a connect() wrapper resolving affinity at emit
         // time) never see a half-updated pairing of thread and dispatcher.
+        const std::shared_ptr<ThreadData> oldData = mAffinity->data();
         std::shared_ptr<ThreadData> newData = aThread ? aThread->threadData() : nullptr;
-        mAffinity->setData( std::move( newData ) );
+        mAffinity->setData( newData );
+
+        migratePostedEvents( oldData, newData );
 
         if( !timersToMove.empty() )
         {
@@ -475,6 +482,80 @@ namespace QtLikeSignal
         }
 
         return true;
+    }
+
+    //! Carries this object's already-posted events from @p aOldData's dispatcher to @p aNewData's.
+    //!
+    //! Called by moveToThread() **after** the affinity has been swapped, which is what makes it
+    //! safe without holding both dispatcher mutexes at once. Qt needs `QOrderedMutexLocker` over
+    //! the two post-event lists precisely because it moves the events and the affinity together;
+    //! doing the affinity first means each queue is only ever touched alone, so two moves in
+    //! opposite directions cannot deadlock against each other.
+    //!
+    //! The ordering that buys is fine because **moveToThread() runs on the object's own thread**:
+    //! the old thread is inside this call and therefore cannot be dispatching the events being
+    //! taken. The only other writer is a foreign thread that read the affinity before the swap and
+    //! is still on its way into the old queue, which is what the re-sweep below is for.
+    //!
+    //! Without this, a queued call posted just before the move runs on the thread the object has
+    //! left -- silently, since nothing checks affinity again once an event is queued. That is the
+    //! one guarantee a queued connection exists to provide. See OPEN-RISKS-20260813.md (R32).
+    void Object::migratePostedEvents
+        (
+        const std::shared_ptr<ThreadData>& aOldData,  //!< Thread the object is leaving; may be null.
+        const std::shared_ptr<ThreadData>& aNewData   //!< Thread it now lives on; may be null.
+        )
+    {
+        if( aOldData == aNewData )
+        {
+            return;
+        }
+
+        const std::shared_ptr<AbstractEventDispatcher> oldDispatcher
+            = aOldData ? aOldData->dispatcher() : nullptr;
+        if( !oldDispatcher )
+        {
+            return;
+        }
+
+        // Swept more than once. A thread that resolved this object's affinity before the swap can
+        // still be inside postEvent() on the old dispatcher, and its event would be stranded by a
+        // single pass. Every such poster is already in flight, so the set drains; the cap is there
+        // because a caller that never stops posting to a moving object is misusing it, and a bounded
+        // loop is better than one that can be kept spinning.
+        constexpr int kMaxSweeps = 8;
+        for( int sweep = 0; sweep < kMaxSweeps; ++sweep )
+        {
+            std::vector<Event*> taken = oldDispatcher->takeEventsForReceiver( this );
+            if( taken.empty() )
+            {
+                break;
+            }
+
+            for( Event* event : taken )
+            {
+                if( !aNewData )
+                {
+                    // moveToThread(nullptr) means "this object stops processing events", so there
+                    // is no later at which these could run. Qt parks them on an orphan QThreadData
+                    // whose loop never runs, which comes to the same thing without the bookkeeping.
+                    delete event;
+                    continue;
+                }
+
+                // Asked in one step, so the destination cannot gain or lose its dispatcher between
+                // the question and the answer. A null return means the event is parked and now
+                // belongs to the destination's ThreadData -- see ThreadData::mParkedEvents, which
+                // is what makes "moveToThread() before start()" work.
+                const std::shared_ptr<AbstractEventDispatcher> newDispatcher
+                    = aNewData->dispatcherOrPark( this, event );
+                if( newDispatcher )
+                {
+                    // postEvent() deletes the event itself when it refuses.
+                    newDispatcher->postEvent( this, event );
+                }
+            }
+        }
     }
 
     //! Gets the object's descriptive name.

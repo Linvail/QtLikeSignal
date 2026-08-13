@@ -20,15 +20,15 @@ How each item was confirmed, and the test baseline, are at the end under
 | R29 | **Withdrawn** | ~~`connectImpl()` publishes the `Connection` handle outside `mIncomingMutex`~~ | — | **Not a defect.** TSan probe, 200 000 racing connects against the pre-"fix" code: silent |
 | R30 | **Fixed** | `unregisterEventSource()` does not stop a callback already in flight | Low-Med | Inspection. Unregistration is now synchronous on the loop's own thread |
 | R31 | **Withdrawn** | Three dispatcher paths run the wake callback with `mMutex` held | — | **Not a defect** — the constraint was documented. Contract widened anyway, to remove a trap |
-| R32 | **Queue** | `moveToThread()` does not migrate already-posted events | **Medium** | Probe — a queued slot runs on the thread the object *left*; Qt runs it on the new one |
+| R32 | **Fixed** | `moveToThread()` does not migrate already-posted events | **Medium** | Probe — a queued slot ran on the thread the object *left*. Three regression tests |
 
 **Statuses.** *Fixed* — code changed and the defect is gone. *By Design* — the current state is
 accepted and is not considered a bug. *Withdrawn* — investigated, and there was no defect to fix.
 *Queue* — not started. Nothing is In progress.
 
 Everything filed in this pass is closed, and so are the two carried items that could be closed here.
-Three remain open: **R22**, which cannot be tested on this machine; **R25**, a deliberate trade; and
-**R32**, which was probed on 2026-08-14 and is now the only confirmed defect still open.
+**No confirmed defect is open.** Two items remain: **R22**, which cannot be tested on this machine,
+and **R25**, a deliberate trade.
 
 ---
 
@@ -344,11 +344,11 @@ leaked dispatcher rather than letting it hold a pointer into a dead stack frame.
 Keeping the test matters more than it would for a bug fix. A widened contract is only worth the paper
 it is written on if something fails when it narrows again by accident.
 
-## R32 — `moveToThread()` does not migrate already-posted events *(Queue)*
+## R32 — `moveToThread()` does not migrate already-posted events *(Fixed)*
 
 **Severity: Medium. Confirmed by probe, against Qt 6 run side by side. Filed as an unprobed
-hypothesis on 2026-08-13 and probed on 2026-08-14; the hypothesis was right, and the consequence is
-not the one it guessed.**
+hypothesis on 2026-08-13, probed and fixed on 2026-08-14; the hypothesis was right, and the
+consequence is not the one it guessed.**
 
 `moveToThread()` migrates active timers ([Object.cpp:399-445](src/Object.cpp#L399-L445)) but nothing
 migrates events already sitting in the old thread's queue. Qt migrates both, in
@@ -415,22 +415,57 @@ behaviour with no observable today, and it would become a crash the moment `even
 So the defect is wrong-thread execution, not memory corruption. Filed severity Unknown; measured
 severity Medium, and for a reason the original note did not anticipate.
 
-### The fix, and what it costs
+### The fix
 
-Mirror Qt: in `moveToThread()`, walk the outgoing dispatcher's queue, move the entries whose receiver
-is this object into the incoming dispatcher's queue, and wake the target. The pieces already exist —
-`takeTimersForReceiver()` is the same operation for timers, and returning the events instead of
-deleting them is a variation on `removeEventsForReceiver()`.
+`moveToThread()` now calls `Object::migratePostedEvents()`, which takes this object's events off the
+outgoing dispatcher and posts them to the incoming one. All three event kinds travel: metacalls,
+deferred deletes, and — as before — timers, which were already carried by
+`takeTimersForReceiver()`. Both probes now report the destination thread, matching Qt.
 
-**Two things make it harder than the timer case.** First, it needs *both* dispatcher mutexes at once.
-Qt solves this with `QOrderedMutexLocker`, which orders the two by address so two concurrent moves in
-opposite directions cannot deadlock; we have no such helper and would need one. Second, the R28
-dispatch frames mean an event can be in a batch rather than the queue — in flight on the old thread —
-and those cannot be moved, only left to run. Qt does not have that problem because it never
-snapshots.
+**Three things had to be solved, none of them obvious up front.**
 
-Closing this would also close the residual noted in R28: `deletedReceivers` is kept in
-`processEvents()` precisely because an object's affinity can change after its events were posted.
+**The two dispatcher mutexes.** Qt needs `QOrderedMutexLocker` because it moves the events and the
+affinity together under both locks. Swapping the affinity *first* means each queue is only ever
+touched alone, so two moves in opposite directions cannot deadlock and no ordered locker is needed.
+That is safe for a reason specific to this function: **`moveToThread()` runs on the object's own
+thread**, so the old thread is inside the call and cannot be dispatching the events being taken.
+
+**Events already in a dispatch batch.** The R28 frames mean an event can be in flight rather than in
+the queue — which is exactly where it is when `moveToThread()` is called from inside a handler, the
+normal place for an object to move itself. `takeEventsForReceiver()` walks the published frames as
+well as the queue, taking entries out with the same clear-the-slot handover R28 introduced. Nothing
+is left behind.
+
+**A destination with no dispatcher at all.** The canonical idiom is `Thread w; o.moveToThread(&w);
+w.start();` — and a `Thread` has no dispatcher until its run body creates one, so there was nowhere
+to post. Dropping the events loses work silently; leaving them behind is the defect itself. They are
+now parked on the destination's `ThreadData` and handed to the dispatcher the moment
+`setDispatcher()` installs one. Qt has no equivalent problem because its queue lives in
+`QThreadData` rather than in the dispatcher; this is the smallest version of that.
+
+A late discovery worth recording: `Thread::isRunning()` is set by `start()` *before* the run body
+creates the dispatcher, so "running" does not imply "can take events". The parking path is therefore
+load-bearing for a started worker too, not only for an unstarted one — the first two tests below
+failed without it until they were changed to wait on `eventDispatcher()` instead.
+
+### Tests
+
+Three, each verified against a deliberately broken build, and each isolating one mechanism:
+
+| test | what it pins | migration off | parking off |
+|---|---|---|---|
+| `ObjectDefectTest.MoveToThreadCarriesAlreadyPostedEventsToTheNewThread` | metacalls travel | **fails** | passes |
+| `ObjectDefectTest.MoveToThreadCarriesAPendingDeleteLaterToTheNewThread` | deferred deletes travel | **fails** | passes |
+| `ObjectDefectTest.EventsMovedToAnUnstartedThreadAreDeliveredWhenItStarts` | parking, and the flush on `setDispatcher()` | **fails** | **fails** |
+
+Suite: **172 tests, 0 failures**, in declaration order and under `--gtest_shuffle`.
+
+### What it did not close
+
+The R28 residual stands: `~Object()` still cancels through the dispatcher its *current* affinity
+names, so `deletedReceivers` is still needed in `processEvents()`. Migration narrows that window
+rather than removing it — an object can still be destroyed while an event for it is in flight in a
+batch on the thread it left, which is the case R28's guard covers.
 
 ---
 
@@ -472,6 +507,9 @@ precondition moves the fault to the caller. What that does *not* excuse is a pre
 inconsistent or untestable, which is what R31 turned out to be.
 
 R32 was filed under that rule — listed so it would not be lost, labelled unprobed so it would not be
-mistaken for a finding — and probed a day later. The rule earned its keep twice over: the hypothesis
-was right that something was wrong, and wrong about what. It guessed a use-after-free; the actual
-defect is wrong-thread execution, which is worse in practice because nothing reports it.
+mistaken for a finding — then probed and fixed a day later. The rule earned its keep twice over: the
+hypothesis was right that something was wrong, and wrong about what. It guessed a use-after-free; the
+actual defect was wrong-thread execution, which is worse in practice because nothing reports it.
+
+That is also why it was worth probing before fixing. A fix aimed at the guessed defect would have
+been aimed at the wrong thing.

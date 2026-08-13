@@ -528,6 +528,34 @@ namespace QtLikeSignal
             }
         }
 
+        //! Moves the entries of one published batch that target @p aReceiver into @p aTaken.
+        //!
+        //! The event is handed over rather than deleted, and the slot is cleared so the dispatch
+        //! loop skips it -- the same ownership handover cancelBatchEntries() performs, minus the
+        //! delete.
+        template <typename Batch>
+        void takeBatchEntries
+            (
+            Batch* aBatch,                   //!< The published batch, or nullptr.
+            Object* aReceiver,               //!< The receiver whose entries should be taken.
+            std::vector<Event*>& aTaken      //!< Collects the events taken.
+            )
+        {
+            if( !aBatch )
+            {
+                return;
+            }
+
+            for( auto& ep : *aBatch )
+            {
+                if( ep.mEvent && ep.mReceiver == aReceiver )
+                {
+                    aTaken.push_back( ep.mEvent );
+                    ep.mEvent = nullptr;
+                }
+            }
+        }
+
         //! Applies @p aMatches to every batch of every running pass.
         template <typename Frame, typename Predicate>
         void cancelInEveryFrame
@@ -634,6 +662,48 @@ namespace QtLikeSignal
                 return aTd.mReceiver == aReceiver;
             } );
         mTimers.erase( itTimer, mTimers.end() );
+    }
+
+    //! Removes the receiver's pending events and hands them over, still alive. Thread-safe.
+    //!
+    //! Reaches the running passes as well as the queue, using the same publication R28 added: an
+    //! entry taken out of a batch is cleared rather than deleted, and the dispatch loop skips a
+    //! cleared slot. That is what makes this work when moveToThread() is called from inside a
+    //! handler, which is where the object's own thread usually is when it moves itself.
+    std::vector<Event*> EventDispatcherDefault::takeEventsForReceiver
+        (
+        Object* aReceiver  //!< The receiver whose events should be taken.
+        )
+    {
+        std::vector<Event*> taken;
+        if( !aReceiver )
+        {
+            return taken;
+        }
+
+        std::lock_guard<std::mutex> lock( mMutex );
+
+        auto itQueue = std::remove_if( mEventQueue.begin(),
+            mEventQueue.end(),
+            [aReceiver, &taken]( const EventPair& aEp )
+            {
+                if( aEp.mReceiver == aReceiver && aEp.mEvent )
+                {
+                    taken.push_back( aEp.mEvent );
+                    return true;
+                }
+                return false;
+            } );
+        mEventQueue.erase( itQueue, mEventQueue.end() );
+
+        for( DispatchFrame* frame = mDispatchFrames; frame; frame = frame->mOuter )
+        {
+            takeBatchEntries( frame->mEvents, aReceiver, taken );
+            takeBatchEntries( frame->mTimers, aReceiver, taken );
+            takeBatchEntries( frame->mDeletes, aReceiver, taken );
+        }
+
+        return taken;
     }
 
     //! Unregisters the receiver's timers and returns them for re-registration elsewhere. Returns

@@ -582,6 +582,13 @@ namespace QtLikeSignal
 
         std::shared_ptr<ThreadData> threadData() const;
 
+        //! Carries this object's already-posted events across in moveToThread(). See the definition.
+        void migratePostedEvents
+            (
+            const std::shared_ptr<ThreadData>& aOldData,
+            const std::shared_ptr<ThreadData>& aNewData
+            );
+
         bool event
             (
             Event* aEvent

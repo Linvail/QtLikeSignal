@@ -72,6 +72,11 @@ namespace QtLikeSignal
             Object* aReceiver
             ) override;
 
+        virtual std::vector<Event*> takeEventsForReceiver
+            (
+            Object* aReceiver
+            ) override;
+
         // The three hooks below are the whole platform seam. Everything else -- the event queue,
         // the timer list, the mutex that guards them, and the dispatch loop -- stays here and is
         // shared, so a platform dispatcher only has to answer three questions: how do we block,

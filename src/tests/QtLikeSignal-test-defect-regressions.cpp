@@ -40,6 +40,30 @@ using namespace QtLikeSignal;
 
 namespace
 {
+    //! Spins until @p aReady is true, or gives up. True if it became true.
+    //!
+    //! A bounded poll rather than a sleep: the tests below wait on another thread reaching a point,
+    //! and a fixed sleep either wastes time or flakes under load.
+    template <typename Predicate>
+    bool waitFor
+        (
+        const Predicate& aReady,     //!< Condition to wait for.
+        int aTimeoutMs = 3000        //!< Give up after this long.
+        )
+    {
+        const auto deadline
+            = std::chrono::steady_clock::now() + std::chrono::milliseconds( aTimeoutMs );
+        while( std::chrono::steady_clock::now() < deadline )
+        {
+            if( aReady() )
+            {
+                return true;
+            }
+            std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+        }
+        return aReady();
+    }
+
     //! Resident set size in kB, or -1 where it is not implemented.
     //!
     //! Only Linux is implemented; the tests that need it skip elsewhere rather than pretending.
@@ -1343,8 +1367,9 @@ protected:
         ( void )aEvent;
         mFireOffsetsMs.push_back(
             std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - mOrigin ).count() );
+            std::chrono::steady_clock::now() - mOrigin ).count() );
     }
+
 };
 
 //! Verifies one late pass does not shift a repeating timer's cadence.
@@ -1430,6 +1455,7 @@ protected:
             mDispatcher->unregisterTimer( toKill );
         }
     }
+
 };
 
 //! Verifies a timer killed during a dispatch pass does not still fire in that same pass.
@@ -1541,6 +1567,7 @@ protected:
         delete mVictim;
         mVictim = nullptr;
     }
+
 };
 
 //! Counts the timer events it is given, so a delivery to a destroyed object is visible as a count.
@@ -1558,6 +1585,7 @@ protected:
         ( void )aEvent;
         ++mFireCount;
     }
+
 };
 
 //! Verifies an object deleted from inside a sibling's timer handler is not then sent its own timer.
@@ -1622,6 +1650,7 @@ protected:
             Thread::currentThread()->processEvents();
         }
     }
+
 };
 
 //! Verifies a destruction inside a nested pass also cancels the outer pass's entries.
@@ -1673,6 +1702,7 @@ public:
         ++( *mCallCount );
         delete this;
     }
+
 };
 
 //! Verifies an object deleted in a queued call is not then sent a deferred delete from that batch.
@@ -1780,4 +1810,177 @@ TEST( EventDispatcherDefaultDefectTest, WakeCallbackMayReEnterTheDispatcherFromE
     worker.join();
     EXPECT_GT( callbackCount.load(), 0 ) << "the callback was never reached at all";
     delete dispatcher;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Defect (R32, fixed 2026-08-14): moveToThread() left already-posted events behind.
+//
+// Timers were carried across; nothing carried the events. So a queued call posted just before a
+// move ran on the thread the object had *left* -- silently, because nothing re-checks affinity once
+// an event is queued, and that is the one guarantee a queued connection exists to provide.
+// deleteLater() was the sharper case: its DeferredDeleteEvent stranded the same way, so the
+// destructor ran on the wrong thread and tripped ~Object()'s own cross-thread warning, whose advice
+// is to use deleteLater().
+//
+// Qt migrates them, in QObjectPrivate::setThreadData_helper(): it walks the old thread's
+// postEventList, re-adds every entry whose receiver is the moving object to the target's list, and
+// wakes the target. Confirmed against Qt 6.11.1 by running the same program against both.
+// ---------------------------------------------------------------------------------------------
+
+//! Records which thread ran it, through a pointer the test owns so it survives anything.
+class ThreadRecordingReceiver : public Object
+{
+public:
+    Thread** mRanOn { nullptr };  //!< Points at the test's own storage.
+
+    void onCall
+        (
+        int aValue
+        )
+    {
+        ( void )aValue;
+        if( mRanOn )
+        {
+            *mRanOn = Thread::currentThread();
+        }
+    }
+
+};
+
+//! Verifies a queued call posted before a move runs on the thread the object moved *to*.
+TEST( ObjectDefectTest, MoveToThreadCarriesAlreadyPostedEventsToTheNewThread )
+{
+    Thread* mainThread = Thread::currentThread();
+    ASSERT_NE( mainThread, nullptr );
+
+    Thread worker( "r32-worker" );
+    worker.start();
+    // Waits for the dispatcher, not for isRunning(): start() sets the running flag before the run
+    // body creates the dispatcher, so the two are not the same moment. This test is about carrying
+    // events to a thread that can already take them; the parked-event path has its own test below.
+    ASSERT_TRUE( waitFor( [&worker]()
+        {
+            return worker.eventDispatcher() != nullptr;
+        } ) );
+
+    Thread* ranOn = nullptr;
+    Signal<int> signal;
+    ThreadRecordingReceiver receiver;   // lives on this thread
+    receiver.mRanOn = &ranOn;
+    Object::connect( signal, &receiver, &ThreadRecordingReceiver::onCall,
+        ConnectionType::Queued );
+
+    signal.emit( 1 );                    // lands in THIS thread's queue
+    ASSERT_TRUE( receiver.moveToThread( &worker ) );
+
+    ASSERT_TRUE( waitFor( [&ranOn]()
+        {
+            return ranOn != nullptr;
+        } ) )
+        << "the queued call never ran at all after the move.";
+
+    EXPECT_EQ( ranOn, &worker )
+        << "the call was posted while the receiver lived on this thread, and ran there even though "
+        "the receiver had moved. moveToThread() must carry already-posted events across, as Qt's "
+        "setThreadData_helper() does; a queued connection promises the slot runs on the receiver's "
+        "thread, and this is the one case where that promise was silently broken.";
+
+    // Hand it back so the stack object is destroyed on its own thread.
+    worker.post( [&receiver]()
+        {
+            receiver.moveToThread( nullptr );
+        } );
+    worker.quit();
+    worker.wait();
+}
+
+//! Verifies a deleteLater() issued before a move destroys the object on the thread it moved *to*.
+//!
+//! Separate from the test above because the event type is what matters: a stranded
+//! DeferredDeleteEvent runs `delete this` on the wrong thread, which is the case ~Object()'s
+//! cross-thread-destruction warning exists to catch -- reached, before this fix, by following that
+//! warning's own advice.
+TEST( ObjectDefectTest, MoveToThreadCarriesAPendingDeleteLaterToTheNewThread )
+{
+    Thread worker( "r32-delete-worker" );
+    worker.start();
+    ASSERT_TRUE( waitFor( [&worker]()
+        {
+            return worker.eventDispatcher() != nullptr;
+        } ) );
+
+    std::atomic<Thread*> destroyedOn { nullptr };
+
+    class Victim : public Object
+    {
+    public:
+        std::atomic<Thread*>* mDestroyedOn { nullptr };
+        ~Victim() override
+        {
+            if( mDestroyedOn )
+            {
+                mDestroyedOn->store( Thread::currentThread() );
+            }
+        }
+
+    };
+
+    auto* victim = new Victim();
+    victim->mDestroyedOn = &destroyedOn;
+
+    victim->deleteLater();                        // DeferredDeleteEvent into THIS thread's queue
+    ASSERT_TRUE( victim->moveToThread( &worker ) );
+
+    ASSERT_TRUE( waitFor( [&destroyedOn]()
+        {
+            return destroyedOn.load() != nullptr;
+        } ) )
+        << "the pending deleteLater() never ran, so the object leaked.";
+
+    EXPECT_EQ( destroyedOn.load(), &worker )
+        << "deleteLater() was called while the object lived on this thread, and the destructor ran "
+        "here even though the object had moved -- a cross-thread destruction reached by following "
+        "the advice in ~Object()'s own warning.";
+
+    worker.quit();
+    worker.wait();
+}
+
+//! Verifies the migration survives the canonical idiom: move first, start the thread afterwards.
+//!
+//! The destination has no dispatcher at all at that point -- a Thread creates one in its run body --
+//! so there is nowhere to post. The events are parked on the destination's ThreadData and handed to
+//! the dispatcher the moment it is installed. Qt has no equivalent problem because its queue lives
+//! in QThreadData rather than in the dispatcher.
+TEST( ObjectDefectTest, EventsMovedToAnUnstartedThreadAreDeliveredWhenItStarts )
+{
+    Thread worker( "r32-unstarted-worker" );      // deliberately not started yet
+
+    Thread* ranOn = nullptr;
+    Signal<int> signal;
+    ThreadRecordingReceiver receiver;
+    receiver.mRanOn = &ranOn;
+    Object::connect( signal, &receiver, &ThreadRecordingReceiver::onCall,
+        ConnectionType::Queued );
+
+    signal.emit( 1 );
+    ASSERT_TRUE( receiver.moveToThread( &worker ) );
+    EXPECT_EQ( ranOn, nullptr ) << "nothing should have run before the thread exists";
+
+    worker.start();
+
+    ASSERT_TRUE( waitFor( [&ranOn]()
+        {
+            return ranOn != nullptr;
+        } ) )
+        << "the event was posted before the destination had a dispatcher, and was dropped instead "
+        "of being held until one existed.";
+    EXPECT_EQ( ranOn, &worker );
+
+    worker.post( [&receiver]()
+        {
+            receiver.moveToThread( nullptr );
+        } );
+    worker.quit();
+    worker.wait();
 }

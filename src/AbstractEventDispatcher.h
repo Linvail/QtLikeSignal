@@ -135,7 +135,28 @@ namespace QtLikeSignal
             Object* aReceiver  //!< The receiver whose timers should be taken.
             ) = 0;
 
+        //! Removes the receiver's pending events and hands them over, still alive.
+        //!
+        //! The counterpart of removeEventsForReceiver() for a move rather than a destruction: the
+        //! events are detached from this dispatcher but not deleted, so Object::moveToThread() can
+        //! post them onto the destination thread. Ownership passes to the caller, which must post
+        //! or delete every one of them.
+        //!
+        //! Qt does the same thing at the same point, walking the old thread's postEventList and
+        //! re-adding each entry to the target's ("move posted events" in
+        //! QObjectPrivate::setThreadData_helper). Without it a queued call posted just before a move
+        //! runs on the thread the object has left -- which is the one thing a queued connection
+        //! exists to prevent. Thread-safe.
+        virtual std::vector<Event*> takeEventsForReceiver
+            (
+            Object* aReceiver  //!< The receiver whose events should be taken.
+            ) = 0;
+
         friend class Object;
+
+        //! Grants ThreadData the ability to hand over events parked before a dispatcher existed.
+        //! See ThreadData::mParkedEvents.
+        friend struct ThreadData;
     };
 }
 
