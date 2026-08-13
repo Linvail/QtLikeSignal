@@ -14,15 +14,21 @@ How every figure below was produced is at the end of this document, under
 | P1 | **Fixed** | `~Object()` scans the whole process-wide `callLater` registry, and the dispatcher's whole event queue | High | 24 139 ns → **51.6 ns** per ctor+dtor at 4 000 pending, and flat |
 | P2 | **By Design** | `Object::thread()` takes a mutex where Qt takes an atomic load (= risk R25) | Medium | 5–6 ns per call, 32x degradation at 8 threads |
 | P3 | **Fixed** | Every emit builds a `std::function` on the heap, even for a direct call | Medium | 1.00 → **0.00** allocations per direct emit |
-| P4 | **Queue** | One dispatcher mutex serialises every object on a thread | Unknown | Never measured |
-| P5 | **Queue** | Timer list is scanned linearly twice per dispatch pass | Low | Never measured |
+| P4 | **By Design** | One dispatcher mutex serialises every thread posting to one thread | Medium | Measured — a post costs 47 ns alone, **1.19 µs** with 8 posters; Qt serialises identically |
+| P5 | **By Design** | Timer list is scanned linearly twice per dispatch pass | Low | Measured — **0.78 ns per timer** per idle pass; 130 ns at 100 timers |
 | P6 | **Queue** | Dispatch cost against Qt 6 — the whole comparison table is obsolete | Medium | Needs re-running; every row predates our own `Signal` |
 | P7 | **Fixed** | `disconnect()` is O(slots on the signal), so tearing down N receivers of one signal is O(N²) | High | 671.2 ms → **3.98 ms** for 16 000 receivers, and flat |
 | P8 | **In progress** | A connect makes the next emit rebuild the whole slot list | Medium | Churn 16.8 → **13.1 µs** per cycle; the rebuild itself remains |
 | P9 | **By Design** | The R28 correctness fix costs one mutex per dispatched event | Low | **+3.3 ns** per event |
 
-Nothing open now degrades with scale. P1 and P7 were the two that grew without bound and both are
-fixed; what remains is constant factors, one unmeasured lock, and a stale table.
+Nothing open now degrades with scale under a single thread. P1 and P7 were the two that did, and
+both are fixed. **Everything is now measured** — P4 and P5 were the last two carrying "never
+measured", and both turned out to be accepted costs rather than work. The only item left in the
+queue is P6, which is a stale table rather than a finding.
+
+P4 is the one to know about: it does not degrade with data size, it degrades with *concurrency*.
+Posting to a thread from eight others costs 25x what posting from one does. That is Qt's
+architecture as much as ours, and the entry says what changing it would take.
 
 ---
 
@@ -75,7 +81,8 @@ Qt's implementation are in `PERFORMANCE-20260808.md`.
 - The hot path no longer pays it. An explicit `DirectConnection` returns before it reads the affinity
   box at all ([Object.h](src/Object.h#L689-L695)), so only the auto and queued paths are affected.
 - It is a constant factor, and for a cross-thread emit both this lock and the dispatcher's (P4) are
-  taken — so removing this one alone would relocate the contention rather than remove it.
+  taken. P4 is now measured at up to 1.19 µs per post under contention, against this one's 5–6 ns,
+  so removing this lock alone would move the queue by a rounding error.
 
 If it is ever done, fold it into the P6 change that moves the event queue into `ThreadData`. Both
 touch the same lifetime question, and doing them separately means solving it twice.
@@ -93,24 +100,86 @@ than behind a second `make_shared`.
 | allocations per direct emit | 1.00 | **0.00** |
 | allocations per same-thread auto emit | 1.00 | **0.00** |
 
-## P4 — one dispatcher mutex serialises every object on a thread *(Queue)*
+## P4 — one dispatcher mutex serialises every thread posting to one thread *(By Design)*
 
 `EventDispatcherDefault::mMutex` guards the event queue and the timer list, and is taken by
 `postEvent()`, `registerTimer()`, `unregisterTimer()` and every `processEvents()` pass. It is shared
 by *all* objects living on that thread, so it is a strictly wider bottleneck than P2's per-object
 lock.
 
-**Never measured.** Worth stating because it changes what fixing P2 would achieve: for cross-thread
-queued emits both locks are taken. Measure this one first if queued-emit throughput ever matters.
+**Measured 2026-08-13, and it is severe.** T threads posting to one dispatcher, against the same T
+threads each posting to their own — identical work and identical allocations, so the difference is
+the shared lock and nothing else:
 
-## P5 — the timer list is scanned linearly twice per dispatch pass *(Queue)*
+| posting threads | shared dispatcher | separate dispatchers | ratio |
+|---|---|---|---|
+| 1 | 48.7 ns | 46.8 ns | 1.04 |
+| 2 | 113.7 ns | 24.0 ns | 4.7 |
+| 4 | 118.7 ns | 12.7 ns | 9.3 |
+| 8 | 149.1 ns | 9.5 ns | **15.8** |
 
-`processEvents()` walks `mTimers` once to collect expired timers, then again to find the earliest
-next deadline for the wait timeout
-([EventDispatcherDefault.cpp:54-90](src/EventDispatcherDefault.cpp#L54-L90)). Two *O(n)* passes per
-wake, where Qt keeps timers in deadline order so the next one is the head of the list.
+Those are per-post figures across all threads, so the separate column falling is throughput scaling
+correctly. **The shared column rising is throughput going backwards**: 20.5 M posts/s on one thread,
+6.7 M posts/s on eight. Per posting thread the latency of a single `postEvent()` goes from **47 ns
+alone to 1.19 µs under eight-way contention, 25x**.
 
-Never measured. Irrelevant for a handful of timers; it would matter for hundreds on one thread.
+**The condvar is not the cause, which was worth checking.** `wakeWaiter()` runs `notify_all()` on
+every post, on a cache line every poster touches. Removing it entirely changes nothing — 145.3 ns
+against 140.4 ns at eight threads, inside the noise. It is the mutex.
+
+**Accepted, for three reasons.**
+
+- **Qt does exactly the same thing.** `QCoreApplication::postEvent()` takes
+  `QMutexLocker locker(&data->postEventList.mutex)` — one mutex per target thread's event list, held
+  by every poster. We are not deviating from the model we are copying.
+- **The critical section is already minimal**: one `bool` test and a `push_back`, with the wake
+  outside the lock. There is nothing left to shave.
+- **The real fix is a different data structure**, not a smaller critical section. A lock-free MPSC
+  queue is the textbook fit — many producers, one consumer, wait-free push — and it would remove the
+  contention rather than reduce it.
+
+**What blocks the MPSC queue, recorded so the next person does not rediscover it:**
+`removeEventsForReceiver()` deletes entries *from the middle* of the queue, and
+`processDeferredDeletes()` filters it by event type. An MPSC queue supports neither. Both would have
+to become consumer-side operations on a drained batch — which is close to what R28's dispatch frames
+already do, so it is not unthinkable, but it is a redesign of event ownership and not a local change.
+
+**The measurement is a ceiling, not a forecast.** Eight threads posting in a tight loop with no work
+between posts is the worst case that can be constructed. Real code posts occasionally.
+
+## P5 — the timer list is scanned linearly twice per dispatch pass *(By Design)*
+
+`processEvents()` walks `mTimers` once to collect expired timers, and again — on an otherwise idle
+pass — to find the earliest deadline for the wait timeout
+([EventDispatcherDefault.cpp:54-90](src/EventDispatcherDefault.cpp#L54-L90)). Qt keeps its timers in
+deadline order, so its equivalent of the second scan is reading the head of the list.
+
+**Measured 2026-08-13**, with the blocking wait overridden away so a pass costs only what it
+computes:
+
+| timers on the thread | idle pass (both scans) | busy pass (collect only) |
+|---|---|---|
+| 0 | 58.9 ns | 87.1 ns |
+| 10 | 56.7 ns | 82.6 ns |
+| 100 | 130.1 ns | 117.4 ns |
+| 1 000 | 840.2 ns | 359.7 ns |
+| 10 000 | 7 834 ns | 2 611 ns |
+
+Linear, as expected: **0.78 ns per timer on an idle pass, 0.25 ns per timer on a busy one.**
+
+**Accepted, because the absolute numbers do not justify the machinery.** A hundred timers on one
+thread — already a lot — costs 130 ns per pass. The expensive scan is also the one that runs
+*immediately before the loop blocks*, where a microsecond spent choosing a sleep deadline is not
+worth optimising.
+
+The shape where it would matter is many timers firing often, since the pass count then rises with
+the timer count too: 10 000 timers each firing once a second is 7 834 ns × 10 000 = 7.8% of a core.
+That is the point at which to act, and nothing near it exists today.
+
+**If it is ever done**, the shape is Qt's: a deadline-ordered structure so the collect loop stops at
+the first entry that is not due and the wait deadline is the head. The cost is that
+`unregisterTimer()` looks up by *id*, and a re-armed repeating timer has to be repositioned, so it
+needs an id index beside the ordering — which is why a sorted vector alone does not do it.
 
 ## P6 — the Qt 6 comparison table is obsolete *(Queue)*
 
@@ -269,6 +338,18 @@ never touched the feature pays for other objects' pending work.
 **Dispatch drain (P9).** Post N events to an idle dispatcher, then time one `processEvents()` drain.
 Nothing else runs, so the loop cost is all that is measured.
 
+**Post contention (P4).** T threads post the same number of events each, in two configurations: all
+to **one** dispatcher, and each to its **own**. Same total work, same allocations, same thread count
+— so the difference between the two columns is the shared mutex and nothing else. Reported per post
+across all threads, which is why the uncontended column *falls* as threads are added: that is
+throughput scaling as it should. Nothing drains the queues; this measures the producer side.
+
+**Timer scan (P5).** Register N timers far enough in the future that none is ever due, then time
+`processEvents()` passes. The blocking wait is overridden to return immediately in a subclass, so a
+pass costs only what it computes rather than what it sleeps. Two configurations: an **idle** pass,
+which runs both scans, and a **busy** pass with one event queued, which skips the wait branch and so
+runs only the collect scan.
+
 ## Traps hit while producing this
 
 The six recorded on 2026-08-08 all still apply and are not repeated here. Three to add:
@@ -284,6 +365,12 @@ The six recorded on 2026-08-08 all still apply and are not repeated here. Three 
 - **Measure the composite as well as the component.** P7's first fix attempt (`std::list`) improved
   the number it targeted and made a different one 66% worse. Neither the teardown benchmark nor the
   churn benchmark would have caught that alone.
+- **Check that a probe left the baseline intact.** Pricing P8's snapshot rebuild by suppressing the
+  dirty flag on connect looked like it made churn 4x *worse*. It had not: without that flag the
+  resident slots were never published either, so `emit_only` fell to 0.005 µs and the subtraction
+  had nothing left to subtract. A probe that disables one thing usually disables two. Print the
+  baseline column, not just the derived one — the invalid result is obvious there and invisible in
+  the difference.
 
 ## Standing caveat
 
