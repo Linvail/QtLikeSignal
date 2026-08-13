@@ -14,10 +14,10 @@ probe was written.
 ## Status at a glance
 
 > **Baseline.** `./waf build` succeeds and the suite passes: **164 tests, 0 failures** (2026-08-13,
-> `linux64-clang`, debug, no sanitizer). No existing test caught R28.
+> `linux64-clang`, debug, no sanitizer). No existing test caught any of these.
 >
-> After the R28 fix and its three regression tests: **167 tests, 0 failures**, in declaration order
-> and under `--gtest_shuffle`.
+> After the R28, R30 and R31 fixes and their five regression tests: **169 tests, 0 failures**, in
+> declaration order and under `--gtest_shuffle`.
 
 > **`src/tests/QtLikeSignal-test-known-defects.cpp` is still empty.** R28 went straight to
 > `QtLikeSignal-test-defect-regressions.cpp` because it was fixed in the same pass that found it;
@@ -27,9 +27,9 @@ probe was written.
 | ID  | Risk | Severity | Confirmed by |
 |-----|------|----------|--------------|
 | R28 | An object destroyed during a dispatch pass still receives the rest of that batch | **High** | Probe — two segfaults — **Fixed 2026-08-13** |
-| R29 | `connectImpl()` publishes the `Connection` handle outside `mIncomingMutex` | Low | Inspection |
-| R30 | `unregisterEventSource()` does not stop a callback that is already in flight | Low-Med | Inspection |
-| R31 | Three dispatcher paths run the wake callback with `mMutex` held; `postEvent()` does not | Low | Inspection |
+| R29 | ~~`connectImpl()` publishes the `Connection` handle outside `mIncomingMutex`~~ | — | **Withdrawn 2026-08-13 — not a defect** |
+| R30 | `unregisterEventSource()` does not stop a callback that is already in flight | Low-Med | Inspection — **Fixed 2026-08-13** |
+| R31 | Three dispatcher paths run the wake callback with `mMutex` held; `postEvent()` does not | Low | Inspection — **Fixed 2026-08-13** |
 
 Still open from earlier passes, restated at the end: R9, R15, R22 (Windows residual), R25.
 
@@ -195,41 +195,61 @@ walks `QThreadData::postEventList` in place under the list mutex, and `removePos
 entries in that same list. Our snapshot is what buys the lock-free dispatch, so the batches have to
 be reachable for cancellation instead.
 
-## R29 — `connectImpl()` publishes the `Connection` handle outside `mIncomingMutex`
+## R29 — ~~`connectImpl()` publishes the `Connection` handle outside `mIncomingMutex`~~ *(withdrawn 2026-08-13: not a defect)*
 
-**Severity: Low. Inspection. Introduced with the connect() unification (`7896ee3`).**
+**This entry was wrong. It is kept, rather than deleted, so the same reading is not filed again.**
 
-[Object.h:742-757](src/Object.h#L742-L757) runs in this order:
+The claim was that [Object.h](src/Object.h)'s `connectImpl()` races `~Cleanup()`:
 
 ```cpp
 Connection handle = aSignal.connect( wrapper );   // the slot is live from here on
 ...
-cleanup->mHandle = handle;                        // unsynchronised write
+cleanup->mHandle = handle;                        // "unsynchronised write"
 std::lock_guard<std::mutex> lock( receiver->mIncomingMutex );
 receiver->mIncoming.push_back( handle );
 ```
 
-The slot — and the `Cleanup` token it owns — is reachable the instant `connect()` returns. If
-another thread ends that connection in the window before the push (`Signal::disconnectAll()`, or
-the sender `Signal` being destroyed), `~Cleanup` ([Object.cpp:234-247](src/Object.cpp#L234-L247))
-*reads* `mHandle` under `mIncomingMutex` while this thread *writes* it without holding anything.
-That is a data race on two `shared_ptr`/`weak_ptr` members.
+The slot really is reachable — and disconnectable — the instant `connect()` returns, and `~Cleanup()`
+really does read `mHandle`. What the entry missed is **who holds the last reference**. `cleanup` is a
+local `shared_ptr` in `connectImpl()`, and the wrapper captures a *copy*. So a concurrent disconnect
+drops the slot's reference, not ours, and the refcount cannot reach zero until this function returns.
+`~Cleanup()` therefore cannot start until after both the write and the push have completed, and it
+runs on this thread, not the disconnecting one. There is no concurrent reader to race, and no window
+in which the push is missing.
 
-Two consequences, both minor:
-- The race itself, which ThreadSanitizer would report if a test exercised it. Nothing currently does.
-- `~Cleanup` finds nothing to erase (the push has not happened yet), and this function then pushes a
-  handle for an already-dead connection. `mIncoming` keeps a stale entry until the receiver dies.
+Confirmed rather than argued: a ThreadSanitizer probe raced 200 000 `Object::connect()` calls against
+two threads spinning on `Signal::disconnectAll()`, **against the pre-"fix" code**, three times. Zero
+reports each run. The same probe catches a deliberate two-thread race on a plain `int`, so TSan was
+working.
 
-The comment above the assignment says publishing the handle first is what lets the destructor "match
-on" it. That is true for ordering *within* this thread, but it does not make the write visible
-safely to a concurrent reader.
+The change made in response to this entry has been reverted. What survives is a comment at the
+assignment stating the invariant, because the code does look racy at a glance — the original comment
+there ("publish the handle before registering it, so the destructor has something to match on")
+described an ordering that does not matter and did not mention the one that does.
 
-**Fix:** move `cleanup->mHandle = handle;` inside the `mIncomingMutex` scope, next to the push, and
-have `~Cleanup` treat a default-constructed `mHandle` as "not registered yet, nothing to prune".
-
-## R30 — `unregisterEventSource()` does not stop a callback that is already in flight
+## R30 — `unregisterEventSource()` does not stop a callback that is already in flight *(fixed 2026-08-13)*
 
 **Severity: Low-Medium. Inspection.**
+
+> **Resolution (2026-08-13).** `waitForEvents()` no longer copies the callbacks out with the
+> descriptor set. It snapshots only each source's *identity* — descriptor plus a generation stamp —
+> and looks the callback up again under `mMutex` immediately before invoking it
+> ([EventDispatcherLinux.cpp](src/EventDispatcherLinux.cpp)). Same rule as the R28 dispatch batches:
+> re-check under the lock, act outside it.
+>
+> The generation stamp is what makes the descriptor an identity. A descriptor number is reused after
+> close, so an fd alone cannot tell "still registered" from "unregistered, closed, and reopened by
+> something else". Every `registerEventSource()` takes a fresh generation, replacements included.
+>
+> This makes unregistration **synchronous when called from the dispatcher's own thread**, including
+> from inside another callback, which is the case a caller can actually rely on. From another thread
+> it still is not, and cannot be without blocking on arbitrary user code; the doxygen now says so
+> plainly instead of implying the opposite.
+>
+> Covered by `EventDispatcherLinuxTest.SourceUnregisteredFromACallbackIsNotCalledInThatRound`: two
+> descriptors ready in one `poll()` round, the first callback unregistering the second. Verified to
+> catch the regression — restoring the up-front callback copy makes it fail with the sibling's call
+> count at 1.
 
 `EventDispatcherLinux::waitForEvents()` snapshots the descriptor set *and copies the callbacks out*
 under `mMutex` ([EventDispatcherLinux.cpp:129-143](src/EventDispatcherLinux.cpp#L129-L143)), then
@@ -251,9 +271,27 @@ from the dispatcher's own thread, and that a callback may still run once otherwi
 guarantee is wanted, give each source a generation counter checked under `mMutex` immediately before
 the callback is invoked.
 
-## R31 — three dispatcher paths run the wake callback with `mMutex` held
+## R31 — three dispatcher paths run the wake callback with `mMutex` held *(fixed 2026-08-13)*
 
-**Severity: Low. Inspection. A consistency defect rather than a demonstrated failure.**
+**Severity: Low. Inspection. Filed as a consistency defect; it is a reachable deadlock.**
+
+> **Resolution (2026-08-13).** `registerTimer()`, `unregisterTimer()` and `takeTimersForReceiver()`
+> now scope their lock and call `wakeWaiter()` after releasing it, matching `postEvent()`. Only
+> `unregisterTimer()` needed restructuring, and its body moved into a `takeTimerLocked()` helper so
+> the early returns stay readable.
+>
+> The permissive contract is now the documented one, in all three places that stated the strict one:
+> `AbstractEventDispatcher::setWakeCallback()`, `Thread::setWakeCallback()` and
+> `EventDispatcherDefault::wakeWaiter()`. A wake callback may call back into the dispatcher; it
+> should still not block, because it runs on the poster's thread on the critical path of every post.
+>
+> Filed as "a consistency defect rather than a demonstrated failure". It is demonstrable:
+> `EventDispatcherDefaultDefectTest.WakeCallbackMayReEnterTheDispatcherFromEveryPath` installs a
+> callback that posts back into the dispatcher and then drives all three paths. With the wake put
+> back inside `registerTimer()`'s lock it deadlocks, and the test **fails in 5 s with the reason
+> attached** rather than hanging: the work runs on a worker thread behind a future, and the failure
+> path detaches that thread onto a deliberately leaked dispatcher rather than letting it hold a
+> pointer into a dead stack frame.
 
 `wakeWaiter()` may invoke `mWakeCallback`, which is user code
 ([EventDispatcherDefault.cpp:270-295](src/EventDispatcherDefault.cpp#L270-L295)). Its own comment
@@ -277,7 +315,9 @@ self-deadlocks the first time a timer is started, because the mutex is not recur
 
 **Fix:** pick one. Releasing the lock before `wakeWaiter()` in the three timer paths matches
 `postEvent()` and lets the documented contract be relaxed; keeping them and documenting the strict
-contract on `AbstractEventDispatcher` as well is the smaller change.
+contract on `AbstractEventDispatcher` as well is the smaller change. The first was taken — see the
+resolution above. A callback that must not touch the dispatcher is a rule nobody can test their way
+into remembering, and the Windows dispatcher would have had to honour it too.
 
 ---
 
@@ -301,9 +341,18 @@ Re-checked against the current tree, not re-probed.
 ## Suggested order
 
 1. ~~**R28**~~ — done 2026-08-13.
-2. **R29** — small, and it is a data race, so it will surface under TSan sooner or later.
-3. **R31** — a comment or three unlock calls.
-4. **R30** — documentation is enough unless a real event source is added.
+2. ~~**R29**~~ — withdrawn 2026-08-13; there was no defect.
+3. ~~**R31**~~ — done 2026-08-13.
+4. ~~**R30**~~ — done 2026-08-13.
+
+Everything filed in this pass is now closed. R9, R15, R22-residual and R25 remain from earlier
+passes, and the performance items in `PERFORMANCE-20260813.md` are untouched — P7 (quadratic
+teardown) is the largest thing still open anywhere.
+
+**One finding in four was wrong.** R29 was filed from inspection alone, and inspection is what got
+it wrong: the reasoning was local to one function and the disproof was one ownership fact from
+three lines above. The three that survived were all confirmed by running something. That ratio is
+the argument for probing before filing, not after.
 
 ## Follow-up the R28 fix exposed but did not close
 

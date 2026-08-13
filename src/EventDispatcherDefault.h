@@ -93,9 +93,16 @@ namespace QtLikeSignal
             int aTimeoutMs
             );
 
-        //! Wakes a thread blocked in waitForEvents(). Callable from any thread, with or without
-        //! mMutex held, so it must not block. Every mutation of the queue, the timer list or the
-        //! interrupt flag ends in a call to this.
+        //! Wakes a thread blocked in waitForEvents(). Callable from any thread, so it must not
+        //! block. Every mutation of the queue, the timer list or the interrupt flag ends in a call
+        //! to this.
+        //!
+        //! **Called with mMutex released, on every path.** It may run mWakeCallback, which is user
+        //! code, and user code that touches the dispatcher it was woken by is the obvious thing to
+        //! write -- so calling it under a non-recursive mutex is a deadlock waiting for the first
+        //! caller who does the obvious thing. postEvent() always released the lock first; the three
+        //! timer paths did not, which made the hazard depend on which operation happened to wake
+        //! the loop.
         virtual void wakeWaiter();
 
         //! Drains and dispatches OS/platform events. Called once per processEvents() pass with
@@ -199,6 +206,15 @@ namespace QtLikeSignal
             DispatchFrame* aFrame
             );
 
+        //! Removes a timer and every pending event for it. Callers must hold mMutex.
+        //!
+        //! Split out of unregisterTimer() so that the wake, which runs user code, happens after the
+        //! lock is released.
+        bool takeTimerLocked
+            (
+            int aTimerId
+            );
+
         //! Nudges an adopted thread's own native loop when work is posted; empty if unused.
         std::function<void()> mWakeCallback;
 
@@ -217,10 +233,9 @@ namespace QtLikeSignal
 
         //! Guards mWakeCallback -- deliberately NOT mMutex.
         //!
-        //! wakeWaiter() is reached both with mMutex held (registerTimer, unregisterTimer) and
-        //! without it (postEvent, wakeUp, interrupt). Reading the callback under mMutex would
-        //! therefore relock a non-recursive mutex this thread already owns on half the paths. A
-        //! separate lock makes the read safe from either.
+        //! wakeWaiter() runs with mMutex released so that the callback it may invoke is not user
+        //! code under our lock, which means it cannot use mMutex to guard the callback either. A
+        //! separate lock keeps the read safe without re-entering the one the callers just dropped.
         mutable std::mutex mWakeCallbackMutex;
     };
 }

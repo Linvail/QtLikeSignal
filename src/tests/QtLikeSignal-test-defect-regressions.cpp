@@ -1712,3 +1712,67 @@ TEST( ObjectDefectTest, DeferredDeleteInTheSameBatchDoesNotDeleteAnAlreadyDelete
     EXPECT_EQ( callCount, 1 )
         << "the queued call should have run exactly once and destroyed the receiver.";
 }
+
+// ---------------------------------------------------------------------------------------------
+// Defect (R31, fixed 2026-08-13): three dispatcher paths ran the wake callback with mMutex held.
+//
+// wakeWaiter() may invoke the callback installed by Thread::setWakeCallback(), which is user code.
+// postEvent(), wakeUp() and interrupt() released mMutex before calling it; registerTimer(),
+// unregisterTimer() and takeTimersForReceiver() did not. A callback that posts back into the same
+// dispatcher -- the obvious thing to write, and the thing every test exercised -- therefore worked
+// until the first time a timer woke the loop, and then self-deadlocked on a non-recursive mutex.
+// ---------------------------------------------------------------------------------------------
+
+//! Verifies a wake callback may call back into the dispatcher, whatever woke it.
+//!
+//! Structured to fail rather than hang. With the defect present the worker never returns from
+//! registerTimer(), so the future times out, the test fails with a message, and the thread is
+//! detached onto a deliberately leaked dispatcher -- detaching it onto a stack object would leave
+//! it holding a pointer into this frame.
+TEST( EventDispatcherDefaultDefectTest, WakeCallbackMayReEnterTheDispatcherFromEveryPath )
+{
+    // Heap-allocated and released only on success; see above.
+    auto* dispatcher = new DefectTestableDispatcher();
+    Object receiver;
+
+    std::atomic<int> callbackCount { 0 };
+    dispatcher->setWakeCallback(
+        [dispatcher, &receiver, &callbackCount]()
+        {
+            // Re-entrant by design: this is what a native loop's nudge does when it decides to
+            // drain our queue rather than signal a descriptor.
+            if( callbackCount.fetch_add( 1 ) < 8 )
+            {
+                dispatcher->postEvent( &receiver, new TimerEvent( 99 ) );
+            }
+        } );
+
+    std::promise<void> donePromise;
+    auto doneFuture = donePromise.get_future();
+    std::thread worker(
+        [dispatcher, &receiver, &donePromise]()
+        {
+            dispatcher->registerTimer( 1, 1000, &receiver );        // wakes with a timer change
+            dispatcher->unregisterTimer( 1 );                        // and again on removal
+            dispatcher->postEvent( &receiver, new TimerEvent( 1 ) );  // the path that always worked
+            donePromise.set_value();
+        } );
+
+    const bool finished
+        = doneFuture.wait_for( std::chrono::seconds( 5 ) ) == std::future_status::ready;
+
+    EXPECT_TRUE( finished )
+        << "a wake callback that calls back into the dispatcher deadlocked it. registerTimer() and "
+        "unregisterTimer() invoke wakeWaiter() -- and therefore the callback -- while still holding "
+        "mMutex, which is not recursive.";
+
+    if( !finished )
+    {
+        worker.detach();
+        return;   // dispatcher deliberately leaked: the worker still points at it
+    }
+
+    worker.join();
+    EXPECT_GT( callbackCount.load(), 0 ) << "the callback was never reached at all";
+    delete dispatcher;
+}

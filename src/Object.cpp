@@ -227,9 +227,9 @@ namespace QtLikeSignal
 
     //! Removes this connection from its receiver's mIncoming as the connection is destroyed.
     //!
-    //! Runs when boost destroys the slot holding this token -- a manual disconnect(), the sender
-    //! Signal being destroyed, or ~Object()'s own disconnect loop. Without it mIncoming would only
-    //! ever grow for an object that outlives connections made to it, and would eventually hold
+    //! Runs when the Signal destroys the slot holding this token -- a manual disconnect(), the
+    //! sender Signal being destroyed, or ~Object()'s own disconnect loop. Without it mIncoming would
+    //! only ever grow for an object that outlives connections made to it, and would eventually hold
     //! stale handles.
     Object::Cleanup::~Cleanup()
     {

@@ -641,7 +641,14 @@ namespace QtLikeSignal
 
             Object* mOwner;                //!< Receiver owning the mIncoming entry.
             std::weak_ptr<int> mLife;      //!< Receiver's life token; expired means it is gone.
-            Connection mHandle;      //!< The entry to prune; set once the handle exists.
+
+            //! The entry to prune; set by connectImpl() once the handle exists.
+            //!
+            //! Unguarded, and does not need to be. connectImpl() holds its own shared_ptr to this
+            //! token across the whole of its body, so ~Cleanup() cannot start until connectImpl()
+            //! has finished writing this and registering it -- a disconnect racing that window drops
+            //! the *slot's* reference, which is not the last one. See connectImpl().
+            Connection mHandle;
         };
 
         //! The one body shared by all ten connect() overloads.
@@ -746,9 +753,20 @@ namespace QtLikeSignal
                 return handle;
             }
 
-            // Publish the handle into the Cleanup before registering it, so that if the connection is
-            // torn down concurrently the destructor below has something to match on rather than the
-            // default-constructed handle.
+            // Record the handle in both places under one lock. The slot is live from the moment
+            // connect() returned above, so another thread may already be tearing this connection
+            // down -- Signal::disconnectAll(), or the sender Signal being destroyed -- and that runs
+            // ~Cleanup(), which reads mHandle under this same mutex. Assigning it outside the lock
+            // was a data race on a Connection's two smart pointers, and it left the loser of the
+            // race a stale mIncoming entry: ~Cleanup() would find nothing to erase, because the push
+            // had not happened yet, and the push would then add a handle to a connection that was
+            // already dead.
+            // Written without a lock, which is safe for a reason worth stating: `cleanup` is a local
+            // shared_ptr, so this function holds a reference for its whole body. ~Cleanup() cannot
+            // run while we are here, however fast another thread disconnects -- disconnecting drops
+            // the slot's reference, not ours, and the token outlives the slot. So the write below
+            // and the destructor's read of the same member cannot overlap, and the push that
+            // follows completes before the destructor can look for it.
             cleanup->mHandle = handle;
 
             Object* receiver = cleanup->mOwner;

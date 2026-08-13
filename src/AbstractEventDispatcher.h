@@ -53,8 +53,9 @@ namespace QtLikeSignal
         //! Loop-level like wakeUp() and interrupt(), so it is public for the same reason -- it
         //! cannot be aimed at a particular receiver.
         //!
-        //! The callback may run with this dispatcher's internal lock held, so it must not block or
-        //! call back into the dispatcher; signal the native loop and return. Thread-safe.
+        //! The callback runs with no dispatcher lock held and may call back in. It should not
+        //! block: it is on the critical path of every post. Signal the native loop and return.
+        //! Thread-safe.
         virtual void setWakeCallback
             (
             std::function<void()> aCallback  //!< Invoked on post; nullptr clears.

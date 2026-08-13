@@ -311,9 +311,8 @@ namespace QtLikeSignal
             return;
         }
 
-        // Copy under its own lock, then invoke released: this is reached both with and without
-        // mMutex held, and the callback is user code that must not be run while holding a lock we
-        // might not even own.
+        // Copy under its own lock, then invoke released. Every caller has already dropped mMutex, so
+        // the callback is free to post, start a timer, or otherwise call straight back in.
         std::function<void()> callback;
         {
             std::lock_guard<std::mutex> lock( mWakeCallbackMutex );
@@ -358,26 +357,33 @@ namespace QtLikeSignal
             return;
         }
 
-        std::lock_guard<std::mutex> lock( mMutex );
-        auto now = std::chrono::steady_clock::now();
-        TimerData td;
-        td.mTimerId    = aTimerId;
-        td.mIntervalMs = aInterval;
-        td.mReceiver   = aObject;
-        td.mNextFire   = now + std::chrono::milliseconds( aInterval );
-
-        for( auto& t : mTimers )
         {
-            if( t.mTimerId == aTimerId )
+            std::lock_guard<std::mutex> lock( mMutex );
+            auto now = std::chrono::steady_clock::now();
+            TimerData td;
+            td.mTimerId    = aTimerId;
+            td.mIntervalMs = aInterval;
+            td.mReceiver   = aObject;
+            td.mNextFire   = now + std::chrono::milliseconds( aInterval );
+
+            bool replaced = false;
+            for( auto& t : mTimers )
             {
-                t             = td;
-                mTimersChanged = true;
-                wakeWaiter();
-                return;
+                if( t.mTimerId == aTimerId )
+                {
+                    t        = td;
+                    replaced = true;
+                    break;
+                }
             }
+            if( !replaced )
+            {
+                mTimers.push_back( td );
+            }
+            mTimersChanged = true;
         }
-        mTimers.push_back( td );
-        mTimersChanged = true;
+
+        // Woken with mMutex released, matching postEvent(). See wakeWaiter().
         wakeWaiter();
     }
 
@@ -388,8 +394,27 @@ namespace QtLikeSignal
         int aTimerId  //!< Unique timer identifier.
         )
     {
-        std::lock_guard<std::mutex> lock( mMutex );
+        bool removed = false;
+        {
+            std::lock_guard<std::mutex> lock( mMutex );
+            removed = takeTimerLocked( aTimerId );
+        }
 
+        if( removed )
+        {
+            // Woken with mMutex released, matching postEvent(). See wakeWaiter().
+            wakeWaiter();
+        }
+        return removed;
+    }
+
+    //! Removes timer @p aTimerId and every pending event for it. Returns true if it was registered.
+    //! Callers must hold mMutex.
+    bool EventDispatcherDefault::takeTimerLocked
+        (
+        int aTimerId  //!< Unique timer identifier.
+        )
+    {
         // Drop any TimerEvent for this timer that has already been queued but not yet delivered.
         //
         // This became necessary when timer ids started being recycled. Previously a stale event was
@@ -429,7 +454,6 @@ namespace QtLikeSignal
         {
             mTimers.erase( it, mTimers.end() );
             mTimersChanged = true;
-            wakeWaiter();
             return true;
         }
         return false;
@@ -626,24 +650,34 @@ namespace QtLikeSignal
             return taken;
         }
 
-        std::lock_guard<std::mutex> lock( mMutex );
-
-        auto it = std::remove_if( mTimers.begin(),
-            mTimers.end(),
-            [aReceiver, &taken]( const TimerData& aTd )
-            {
-                if( aTd.mReceiver != aReceiver )
-                {
-                    return false;
-                }
-                taken.push_back( { aTd.mTimerId, aTd.mIntervalMs } );
-                return true;
-            } );
-        if( it != mTimers.end() )
+        bool removedAny = false;
         {
-            mTimers.erase( it, mTimers.end() );
-            // The wait deadline was computed from a timer list that no longer holds these entries.
-            mTimersChanged = true;
+            std::lock_guard<std::mutex> lock( mMutex );
+
+            auto it = std::remove_if( mTimers.begin(),
+                mTimers.end(),
+                [aReceiver, &taken]( const TimerData& aTd )
+                {
+                    if( aTd.mReceiver != aReceiver )
+                    {
+                        return false;
+                    }
+                    taken.push_back( { aTd.mTimerId, aTd.mIntervalMs } );
+                    return true;
+                } );
+            if( it != mTimers.end() )
+            {
+                mTimers.erase( it, mTimers.end() );
+                // The wait deadline was computed from a timer list that no longer holds these
+                // entries.
+                mTimersChanged = true;
+                removedAny     = true;
+            }
+        }
+
+        if( removedAny )
+        {
+            // Woken with mMutex released, matching postEvent(). See wakeWaiter().
             wakeWaiter();
         }
 
