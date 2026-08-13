@@ -1506,3 +1506,209 @@ TEST( ObjectDefectTest, TimerIdsAreRecycled )
         << "). Ids are not being returned to the pool, so the counter climbs until it wraps and "
         "eventually collides with the -1 failure sentinel.";
 }
+
+// ---------------------------------------------------------------------------------------------
+// Defect (R28, fixed 2026-08-13): an object destroyed during a dispatch pass still received the
+// rest of that pass.
+//
+// processEvents() takes its work out of the shared containers before it dispatches -- the event
+// queue is swapped into a local batch, expired timers are collected into another -- so that no lock
+// is held while a handler runs. ~Object() -> removeEventsForReceiver() could only see the
+// containers, never the batches, so an object deleted from inside any handler left its remaining
+// entries in the pass and each one was dispatched through a freed pointer.
+//
+// The timer half crashed outright; the queued half did not, which made it the more dangerous of the
+// two. Both batches are now published under the dispatcher's mutex, and removeEventsForReceiver()
+// cancels the destroyed receiver's entries in them -- the same mechanism unregisterTimer() has used
+// on the timer batch since R24, wired to the other canceller as well.
+// ---------------------------------------------------------------------------------------------
+
+//! Fires on a timer and deletes a nominated sibling from inside the handler.
+class TimerHandlerSiblingKiller : public Object
+{
+public:
+    Object* mVictim { nullptr };            //!< Deleted on the first fire, then cleared.
+    int mFireCount { 0 };                    //!< Fires delivered to this object.
+
+protected:
+    virtual void timerEvent
+        (
+        TimerEvent* aEvent
+        ) override
+    {
+        ( void )aEvent;
+        ++mFireCount;
+        delete mVictim;
+        mVictim = nullptr;
+    }
+};
+
+//! Counts the timer events it is given, so a delivery to a destroyed object is visible as a count.
+class TimerFireCounter : public Object
+{
+public:
+    int mFireCount { 0 };  //!< Fires delivered to this object.
+
+protected:
+    virtual void timerEvent
+        (
+        TimerEvent* aEvent
+        ) override
+    {
+        ( void )aEvent;
+        ++mFireCount;
+    }
+};
+
+//! Verifies an object deleted from inside a sibling's timer handler is not then sent its own timer.
+//!
+//! Both timers use the same interval, so both TimerEvents are collected into one batch before
+//! either handler runs. The first handler deletes the second object; its event is already in the
+//! batch by then.
+//!
+//! Before the fix this **segfaulted** in a plain build -- Object::event() reading the vtable of a
+//! freed object -- and AddressSanitizer reported a heap-use-after-free in
+//! EventDispatcherDefault::processEvents(). A crash is the assertion here; the surviving-object
+//! checks below are what keep the test honest if the crash ever becomes a silent corruption again.
+TEST( EventDispatcherDefaultDefectTest, ObjectDeletedDuringTimerDispatchIsNotThenSentItsOwnTimer )
+{
+    // The current thread's own dispatcher, not a standalone one: the defect is in the interaction
+    // between ~Object() and the pass, and ~Object() cancels through the dispatcher its affinity
+    // names. A detached dispatcher would never be reached and the test would pass vacuously.
+    Thread* thread = Thread::currentThread();
+    ASSERT_NE( thread, nullptr );
+
+    auto* killer = new TimerHandlerSiblingKiller();
+    auto* victim = new TimerFireCounter();
+    killer->mVictim = victim;
+
+    constexpr int kIntervalMs = 10;
+    ASSERT_GT( killer->startTimer( kIntervalMs ), 0 );
+    ASSERT_GT( victim->startTimer( kIntervalMs ), 0 );
+
+    // Well past both deadlines, so the collection loop takes both into one batch.
+    std::this_thread::sleep_for( std::chrono::milliseconds( kIntervalMs * 4 ) );
+    thread->processEvents();
+
+    EXPECT_EQ( killer->mFireCount, 1 )
+        << "the surviving object's own timer should still have been delivered.";
+    EXPECT_EQ( killer->mVictim, nullptr ) << "the handler did not run the deletion it exists for.";
+
+    delete killer;
+}
+
+//! Destroys a nominated object from inside a *nested* dispatch pass run from its timer handler.
+class NestedPassSiblingKiller : public Object
+{
+public:
+    Object* mVictim { nullptr };  //!< deleteLater()'d and then reaped by the nested pass.
+    int mFireCount { 0 };          //!< Fires delivered to this object.
+
+protected:
+    virtual void timerEvent
+        (
+        TimerEvent* aEvent
+        ) override
+    {
+        ( void )aEvent;
+        ++mFireCount;
+        if( mVictim )
+        {
+            mVictim->deleteLater();
+            mVictim = nullptr;
+
+            // Nested pass. It drains the deferred delete just queued, so the victim is destroyed
+            // one dispatch pass *inside* the one that is still holding its TimerEvent.
+            Thread::currentThread()->processEvents();
+        }
+    }
+};
+
+//! Verifies a destruction inside a nested pass also cancels the outer pass's entries.
+//!
+//! Nested event processing is ordinary in Qt-shaped code -- a handler runs its own loop and returns
+//! later. The outer pass is suspended, not finished: it still holds a batch it will go on
+//! dispatching. So the cancellation raised by ~Object() inside the nested pass has to reach the
+//! outer batch too, which is why running passes are published as a chain rather than as one frame.
+//!
+//! With a single published frame this test crashes exactly like the non-nested one, and for a
+//! sharper reason: the nested pass would not merely hide the outer frame, it would clear the
+//! publication on the way out and leave the rest of the outer pass unprotected.
+TEST( EventDispatcherDefaultDefectTest, DeletionInANestedPassCancelsTheOuterPassEntriesToo )
+{
+    Thread* thread = Thread::currentThread();
+    ASSERT_NE( thread, nullptr );
+
+    auto* killer = new NestedPassSiblingKiller();
+    auto* victim = new TimerFireCounter();
+    killer->mVictim = victim;
+
+    // Registration order is batch order, so the killer's timer is collected ahead of the victim's
+    // and the victim is destroyed while its own TimerEvent is still waiting in that batch.
+    constexpr int kIntervalMs = 10;
+    ASSERT_GT( killer->startTimer( kIntervalMs ), 0 );
+    ASSERT_GT( victim->startTimer( kIntervalMs ), 0 );
+
+    std::this_thread::sleep_for( std::chrono::milliseconds( kIntervalMs * 4 ) );
+    thread->processEvents();
+
+    EXPECT_EQ( killer->mFireCount, 1 );
+    EXPECT_EQ( killer->mVictim, nullptr ) << "the handler did not run the deletion it exists for.";
+
+    delete killer;
+}
+
+//! Deletes itself from inside a queued call, and reports that it ran to a counter the test owns.
+class QueuedCallSelfDeleter : public Object
+{
+public:
+    int* mCallCount { nullptr };  //!< Points at the test's own stack, so it outlives this object.
+
+    void onCall
+        (
+        int aValue
+        )
+    {
+        ( void )aValue;
+        ++( *mCallCount );
+        delete this;
+    }
+};
+
+//! Verifies an object deleted in a queued call is not then sent a deferred delete from that batch.
+//!
+//! The queue holds a metacall and then a deferred delete for the same object, so both are taken
+//! into one batch. The metacall destroys the object; the deferred delete is already in the batch by
+//! then, and dispatching it runs `delete this` a second time. Before the fix this **segfaulted**.
+//!
+//! This ordering is the queued path's *observable* half, and it is the only one worth asserting on.
+//! Its mirror image -- two ordinary metacalls, the first deleting the receiver -- is undefined
+//! behaviour that today touches nothing: Object::event() is not virtual, and its MetaCall branch
+//! reads only the event, never `this`, so the second entry calls a member function on a destroyed
+//! object without dereferencing a single byte of it. Not even AddressSanitizer can see that, so
+//! there is nothing a test could assert. The fix covers both; only this one can be pinned.
+//!
+//! Note also what does *not* cover this: the deletedReceivers guard in processEvents() records a
+//! receiver only once a DeferredDeleteEvent has destroyed it. Here the object is destroyed by an
+//! ordinary metacall, so the guard never learns about it.
+TEST( ObjectDefectTest, DeferredDeleteInTheSameBatchDoesNotDeleteAnAlreadyDeletedObject )
+{
+    Thread* thread = Thread::currentThread();
+    ASSERT_NE( thread, nullptr );
+
+    int callCount = 0;
+
+    Signal<int> signal;
+    auto* receiver = new QueuedCallSelfDeleter();
+    receiver->mCallCount = &callCount;
+
+    Object::connect( signal, receiver, &QueuedCallSelfDeleter::onCall, ConnectionType::Queued );
+
+    signal.emit( 1 );          // MetaCallEvent, dispatched first
+    receiver->deleteLater();   // DeferredDeleteEvent, same batch, dispatched second
+
+    thread->processEvents();
+
+    EXPECT_EQ( callCount, 1 )
+        << "the queued call should have run exactly once and destroyed the receiver.";
+}

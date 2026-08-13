@@ -14,16 +14,19 @@ probe was written.
 ## Status at a glance
 
 > **Baseline.** `./waf build` succeeds and the suite passes: **164 tests, 0 failures** (2026-08-13,
-> `linux64-clang`, debug). So R28 below is *not* caught by any existing test.
+> `linux64-clang`, debug, no sanitizer). No existing test caught R28.
+>
+> After the R28 fix and its three regression tests: **167 tests, 0 failures**, in declaration order
+> and under `--gtest_shuffle`.
 
-> **`src/tests/QtLikeSignal-test-known-defects.cpp` is still empty.** R28 is the first defect since
-> 2026-08-08 that belongs there. Prove it there, leave it red, and move it to
-> `QtLikeSignal-test-defect-regressions.cpp` once the fix is in — that is what keeps
-> `--gtest_filter=-KnownDefect.*` a trustworthy baseline.
+> **`src/tests/QtLikeSignal-test-known-defects.cpp` is still empty.** R28 went straight to
+> `QtLikeSignal-test-defect-regressions.cpp` because it was fixed in the same pass that found it;
+> its three tests were checked against a deliberately broken build rather than left red first. The
+> file stays for the convention: a defect found without a fix in hand still belongs there.
 
 | ID  | Risk | Severity | Confirmed by |
 |-----|------|----------|--------------|
-| R28 | An object destroyed during a dispatch pass still receives the rest of that batch | **High** | Probe — segfault, and ASan use-after-free |
+| R28 | An object destroyed during a dispatch pass still receives the rest of that batch | **High** | Probe — two segfaults — **Fixed 2026-08-13** |
 | R29 | `connectImpl()` publishes the `Connection` handle outside `mIncomingMutex` | Low | Inspection |
 | R30 | `unregisterEventSource()` does not stop a callback that is already in flight | Low-Med | Inspection |
 | R31 | Three dispatcher paths run the wake callback with `mMutex` held; `postEvent()` does not | Low | Inspection |
@@ -32,9 +35,55 @@ Still open from earlier passes, restated at the end: R9, R15, R22 (Windows resid
 
 ---
 
-## R28 — an object destroyed during a dispatch pass still receives the rest of that batch
+## R28 — an object destroyed during a dispatch pass still receives the rest of that batch *(fixed 2026-08-13)*
 
 **Severity: High. Confirmed by probe. This is the most serious finding in this pass.**
+
+> **Resolution (2026-08-13).** A dispatch pass now publishes the batches it is working through, and
+> `removeEventsForReceiver()` cancels the destroyed receiver's entries in them. This is the mechanism
+> `unregisterTimer()` has used on the timer batch since R24, generalised to all three batches and
+> wired to the other canceller as well.
+>
+> **Published as a chain, not as one frame.** `mDispatchFrames` links every pass currently running on
+> the dispatcher, innermost first ([EventDispatcherDefault.h](src/EventDispatcherDefault.h)). Passes
+> nest — a handler running its own `processEvents()` is ordinary in Qt-shaped code — and the outer
+> pass is *suspended, not finished*: it still holds a batch it will go on dispatching when the nested
+> one returns. A single published frame would let the inner pass hide the outer one and then clear
+> the publication on the way out, which is worse than not publishing at all, because it looks safe.
+> A frame is unlinked by searching for it rather than by popping the head, so two threads driving one
+> dispatcher cannot corrupt the chain.
+>
+> All three dispatch loops now take each entry out of their batch under the lock, clearing the slot
+> as they go, exactly as the timer loop already did. That is what makes cancellation safe rather than
+> a new race: whoever clears an entry owns its event, and the other side sees `nullptr` and skips.
+> The cost is one uncontended mutex acquire per dispatched event, against the several hundred
+> nanoseconds a queued metacall already costs.
+>
+> `processDeferredDeletes()` got the same treatment. It has the identical shape — collect into a
+> local vector, dispatch with the lock released — and destroying one object there can destroy another
+> that is also in that batch.
+>
+> `deletedReceivers` is kept. It is now redundant in the common case but not in all of them:
+> `~Object()` cancels through the dispatcher its *current* affinity names, so an object whose
+> affinity changed after its events were posted cancels somewhere else and leaves ours behind.
+>
+> Three regression tests, each pinning a different property, and each verified against a
+> deliberately broken build rather than assumed:
+>
+> | test | what it pins | with that part removed |
+> |---|---|---|
+> | `EventDispatcherDefaultDefectTest.ObjectDeletedDuringTimerDispatchIsNotThenSentItsOwnTimer` | the timer batch is cancellable | **segfault** (exit 139) |
+> | `ObjectDefectTest.DeferredDeleteInTheSameBatchDoesNotDeleteAnAlreadyDeletedObject` | the event batch is cancellable | **segfault** (exit 139) |
+> | `EventDispatcherDefaultDefectTest.DeletionInANestedPassCancelsTheOuterPassEntriesToo` | the chain, not just the innermost frame | **segfault** (exit 139) |
+>
+> The third was written after the first two were already green, because the first version of this fix
+> published one frame per dispatcher and would have passed both of them while still crashing under
+> nesting. Restricting the cancellation walk to the innermost frame leaves the first two tests
+> passing and crashes only the third, which is what makes them three tests rather than one.
+>
+> Suite: **167 tests, 0 failures**, in declaration order and under `--gtest_shuffle`. Standalone ASan
+> runs of both crash scenarios report no error and no leak, which is the check that matters for a fix
+> that changes who deletes each event.
 
 `EventDispatcherDefault::processEvents()` takes two snapshots before it dispatches anything: it
 swaps the whole event queue into a local `eventsToProcess`
@@ -82,7 +131,7 @@ freed by thread T0 here:
 `src/EventDispatcherDefault.cpp:234` is the `ep.mReceiver->event( ep.mEvent )` of the timer loop.
 This is a segfault in a plain build, not a latent hazard.
 
-### The queued-event half — the same hole, quieter
+### The queued-event half — a second crash, and one claim withdrawn
 
 Four queued metacalls to one receiver; the first deletes the receiver. Tracing the dispatch loop:
 
@@ -94,11 +143,37 @@ TRACE entry recv=0x6e2307de0040 ...   TRACE calling event() on 0x6e2307de0040
 TRACE entry recv=0x6e2307de0040 ...   TRACE calling event() on 0x6e2307de0040
 ```
 
-`event()` runs three times on the destroyed object. It happens to do no visible damage here,
-because `Object::event()` reads a vtable and an event type that the freed block still holds, and
-the metacall closure's own `weakLife.expired()` check then makes the call a no-op. That is luck,
-not a guard: the dereference of the freed receiver happens *before* the life token is ever
-consulted. This half is the more dangerous one precisely because it does not crash.
+`event()` runs three times on the destroyed object.
+
+> **Correction.** The first draft of this entry called that "a use-after-free that happens to do no
+> damage, because the freed block still holds a usable vtable". That is wrong, and the reason is
+> worth keeping. `Object::event()` is **not virtual** — only `timerEvent()` is
+> ([Object.h:582](src/Object.h#L582), [Object.h:89](src/Object.h#L89)) — and its `MetaCall` branch
+> reads only the event, never `this` ([Object.cpp:539-541](src/Object.cpp#L539-L541)). So those
+> three calls dereference no byte of the freed object at all. They are undefined behaviour (a member
+> call on a destroyed object) that no sanitizer can see, which is exactly what the first probe
+> found: ASan stayed silent while the timer probe it was compared against reported cleanly. The
+> draft asserted a dereference that does not occur, on evidence that showed the opposite.
+
+The queued path does crash, but through a narrower door. Put a `deleteLater()` *after* a queued
+emission, so the batch is `[MetaCall, DeferredDelete]` for one object, and let the metacall delete
+the object:
+
+```
+onCall, deleting self
+~SelfDeleter 0x5bf2415f41c0
+Segmentation fault (core dumped)
+```
+
+`Event::DeferredDelete` runs `delete this` ([Object.cpp:535-537](src/Object.cpp#L535-L537)), so the
+second entry deletes an object that the first one already destroyed. That is a double free, and it
+is the queued half's real severity. The `deletedReceivers` guard does not cover it: that set records
+a receiver only once a `DeferredDeleteEvent` has destroyed it, and here the destruction came from an
+ordinary metacall.
+
+So both halves crash. The genuinely silent case — two plain metacalls — is undefined behaviour with
+no observable today, and it stops being harmless the moment `event()` becomes virtual or its
+`MetaCall` branch touches a member.
 
 ### Why this was not caught earlier
 
@@ -112,24 +187,13 @@ walks past the very guard that would have covered it.
 
 ### Fix
 
-Make `removeEventsForReceiver()` reach both in-flight snapshots, the way `unregisterTimer()`
-already reaches one:
-
-1. Publish the event batch under `mMutex` as well (a second pointer beside
-   `mDispatchingTimerBatch`, retracted by the same `BatchRetractor`).
-2. In `removeEventsForReceiver()`, null the `mEvent` of every entry in both published batches whose
-   `mReceiver` matches, and delete those events. Both dispatch loops already skip a null `mEvent`,
-   so nothing else has to change in them.
-3. Keep `deletedReceivers`; it stays the cheaper guard for the `DeferredDelete` case.
+Make `removeEventsForReceiver()` reach the in-flight snapshots, the way `unregisterTimer()` already
+reaches one. See the resolution block at the top of this entry for what was done.
 
 Qt does not need any of this because it never snapshots: `QCoreApplication::sendPostedEvents()`
-walks `QThreadData::postEventList` in place under the list mutex, and
-`removePostedEvents()` blanks entries in that same list. Our snapshot is what buys the lock-free
-dispatch, so the batches have to be reachable for cancellation instead.
-
-**Recommended test** (`KnownDefect.*` first): the timer version is deterministic and crashes
-without a sanitizer, so it is the better regression test of the two. Add the queued version beside
-it, asserted through a counter rather than a crash.
+walks `QThreadData::postEventList` in place under the list mutex, and `removePostedEvents()` blanks
+entries in that same list. Our snapshot is what buys the lock-free dispatch, so the batches have to
+be reachable for cancellation instead.
 
 ## R29 — `connectImpl()` publishes the `Connection` handle outside `mIncomingMutex`
 
@@ -236,7 +300,15 @@ Re-checked against the current tree, not re-probed.
 
 ## Suggested order
 
-1. **R28** — the only item here that crashes.
+1. ~~**R28**~~ — done 2026-08-13.
 2. **R29** — small, and it is a data race, so it will surface under TSan sooner or later.
 3. **R31** — a comment or three unlock calls.
 4. **R30** — documentation is enough unless a real event source is added.
+
+## Follow-up the R28 fix exposed but did not close
+
+`~Object()` cancels pending work through the dispatcher its **current** affinity names. An object
+whose affinity changed after events were posted for it therefore cancels on the new thread and
+leaves its events sitting in the old thread's queue. `moveToThread()` migrates active timers
+([Object.cpp:399-445](src/Object.cpp#L399-L445)) but not posted events; Qt migrates both. Not
+probed, and not part of R28 — recorded here so the next pass has the thread to pull.
