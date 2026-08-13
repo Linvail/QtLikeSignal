@@ -75,6 +75,9 @@ namespace QtLikeSignal
         //!
         //! Static, like exit()/quit(), so any thread can hand work to the main loop without holding
         //! a pointer to the application. Does nothing if no application exists.
+        //!
+        //! Thread-safety is not guaranteed if the CoreApplication object is being destroyed at the
+        //! same time. This holds for exit() and quit() too; the definitions carry the reasoning.
         static void post
             (
             std::function<void()> aTask
