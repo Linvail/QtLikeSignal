@@ -20,9 +20,10 @@ How every figure below was produced is at the end of this document, under
 | P7 | **Fixed** | `disconnect()` is O(slots on the signal), so tearing down N receivers of one signal is O(N²) | High | 671.2 ms → **3.98 ms** for 16 000 receivers, and flat |
 | P8 | **In progress** | A connect makes the next emit rebuild the whole slot list | Medium | Churn 16.8 → **13.1 µs** per cycle; the rebuild itself remains |
 | P9 | **By Design** | The R28 correctness fix costs one mutex per dispatched event | Low | **+3.3 ns** per event |
+| P10 | **Queue** | `connect()` spreads one connection over five heap blocks where Qt uses one node | Low-Med | Measured — **5 allocations / 364 B** against Qt's 2 / 104 B |
 
-**Everything here is now measured, and nothing is queued.** Four items are fixed, four are accepted
-costs, and one is partly done and deliberately parked.
+**Everything here is measured.** Four items are fixed, four are accepted costs, one is partly done
+and deliberately parked, and one is queued with a known shape.
 
 Two things are worth knowing without reading further:
 
@@ -232,11 +233,9 @@ confirming the saving is on the path it was aimed at.
 - **Auto same-thread, ~46 ns against ~28 ns.** The remainder is P2: the affinity read locks a mutex
   where Qt does an atomic load, and it is accepted for the lifetime guarantee it buys. Direct
   connections skip it entirely.
-- **`connect()`, ~320 ns against ~110 ns.** Three heap allocations per connection — `Slot`,
-  `ConnectionState`, and the growth of the working list — plus `connectImpl()` building a `Cleanup`
-  token and taking `mIncomingMutex`. Qt walks a preallocated connection list. `connect()` is not a
-  hot path, and the benchmark connects 20 000 slots to one signal so it also measures list growth.
-  Not worth chasing.
+- **`connect()`, ~320 ns against ~110 ns.** Counted, not guessed: **five heap allocations and 364
+  bytes per connection, against Qt's two and 104** — which is the 2.9x, since the time ratio tracks
+  the byte ratio almost exactly. The breakdown and what it buys is P10 below.
 - **Queued cross-thread is at parity**, so the three-mutex analysis in the 2026-08-08 entry no longer
   describes a gap worth closing. It still describes the structure — `ThreadData` owns a *pointer to a
   dispatcher* that owns the queue ([ThreadData.hpp:61-77](src/ThreadData.hpp#L61-L77)), where Qt puts
@@ -331,6 +330,44 @@ is why it is By Design rather than queued.
 The R30 fix adds a second lock of the same kind and is not worth measuring: one acquire per *ready
 descriptor per poll round*, not per event, on a path that has just returned from a syscall.
 
+## P10 — one connection costs five heap blocks *(Queue)*
+
+`connect()` is ~320 ns against Qt 6's ~110 ns (P6). Counted with an instrumented `operator new`,
+20 000 connections, sizes attributed by their footprint:
+
+| block | ours | what it is | Qt's equivalent |
+|---|---|---|---|
+| 88 B | ×1 | the wrapper closure, type-erased into `std::function` | a 16 B slot object |
+| 80 B | ×1 | `Slot` — the callable, the state pointer, the list index | — |
+| 72 B | ×1 | `Cleanup` — prunes `Object::mIncoming` when the connection ends | — |
+| 40 B | ×1 | `ConnectionState` — the shared live flag a handle reads | — |
+| 32 B | ×1 | the receiver's `mIncoming` entry | — |
+| | | | one 88 B `Connection` node |
+| **total** | **5 blocks, 364 B** | | **2 blocks, 104 B** |
+
+**One of the five is earned; three are not.** The 88 B closure is the price of having no moc: it
+captures the life token, the context, the affinity box, the cleanup token and the connection type,
+because there is no generated per-class dispatcher to look them up. Qt's slot object is 16 B because
+moc supplies that dispatcher, and the receiver, connection type and list links live in the
+`Connection` node it was going to allocate anyway.
+
+The other three are fragmentation, not function. Qt gets **the same guarantees we do** — two-sided
+teardown, a handle that outlives the signal, O(1) removal from both sides — out of one intrusive,
+refcounted node. We spread them across `Cleanup`, `ConnectionState` and an `mIncoming` vector entry.
+
+**What fusing them would give.** Merge `Cleanup`, `ConnectionState` and `Slot` into one node, and
+make `mIncoming` intrusive — the node is already reachable from both sides, which is what made P7's
+O(1) removal possible. That is 5 allocations to 2 and ~364 B to ~170 B, which by the observed
+proportionality puts `connect()` near Qt's. It would also remove **P7's second-order O(K²)**: the
+linear `std::remove` in `~Cleanup` becomes an unlink.
+
+**Why it is queued and not scheduled.** `connect()` is not a hot path, and the counterweight is
+real: intrusive lifetime management is exactly what this `Signal` was written to avoid, and its
+comments are long because those rules are already subtle. The argument for doing it is **memory, not
+time** — 3.5x per connection, which matters for the embedded-ish target
+`ForAI/mission-signal-code-generator.md` argues for, where per-object footprint was already the
+stronger case.
+
 ---
 
 # How these were measured
@@ -385,6 +422,10 @@ never touched the feature pays for other objects' pending work.
 
 **Dispatch drain (P9).** Post N events to an idle dispatcher, then time one `processEvents()` drain.
 Nothing else runs, so the loop cost is all that is measured.
+
+**Allocation counting (P10, P3).** A global `operator new` counts blocks and bytes between two
+flags, with a size histogram so each block can be attributed to the object that made it. Run against
+20 000 connections so amortised container growth is visible but not dominant.
 
 **Post contention (P4).** T threads post the same number of events each, in two configurations: all
 to **one** dispatcher, and each to its **own**. Same total work, same allocations, same thread count
