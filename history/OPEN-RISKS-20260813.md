@@ -2,108 +2,123 @@
 
 Review of `src/` after the two changes that the 2026-08-08 documents predate: boost::signals2 was
 replaced by our own `Signal`/`Connection` (`40fd910`, `52ef2ff`), and the connect() bodies were
-merged into one `connectImpl()` (`7896ee3`).
+merged into one `connectImpl()` (`7896ee3`). Numbering continues from `OPEN-RISKS-20260808.md`
+(R1–R27). Performance items live in `PERFORMANCE-20260813.md` as `P<n>`.
 
-Numbering continues from `OPEN-RISKS-20260808.md` (R1–R27). Performance items stay in
-`PERFORMANCE-20260813.md` as `P<n>`.
+How each item was confirmed, and the test baseline, are at the end under
+[How these were confirmed](#how-these-were-confirmed).
 
-Each item says how it was confirmed. **Probe** means a throwaway program was compiled against
-`src/` and run, and its output is quoted. **Inspection** means the code was read but no runtime
-probe was written.
+## Status
 
-## Status at a glance
+| ID | Status | Risk | Severity | Evidence and outcome |
+|----|--------|------|----------|----------------------|
+| R9 | **Fixed** | `CoreApplication`'s singleton is unguarded | Low → **Med** | The filed half is accepted; the half nobody filed was a data race on `sInstance`, now atomic |
+| R15 | **Fixed** | "Thread-safe" doc claims not audited against Qt | Medium | Two false claims corrected, and the term is now defined once in `Global.h` |
+| R22 | **Queue** | Windows OS-message dispatch is untested | Medium | Blocked: needs a real Windows message loop, which WSL cannot exercise |
+| R25 | **By Design** | `Object::thread()` costs a mutex (= P2) | Low | Accepted — the mutex buys a lifetime guarantee Qt does not offer |
+| R28 | **Fixed** | An object destroyed during a dispatch pass still receives the rest of that batch | **High** | Probe — two segfaults, one of them a double free. Three regression tests |
+| R29 | **Withdrawn** | ~~`connectImpl()` publishes the `Connection` handle outside `mIncomingMutex`~~ | — | **Not a defect.** TSan probe, 200 000 racing connects against the pre-"fix" code: silent |
+| R30 | **Fixed** | `unregisterEventSource()` does not stop a callback already in flight | Low-Med | Inspection. Unregistration is now synchronous on the loop's own thread |
+| R31 | **Withdrawn** | Three dispatcher paths run the wake callback with `mMutex` held | — | **Not a defect** — the constraint was documented. Contract widened anyway, to remove a trap |
+| R32 | **Queue** | `moveToThread()` does not migrate already-posted events | Unknown | **Inspection only, not probed.** A hypothesis, not a finding |
 
-> **Baseline.** `./waf build` succeeds and the suite passes: **164 tests, 0 failures** (2026-08-13,
-> `linux64-clang`, debug, no sanitizer). No existing test caught any of these.
->
-> After the R28 and R30 fixes, the R31 contract change, and their five tests: **169 tests, 0
-> failures**, in declaration order and under `--gtest_shuffle`.
+**Statuses.** *Fixed* — code changed and the defect is gone. *By Design* — the current state is
+accepted and is not considered a bug. *Withdrawn* — investigated, and there was no defect to fix.
+*Queue* — not started. Nothing is In progress.
 
-> **`src/tests/QtLikeSignal-test-known-defects.cpp` is still empty.** R28 went straight to
-> `QtLikeSignal-test-defect-regressions.cpp` because it was fixed in the same pass that found it;
-> its three tests were checked against a deliberately broken build rather than left red first. The
-> file stays for the convention: a defect found without a fix in hand still belongs there.
-
-| ID  | Risk | Severity | Confirmed by |
-|-----|------|----------|--------------|
-| R28 | An object destroyed during a dispatch pass still receives the rest of that batch | **High** | Probe — two segfaults — **Fixed 2026-08-13** |
-| R29 | ~~`connectImpl()` publishes the `Connection` handle outside `mIncomingMutex`~~ | — | **Withdrawn 2026-08-13 — not a defect** |
-| R30 | `unregisterEventSource()` does not stop a callback that is already in flight | Low-Med | Inspection — **Fixed 2026-08-13** |
-| R31 | Three dispatcher paths run the wake callback with `mMutex` held; `postEvent()` does not | — | **Not a defect** — contract widened 2026-08-13 |
-
-Carried from earlier passes and revisited at the end: **R9 and R15 closed**, R22 (Windows
-residual) and R25 unchanged.
+Everything filed in this pass is closed, and so are the two carried items that could be closed here.
+What is left is R22, which cannot be tested on this machine, R25, which is a deliberate trade, and
+R32, which has not been probed and so is not yet a finding.
 
 ---
 
-## R28 — an object destroyed during a dispatch pass still receives the rest of that batch *(fixed 2026-08-13)*
+# Details
 
-**Severity: High. Confirmed by probe. This is the most serious finding in this pass.**
+## R9 — `CoreApplication`'s singleton is unguarded *(Fixed)*
 
-> **Resolution (2026-08-13).** A dispatch pass now publishes the batches it is working through, and
-> `removeEventsForReceiver()` cancels the destroyed receiver's entries in them. This is the mechanism
-> `unregisterTimer()` has used on the timer batch since R24, generalised to all three batches and
-> wired to the other canceller as well.
->
-> **Published as a chain, not as one frame.** `mDispatchFrames` links every pass currently running on
-> the dispatcher, innermost first ([EventDispatcherDefault.h](src/EventDispatcherDefault.h)). Passes
-> nest — a handler running its own `processEvents()` is ordinary in Qt-shaped code — and the outer
-> pass is *suspended, not finished*: it still holds a batch it will go on dispatching when the nested
-> one returns. A single published frame would let the inner pass hide the outer one and then clear
-> the publication on the way out, which is worse than not publishing at all, because it looks safe.
-> A frame is unlinked by searching for it rather than by popping the head, so two threads driving one
-> dispatcher cannot corrupt the chain.
->
-> All three dispatch loops now take each entry out of their batch under the lock, clearing the slot
-> as they go, exactly as the timer loop already did. That is what makes cancellation safe rather than
-> a new race: whoever clears an entry owns its event, and the other side sees `nullptr` and skips.
-> The cost is one uncontended mutex acquire per dispatched event, against the several hundred
-> nanoseconds a queued metacall already costs.
->
-> `processDeferredDeletes()` got the same treatment. It has the identical shape — collect into a
-> local vector, dispatch with the lock released — and destroying one object there can destroy another
-> that is also in that batch.
->
-> `deletedReceivers` is kept. It is now redundant in the common case but not in all of them:
-> `~Object()` cancels through the dispatcher its *current* affinity names, so an object whose
-> affinity changed after its events were posted cancels somewhere else and leaves ours behind.
->
-> Three regression tests, each pinning a different property, and each verified against a
-> deliberately broken build rather than assumed:
->
-> | test | what it pins | with that part removed |
-> |---|---|---|
-> | `EventDispatcherDefaultDefectTest.ObjectDeletedDuringTimerDispatchIsNotThenSentItsOwnTimer` | the timer batch is cancellable | **segfault** (exit 139) |
-> | `ObjectDefectTest.DeferredDeleteInTheSameBatchDoesNotDeleteAnAlreadyDeletedObject` | the event batch is cancellable | **segfault** (exit 139) |
-> | `EventDispatcherDefaultDefectTest.DeletionInANestedPassCancelsTheOuterPassEntriesToo` | the chain, not just the innermost frame | **segfault** (exit 139) |
->
-> The third was written after the first two were already green, because the first version of this fix
-> published one frame per dispatcher and would have passed both of them while still crashing under
-> nesting. Restricting the cancellation walk to the innermost frame leaves the first two tests
-> passing and crashes only the third, which is what makes them three tests rather than one.
->
-> Suite: **167 tests, 0 failures**, in declaration order and under `--gtest_shuffle`. Standalone ASan
-> runs of both crash scenarios report no error and no leak, which is the check that matters for a fix
-> that changes who deletes each event.
+Two halves, and the one that was filed was the less important one.
+
+**Filed: a second application object is not rejected.** No change, deliberately. It is a warning
+rather than an abort ([CoreApplication.cpp](src/CoreApplication.cpp#L48-L59)); the first instance
+stays the one `instance()` reports, so the damage is contained and visible. Qt asserts. A diagnostic
+is more useful than killing the process, and constructing two is misuse either way.
+
+**Not filed, and the real problem: `sInstance` was a plain pointer.** `instance()`, `exit()`,
+`quit()` and `post()` are all callable from any thread and all read it, while the constructor and
+destructor write it from the main thread. Every one of those was a data race, under a "Thread-safe"
+that promised otherwise. Now `std::atomic<CoreApplication*>`, with a compare-exchange at both writes
+so "the first one wins" holds even under the misuse the warning exists to report.
+
+Qt 6 has the identical plain pointer and knows it: `QCoreApplication` keeps a second, atomic
+`g_self` for internal use and documents `instanceExists()` as "a Qt 6 thread-safe (no data races)
+version of `instance() != nullptr`". Qt 7 makes the pointer itself atomic behind a `#warning`.
+
+What is left is documented, not fixed: a caller may load the pointer and then dereference it while
+the main thread runs `~CoreApplication()`. All four now carry the caveat in Qt's own words — Qt has
+the same hole on `quit()` and states it the same way. That makes it the caller's, which under this
+project's rule ends it.
+
+## R15 — "Thread-safe" doc claims not audited against Qt *(Fixed)*
+
+Sized properly, this was never 76 claims. It was **two false ones and a definition**, and both false
+ones are corrected.
+
+- **`Object::objectName()` / `setObjectName()`** — said "Thread-safe"; they read and write a plain
+  `std::string` with no lock. The member's own comment in [Object.h](src/Object.h#L792-L799) said the
+  opposite ("deliberately unguarded … naming it from another is the same **misuse**"), so the header
+  blamed the caller and the implementation invited them in. Now "Not thread-safe: must be called from
+  this object's own thread", on the declarations as well. Comment change only. Qt agrees: its
+  `objectName()` has no locking, and its cross-thread branch is commented `// Unsafe code path`.
+- **The four `CoreApplication` statics** — see R9 above.
+
+**The definition is now written**, at the top of [Global.h](src/Global.h): "Thread-safe" means
+callable concurrently without a data race, and nothing more — not that the answer is still true when
+it reaches you, and not that two such calls are atomic. "Not thread-safe" always names the thread
+that may call. The four claims that promise less than a reader assumes — `Signal::empty()`,
+`Signal::receivers()`, `Thread::isRunning()`, `Thread::isFinished()` — now say so at the function as
+well. Qt does exactly this: `\threadsafe` on `QThread::isRunning()` plus a separate note that the
+thread may still be running afterwards.
+
+One process lesson worth keeping: both false claims lived in a `.cpp` while the truth lived in the
+`.h`. They were never read side by side. **A thread-safety claim belongs on the declaration.**
+
+## R22 — Windows OS-message dispatch is untested *(Queue)*
+
+Unchanged, and deliberately so. Nothing in the suite creates a real window or posts a real `WM_`
+message, so `TranslateMessage`/`DispatchMessage` and the `WM_QUIT` branch of `EventDispatcherWin32`
+have still never executed. Mission stage 5's "I want to receive OS/platform's messages" is proven on
+Linux and only inferred on Windows.
+
+**Blocked rather than deferred.** Closing it needs a real Windows message loop, which this
+development machine cannot provide from WSL. It waits for a Windows run.
+
+## R25 — `Object::thread()` costs a mutex *(By Design)*
+
+`Affinity::data()` still locks ([ThreadData.hpp:127-131](src/ThreadData.hpp#L127-L131)). This is the
+same item as P2 in `PERFORMANCE-20260813.md`, where the numbers and the full reasoning live.
+
+Accepted: the mutex buys a strong reference guaranteed alive for the duration of the call, which
+Qt's raw `QAtomicPointer` does not offer, and removing it needs retired-pointer retention. A
+`DirectConnection` no longer reads the affinity box at all, so what remains is a constant factor on
+the auto and queued paths.
+
+## R28 — an object destroyed during a dispatch pass still receives the rest of that batch *(Fixed)*
+
+**Severity: High. Confirmed by probe. The most serious finding in this pass.**
 
 `EventDispatcherDefault::processEvents()` takes two snapshots before it dispatches anything: it
-swaps the whole event queue into a local `eventsToProcess`
-([EventDispatcherDefault.cpp:149](src/EventDispatcherDefault.cpp#L149)), and it collects expired
-timers into a local `timerEventsToProcess`
-([EventDispatcherDefault.cpp:54-76](src/EventDispatcherDefault.cpp#L54-L76)). It then walks both
-lists with `mMutex` released, calling `ep.mReceiver->event( ep.mEvent )` on each entry.
+swaps the whole event queue into a local `eventsToProcess`, and it collects expired timers into a
+local `timerEventsToProcess`. It then walks both lists with `mMutex` released, calling
+`ep.mReceiver->event( ep.mEvent )` on each entry.
 
-`~Object()` calls `removeEventsForReceiver()`
-([Object.cpp:205-212](src/Object.cpp#L205-L212)), and that function strips the object's entries
-from `mEventQueue` and `mTimers` only
-([EventDispatcherDefault.cpp:457-490](src/EventDispatcherDefault.cpp#L457-L490)). **Neither
-snapshot is reachable from it.** So an object destroyed by any handler in a pass keeps its
-remaining entries in that pass, and each one is a call through a freed pointer.
+`~Object()` calls `removeEventsForReceiver()`, and that function stripped the object's entries from
+`mEventQueue` and `mTimers` only. **Neither snapshot was reachable from it.** So an object destroyed
+by any handler in a pass kept its remaining entries in that pass, and each one was a call through a
+freed pointer.
 
-The one guard that exists, `deletedReceivers`
-([EventDispatcherDefault.cpp:183](src/EventDispatcherDefault.cpp#L183)), covers only receivers
-destroyed *through a `DeferredDeleteEvent` in this same batch*. A plain `delete` from inside a slot
-or a timer handler is not covered, and neither is a `deleteLater()` that was already dispatched.
+The one guard that existed, `deletedReceivers`, covers only receivers destroyed *through a
+`DeferredDeleteEvent` in this same batch*. A plain `delete` from inside a slot or a timer handler is
+not covered, and neither is a `deleteLater()` that was already dispatched.
 
 ### The timer half — a hard crash
 
@@ -129,32 +144,21 @@ freed by thread T0 here:
     #1 Ticker::~Ticker()
 ```
 
-`src/EventDispatcherDefault.cpp:234` is the `ep.mReceiver->event( ep.mEvent )` of the timer loop.
-This is a segfault in a plain build, not a latent hazard.
+That line is the `ep.mReceiver->event( ep.mEvent )` of the timer loop. A segfault in a plain build,
+not a latent hazard.
 
-### The queued-event half — a second crash, and one claim withdrawn
+### The queued half — a second crash, and one claim withdrawn
 
-Four queued metacalls to one receiver; the first deletes the receiver. Tracing the dispatch loop:
-
-```
-TRACE batch size=4
-TRACE entry recv=0x6e2307de0040 ...   TRACE calling event() on 0x6e2307de0040 -> hit 1, delete this
-TRACE entry recv=0x6e2307de0040 ...   TRACE calling event() on 0x6e2307de0040
-TRACE entry recv=0x6e2307de0040 ...   TRACE calling event() on 0x6e2307de0040
-TRACE entry recv=0x6e2307de0040 ...   TRACE calling event() on 0x6e2307de0040
-```
-
-`event()` runs three times on the destroyed object.
+Four queued metacalls to one receiver; the first deletes the receiver. `event()` runs three times on
+the destroyed object.
 
 > **Correction.** The first draft of this entry called that "a use-after-free that happens to do no
 > damage, because the freed block still holds a usable vtable". That is wrong, and the reason is
-> worth keeping. `Object::event()` is **not virtual** — only `timerEvent()` is
-> ([Object.h:582](src/Object.h#L582), [Object.h:89](src/Object.h#L89)) — and its `MetaCall` branch
-> reads only the event, never `this` ([Object.cpp:539-541](src/Object.cpp#L539-L541)). So those
-> three calls dereference no byte of the freed object at all. They are undefined behaviour (a member
-> call on a destroyed object) that no sanitizer can see, which is exactly what the first probe
-> found: ASan stayed silent while the timer probe it was compared against reported cleanly. The
-> draft asserted a dereference that does not occur, on evidence that showed the opposite.
+> worth keeping. `Object::event()` is **not virtual** — only `timerEvent()` is — and its `MetaCall`
+> branch reads only the event, never `this`. So those three calls dereference no byte of the freed
+> object at all. They are undefined behaviour that no sanitizer can see, which is exactly what the
+> probe found: ASan stayed silent while the timer probe it was compared against reported cleanly.
+> The draft asserted a dereference that does not occur, on evidence that showed the opposite.
 
 The queued path does crash, but through a narrower door. Put a `deleteLater()` *after* a queued
 emission, so the batch is `[MetaCall, DeferredDelete]` for one object, and let the metacall delete
@@ -166,41 +170,78 @@ onCall, deleting self
 Segmentation fault (core dumped)
 ```
 
-`Event::DeferredDelete` runs `delete this` ([Object.cpp:535-537](src/Object.cpp#L535-L537)), so the
-second entry deletes an object that the first one already destroyed. That is a double free, and it
-is the queued half's real severity. The `deletedReceivers` guard does not cover it: that set records
-a receiver only once a `DeferredDeleteEvent` has destroyed it, and here the destruction came from an
-ordinary metacall.
+`Event::DeferredDelete` runs `delete this`, so the second entry deletes an object the first one
+already destroyed. That double free is the queued half's real severity, and `deletedReceivers` does
+not cover it: that set records a receiver only once a `DeferredDeleteEvent` has destroyed it, and
+here the destruction came from an ordinary metacall.
 
 So both halves crash. The genuinely silent case — two plain metacalls — is undefined behaviour with
 no observable today, and it stops being harmless the moment `event()` becomes virtual or its
 `MetaCall` branch touches a member.
 
-### Why this was not caught earlier
+### Why it was not caught earlier
 
-The timer batch already has a publication mechanism —
-`mDispatchingTimerBatch` ([EventDispatcherDefault.cpp:154](src/EventDispatcherDefault.cpp#L154)) —
-added by R24 so that `unregisterTimer()` can cancel entries in a batch that is being dispatched.
-The mechanism is right; it is only wired to `unregisterTimer()`. `~Object()` never calls
-`unregisterTimer()` for its running timers — it calls `removeEventsForReceiver()` and then hands
-the ids back to the pool ([Object.cpp:214-225](src/Object.cpp#L214-L225)) — so object destruction
-walks past the very guard that would have covered it.
+The timer batch already had a publication mechanism, `mDispatchingTimerBatch`, added by R24 so that
+`unregisterTimer()` could cancel entries in a batch being dispatched. The mechanism was right; it was
+only wired to `unregisterTimer()`. `~Object()` never calls `unregisterTimer()` for its running timers
+— it calls `removeEventsForReceiver()` and then hands the ids back to the pool — so object
+destruction walked past the very guard that would have covered it.
 
-### Fix
+### The fix
 
-Make `removeEventsForReceiver()` reach the in-flight snapshots, the way `unregisterTimer()` already
-reaches one. See the resolution block at the top of this entry for what was done.
+A dispatch pass now publishes the batches it is working through, and `removeEventsForReceiver()`
+cancels the destroyed receiver's entries in them — the R24 mechanism generalised to all three
+batches and wired to both cancellers.
 
-Qt does not need any of this because it never snapshots: `QCoreApplication::sendPostedEvents()`
-walks `QThreadData::postEventList` in place under the list mutex, and `removePostedEvents()` blanks
-entries in that same list. Our snapshot is what buys the lock-free dispatch, so the batches have to
-be reachable for cancellation instead.
+**Published as a chain, not as one frame.** `mDispatchFrames` links every pass currently running on
+the dispatcher, innermost first ([EventDispatcherDefault.h](src/EventDispatcherDefault.h)). Passes
+nest — a handler running its own `processEvents()` is ordinary in Qt-shaped code — and the outer pass
+is *suspended, not finished*: it still holds a batch it will go on dispatching when the nested one
+returns. A single published frame would let the inner pass hide the outer one and then clear the
+publication on the way out, which is worse than not publishing at all, because it looks safe. A frame
+is unlinked by searching for it rather than by popping the head, so two threads driving one dispatcher
+cannot corrupt the chain.
 
-## R29 — ~~`connectImpl()` publishes the `Connection` handle outside `mIncomingMutex`~~ *(withdrawn 2026-08-13: not a defect)*
+All three dispatch loops now take each entry out of their batch under the lock, clearing the slot as
+they go, exactly as the timer loop already did. That is what makes cancellation safe rather than a
+new race: whoever clears an entry owns its event, and the other side sees `nullptr` and skips. The
+cost is one uncontended mutex acquire per dispatched event — measured at +3.3 ns, recorded as P9.
+
+`processDeferredDeletes()` got the same treatment: identical shape, and destroying one object there
+can destroy another that is also in that batch.
+
+`deletedReceivers` is kept. It is now redundant in the common case but not in all of them: `~Object()`
+cancels through the dispatcher its *current* affinity names, so an object whose affinity changed after
+its events were posted cancels somewhere else and leaves ours behind. That gap is R32.
+
+Qt needs none of this because it never snapshots: `QCoreApplication::sendPostedEvents()` walks
+`QThreadData::postEventList` in place under the list mutex, and `removePostedEvents()` blanks entries
+in that same list. Our snapshot is what buys the lock-free dispatch, so the batches have to be
+reachable for cancellation instead.
+
+### Tests
+
+Three, each pinning a different property, each verified against a deliberately broken build:
+
+| test | what it pins | with that part removed |
+|---|---|---|
+| `EventDispatcherDefaultDefectTest.ObjectDeletedDuringTimerDispatchIsNotThenSentItsOwnTimer` | the timer batch is cancellable | **segfault** (exit 139) |
+| `ObjectDefectTest.DeferredDeleteInTheSameBatchDoesNotDeleteAnAlreadyDeletedObject` | the event batch is cancellable | **segfault** (exit 139) |
+| `EventDispatcherDefaultDefectTest.DeletionInANestedPassCancelsTheOuterPassEntriesToo` | the chain, not just the innermost frame | **segfault** (exit 139) |
+
+The third was written after the first two were green, because the first version of this fix published
+one frame per dispatcher and would have passed both while still crashing under nesting. Restricting
+the cancellation walk to the innermost frame leaves the first two passing and crashes only the third,
+which is what makes them three tests rather than one.
+
+Standalone ASan runs of both crash scenarios report no error and no leak — the check that matters for
+a fix that changes who deletes each event.
+
+## R29 — ~~`connectImpl()` publishes the `Connection` handle outside `mIncomingMutex`~~ *(Withdrawn)*
 
 **This entry was wrong. It is kept, rather than deleted, so the same reading is not filed again.**
 
-The claim was that [Object.h](src/Object.h)'s `connectImpl()` races `~Cleanup()`:
+The claim was that `connectImpl()` races `~Cleanup()`:
 
 ```cpp
 Connection handle = aSignal.connect( wrapper );   // the slot is live from here on
@@ -228,209 +269,135 @@ assignment stating the invariant, because the code does look racy at a glance �
 there ("publish the handle before registering it, so the destructor has something to match on")
 described an ordering that does not matter and did not mention the one that does.
 
-## R30 — `unregisterEventSource()` does not stop a callback that is already in flight *(fixed 2026-08-13)*
+## R30 — `unregisterEventSource()` does not stop a callback already in flight *(Fixed)*
 
 **Severity: Low-Medium. Inspection.**
 
-> **Resolution (2026-08-13).** `waitForEvents()` no longer copies the callbacks out with the
-> descriptor set. It snapshots only each source's *identity* — descriptor plus a generation stamp —
-> and looks the callback up again under `mMutex` immediately before invoking it
-> ([EventDispatcherLinux.cpp](src/EventDispatcherLinux.cpp)). Same rule as the R28 dispatch batches:
-> re-check under the lock, act outside it.
->
-> The generation stamp is what makes the descriptor an identity. A descriptor number is reused after
-> close, so an fd alone cannot tell "still registered" from "unregistered, closed, and reopened by
-> something else". Every `registerEventSource()` takes a fresh generation, replacements included.
->
-> This makes unregistration **synchronous when called from the dispatcher's own thread**, including
-> from inside another callback, which is the case a caller can actually rely on. From another thread
-> it still is not, and cannot be without blocking on arbitrary user code; the doxygen now says so
-> plainly instead of implying the opposite.
->
-> Covered by `EventDispatcherLinuxTest.SourceUnregisteredFromACallbackIsNotCalledInThatRound`: two
-> descriptors ready in one `poll()` round, the first callback unregistering the second. Verified to
-> catch the regression — restoring the up-front callback copy makes it fail with the sibling's call
-> count at 1.
+`EventDispatcherLinux::waitForEvents()` snapshotted the descriptor set *and copied the callbacks out*
+under `mMutex`, then unlocked and invoked them. `unregisterEventSource()` removed the source, woke the
+loop, and returned `true`.
 
-`EventDispatcherLinux::waitForEvents()` snapshots the descriptor set *and copies the callbacks out*
-under `mMutex` ([EventDispatcherLinux.cpp:129-143](src/EventDispatcherLinux.cpp#L129-L143)), then
-unlocks and invokes them ([EventDispatcherLinux.cpp:159-167](src/EventDispatcherLinux.cpp#L159-L167)).
-`unregisterEventSource()` ([EventDispatcherLinux.cpp:86-112](src/EventDispatcherLinux.cpp#L86-L112))
-removes the source and wakes the loop, then returns `true`.
-
-So a callback copied into the snapshot still runs after `unregisterEventSource()` has returned. Its
-doxygen invites exactly the use that breaks: it is marked thread-safe, and the comment says the
-caller "is entitled to close it once we return". A caller that unregisters and then destroys what
-the callback captured has a use-after-free; a caller that unregisters and closes the descriptor gets
-one final callback carrying `POLLNVAL`.
+So a callback copied into the snapshot still ran after `unregisterEventSource()` had returned. Its
+doxygen invited exactly the use that breaks: marked thread-safe, and saying the caller "is entitled to
+close it once we return". A caller that unregisters and then destroys what the callback captured has a
+use-after-free; one that unregisters and closes the descriptor gets a final callback carrying
+`POLLNVAL`.
 
 Qt has the same shape but not the same exposure — `QSocketNotifier` is thread-confined to its own
-loop, so unregistration cannot overlap a dispatch. Ours is documented as callable from anywhere.
+loop, so unregistration cannot overlap a dispatch. Ours was documented as callable from anywhere.
 
-**Fix, cheapest first:** state in the doxygen that unregistration is only synchronous when called
-from the dispatcher's own thread, and that a callback may still run once otherwise. If a real
-guarantee is wanted, give each source a generation counter checked under `mMutex` immediately before
-the callback is invoked.
+**The fix.** `waitForEvents()` no longer copies the callbacks out. It snapshots only each source's
+*identity* — descriptor plus a generation stamp — and looks the callback up again under `mMutex`
+immediately before invoking it. Same rule as R28's dispatch batches: re-check under the lock, act
+outside it.
 
-## R31 — three dispatcher paths run the wake callback with `mMutex` held *(contract widened 2026-08-13)*
+The generation stamp is what makes the descriptor an identity. A descriptor number is reused after
+close, so an fd alone cannot tell "still registered" from "unregistered, closed, and reopened by
+something else". Every `registerEventSource()` takes a fresh generation, replacements included.
 
-**Not a defect. Inspection. Recorded as one; that was the wrong label, see below.**
+This makes unregistration **synchronous when called from the dispatcher's own thread**, including from
+inside another callback, which is the case a caller can actually rely on. From another thread it still
+is not, and cannot be without blocking on arbitrary user code; the doxygen now says so plainly instead
+of implying the opposite.
 
-> **This was never a bug, and the entry originally said it was.** The constraint was documented:
-> `Thread::setWakeCallback()` said the callback "must not block or re-enter the dispatcher". A
-> callback that re-entered was therefore misuse, and the deadlock that followed was the caller's,
-> not ours. This project does not treat the consequences of ignoring a stated precondition as
-> defects, and this entry should not have been an exception. An earlier draft called it "a reachable
-> deadlock", which asserts the opposite.
->
-> What was actually wrong with it is worth keeping, because it is why the change was still made: the
-> constraint was **inconsistent and untestable**. Three of the six paths did not need it, and the one
-> a callback author would naturally test against — `postEvent()` — was among them. So a violating
-> callback passed every test and deadlocked the first time a timer happened to wake the loop. A
-> precondition that only bites on a path you did not exercise is a trap, not a contract. Widening
-> the contract removes the trap; it does not fix a defect.
+Covered by `EventDispatcherLinuxTest.SourceUnregisteredFromACallbackIsNotCalledInThatRound`: two
+descriptors ready in one `poll()` round, the first callback unregistering the second. Verified to
+catch the regression — restoring the up-front callback copy makes it fail with the sibling's call
+count at 1.
 
-> **Change (2026-08-13).** `registerTimer()`, `unregisterTimer()` and `takeTimersForReceiver()`
-> now scope their lock and call `wakeWaiter()` after releasing it, matching `postEvent()`. Only
-> `unregisterTimer()` needed restructuring, and its body moved into a `takeTimerLocked()` helper so
-> the early returns stay readable.
->
-> The permissive contract is now the documented one, in all three places that stated the strict one:
-> `AbstractEventDispatcher::setWakeCallback()`, `Thread::setWakeCallback()` and
-> `EventDispatcherDefault::wakeWaiter()`. A wake callback may call back into the dispatcher; it
-> should still not block, because it runs on the poster's thread on the critical path of every post.
->
-> `EventDispatcherDefaultDefectTest.WakeCallbackMayReEnterTheDispatcherFromEveryPath` pins the new
-> contract rather than proving an old defect. It installs a callback that posts back into the
-> dispatcher and drives all three paths. With the wake put back inside `registerTimer()`'s lock it
-> deadlocks, and the test **fails in 5 s with the reason attached** rather than hanging: the work
-> runs on a worker thread behind a future, and the failure path detaches that thread onto a
-> deliberately leaked dispatcher rather than letting it hold a pointer into a dead stack frame.
->
-> Keeping the test matters more than it would for a bug fix. A widened contract is only worth the
-> paper it is written on if something fails when it narrows again by accident.
+## R31 — three dispatcher paths run the wake callback with `mMutex` held *(Withdrawn)*
 
-`wakeWaiter()` may invoke `mWakeCallback`, which is user code
-([EventDispatcherDefault.cpp:270-295](src/EventDispatcherDefault.cpp#L270-L295)). Its own comment
-says the callback "must not be run while holding a lock we might not even own". Four callers, and
-they do not agree:
+**Not a defect. Recorded as one; that was the wrong label.**
 
-| caller | `mMutex` when `wakeWaiter()` runs |
+The constraint was documented: `Thread::setWakeCallback()` said the callback "must not block or
+re-enter the dispatcher". A callback that re-entered was therefore misuse, and the deadlock that
+followed was the caller's, not ours. This project does not treat the consequences of ignoring a stated
+precondition as defects, and this entry should not have been an exception. An earlier draft called it
+"a reachable deadlock", which asserts the opposite.
+
+What *was* wrong with it is why the change was still made: the constraint was **inconsistent and
+untestable**. `wakeWaiter()` may invoke the callback, and the callers did not agree:
+
+| caller | `mMutex` when `wakeWaiter()` ran |
 |---|---|
-| `postEvent()` | released first ([EventDispatcherDefault.cpp:431-445](src/EventDispatcherDefault.cpp#L431-L445)) |
-| `wakeUp()`, `interrupt()` | released first |
-| `registerTimer()` | **held** ([EventDispatcherDefault.cpp:330-350](src/EventDispatcherDefault.cpp#L330-L350)) |
-| `unregisterTimer()` | **held** ([EventDispatcherDefault.cpp:360-412](src/EventDispatcherDefault.cpp#L360-L412)) |
-| `takeTimersForReceiver()` | **held** ([EventDispatcherDefault.cpp:506-524](src/EventDispatcherDefault.cpp#L506-L524)) |
+| `postEvent()`, `wakeUp()`, `interrupt()` | released first |
+| `registerTimer()`, `unregisterTimer()`, `takeTimersForReceiver()` | **held** |
 
-`Thread::setWakeCallback()` documents the strict contract — "called with the dispatcher's internals
-locked, so it must not block or re-enter the dispatcher"
-([Thread.cpp:458-459](src/Thread.cpp#L458-L459)) — so a conforming callback is safe today. The
-problem is that `postEvent()`, the path a callback author will actually test against, is the
-permissive one. A callback that posts back into the same dispatcher works in every test and
-self-deadlocks the first time a timer is started, because the mutex is not recursive.
+So a violating callback passed every test anyone would write — `postEvent()` is the path you reach
+for — and deadlocked the first time a timer happened to wake the loop. A precondition that only bites
+on a path you did not exercise is a trap, not a contract.
 
-**Options:** pick one. Releasing the lock before `wakeWaiter()` in the three timer paths matches
-`postEvent()` and lets the documented contract be relaxed; keeping them and documenting the strict
-contract on `AbstractEventDispatcher` as well is the smaller change. The first was taken — see the
-change above. A callback that must not touch the dispatcher is a rule nobody can test their way into
-remembering, and the Windows dispatcher would have had to honour it too.
+**The change.** The three timer paths now scope their lock and call `wakeWaiter()` after releasing it,
+matching `postEvent()`. Only `unregisterTimer()` needed restructuring, and its body moved into a
+`takeTimerLocked()` helper so the early returns stay readable. The permissive contract is now the
+documented one in all three places that stated the strict one:
+`AbstractEventDispatcher::setWakeCallback()`, `Thread::setWakeCallback()` and
+`EventDispatcherDefault::wakeWaiter()`. A wake callback may call back into the dispatcher; it should
+still not block, because it runs on the poster's thread on the critical path of every post.
+
+`EventDispatcherDefaultDefectTest.WakeCallbackMayReEnterTheDispatcherFromEveryPath` pins the new
+contract rather than proving an old defect. With the wake put back inside `registerTimer()`'s lock it
+deadlocks, and the test **fails in 5 s with the reason attached** rather than hanging: the work runs
+on a worker thread behind a future, and the failure path detaches that thread onto a deliberately
+leaked dispatcher rather than letting it hold a pointer into a dead stack frame.
+
+Keeping the test matters more than it would for a bug fix. A widened contract is only worth the paper
+it is written on if something fails when it narrows again by accident.
+
+## R32 — `moveToThread()` does not migrate already-posted events *(Queue)*
+
+**Inspection only, and not probed. This is a hypothesis, not a finding** — see the note on inspection
+findings at the end of this document.
+
+`~Object()` cancels pending work through the dispatcher its **current** affinity names. An object
+whose affinity changed after events were posted for it would therefore cancel on the new thread and
+leave those events sitting in the old thread's queue. `moveToThread()` migrates active timers
+([Object.cpp:399-445](src/Object.cpp#L399-L445)) but not posted events; Qt migrates both.
+
+Exposed by the R28 fix, which is what made the affinity-dependence of cancellation explicit, but not
+part of it. The `deletedReceivers` guard in `processEvents()` was kept precisely because of this case.
+
+Before filing this as a defect, probe it: move an object between threads with events already queued,
+destroy it, and see whether the old thread's dispatcher then walks a freed pointer.
 
 ---
 
-## From earlier passes
+# How these were confirmed
 
-### R9 — `CoreApplication`'s singleton is unguarded *(closed 2026-08-13)*
+**Probe** means a throwaway program was compiled against `src/` and run, and its output is quoted in
+the entry. **Inspection** means the code was read but no runtime probe was written. The distinction
+matters more than it looks — see below.
 
-Two halves, and the one that was filed was the less important one.
+**Baseline.** `./waf build` succeeds and the suite passes: **164 tests, 0 failures** (2026-08-13,
+`linux64-clang`, debug, no sanitizer). No existing test caught any of these. After the R28 and R30
+fixes, the R31 contract change and their five tests: **169 tests, 0 failures**, in declaration order
+and under `--gtest_shuffle`.
 
-**Filed: a second application object is not rejected.** No change, deliberately. It is a warning
-rather than an abort ([CoreApplication.cpp](src/CoreApplication.cpp#L48-L59)); the first instance
-stays the one `instance()` reports, so the damage is contained and visible. Qt asserts. A diagnostic
-is more useful than killing the process, and constructing two is misuse either way.
+**Every regression test here was verified against a deliberately broken build**, not merely observed
+to pass. A test that has never failed has not been shown to test anything. Where a fix had several
+independent parts, each part was disabled separately, which is what established that R28 needed three
+tests rather than one.
 
-**Not filed, and the real problem: `sInstance` was a plain pointer.** `instance()`, `exit()`,
-`quit()` and `post()` are all callable from any thread and all read it, while the constructor and
-destructor write it from the main thread. Every one of those was a data race, under a "Thread-safe"
-that promised otherwise. Now `std::atomic<CoreApplication*>`, with a compare-exchange at both writes
-so "the first one wins" holds even under the misuse the warning exists to report.
+**`src/tests/QtLikeSignal-test-known-defects.cpp` is still empty.** R28 went straight to
+`QtLikeSignal-test-defect-regressions.cpp` because it was fixed in the same pass that found it. The
+file stays for the convention: a defect found *without* a fix in hand still belongs there, red, until
+one exists.
 
-Qt 6 has the identical plain pointer and knows it: `QCoreApplication` keeps a second, atomic
-`g_self` for internal use and documents `instanceExists()` as "a Qt 6 thread-safe (no data races)
-version of `instance() != nullptr`". Qt 7 makes the pointer itself atomic behind a `#warning`.
+## The lesson this pass earned
 
-What is left is documented, not fixed: a caller may load the pointer and then dereference it while
-the main thread runs `~CoreApplication()`. All four now carry the caveat in Qt's own words — Qt has
-the same hole on `quit()` and states it the same way. That makes it the caller's, which under this
-project's rule ends it.
+**Two of the four items filed were not defects, and both were filed from inspection alone.**
 
-### R15 — "Thread-safe" doc claims not audited against Qt *(closed 2026-08-13)*
+- **R29 was simply wrong.** The reasoning was local to one function and the disproof was one ownership
+  fact three lines above it.
+- **R31 was real but mislabelled.** The constraint it violated was documented, so breaking it was
+  misuse, and this project does not count the consequences of misuse as defects.
 
-Sized properly, this was never 76 claims. It was **two false ones and a definition**, and both false
-ones are corrected.
+The two that were defects, R28 and R30, were both confirmed by running something.
 
-- **`Object::objectName()` / `setObjectName()`** — said "Thread-safe"; they read and write a plain
-  `std::string` with no lock. The member's own comment in [Object.h](src/Object.h#L792-L799) said the
-  opposite ("deliberately unguarded … naming it from another is the same **misuse**"), so the header
-  blamed the caller and the implementation invited them in. Now "Not thread-safe: must be called from
-  this object's own thread", on the declarations as well. Comment change only. Qt agrees: its
-  `objectName()` has no locking, and its cross-thread branch is commented `// Unsafe code path`.
-- **The four `CoreApplication` statics** — see R9 above.
+So: **an inspection finding is a hypothesis.** Probe it before filing it. And before filing it, check
+whether the behaviour it complains about is already written down as a precondition — a documented
+precondition moves the fault to the caller. What that does *not* excuse is a precondition that is
+inconsistent or untestable, which is what R31 turned out to be.
 
-**The definition is now written**, at the top of [Global.h](src/Global.h): "Thread-safe" means
-callable concurrently without a data race, and nothing more — not that the answer is still true when
-it reaches you, and not that two such calls are atomic. "Not thread-safe" always names the thread
-that may call. The four claims that promise less than a reader assumes — `Signal::empty()`,
-`Signal::receivers()`, `Thread::isRunning()`, `Thread::isFinished()` — now say so at the function as
-well. Qt does exactly this: `\threadsafe` on `QThread::isRunning()` plus a separate note that the
-thread may still be running afterwards.
-
-**R15 is closed.**
-
-One process lesson worth keeping: both false claims lived in a `.cpp` while the truth lived in the
-`.h`. They were never read side by side. A thread-safety claim belongs on the declaration.
-
-### R22 residual — Windows OS-message dispatch is still untested
-
-Unchanged. Nothing in the suite creates a real window or posts a real `WM_` message, so
-`TranslateMessage`/`DispatchMessage` and the `WM_QUIT` branch of `EventDispatcherWin32` have still
-never executed. Mission stage 5's "I want to receive OS/platform's messages" is proven on Linux only.
-
-### R25 — `Object::thread()` costs a mutex
-
-Unchanged; `Affinity::data()` still locks ([ThreadData.hpp:127-131](src/ThreadData.hpp#L127-L131)).
-Numbers live in `PERFORMANCE-20260808.md` (P2), and the reasoning there still holds: the mutex buys
-a lifetime guarantee Qt does not offer. Recommended **not** to do standalone — the direct emit path
-no longer reads the affinity box at all, so this is now a constant factor on the queued path only.
-Fold it into the P6 change that moves the event queue into `ThreadData`, or leave it.
-
-## Suggested order
-
-1. ~~**R28**~~ — fixed 2026-08-13.
-2. ~~**R29**~~ — withdrawn 2026-08-13; there was no defect.
-3. ~~**R31**~~ — contract widened 2026-08-13; there was no defect here either.
-4. ~~**R30**~~ — fixed 2026-08-13.
-
-Everything filed in this pass is now closed, and so are R9 and R15. What remains anywhere is the R22
-Windows residual (deliberately left: it cannot be exercised from WSL), R25, and the performance items
-in `PERFORMANCE-20260813.md` — where P7 and P1, the two that grew without bound, were both fixed on
-2026-08-13 and only constant factors are left.
-
-**Two of the four were not defects, and both were filed from inspection alone.** R29 was simply
-wrong: the reasoning was local to one function and the disproof was one ownership fact three lines
-above it. R31 was real but mislabelled — the constraint it violated was documented, so breaking it
-was misuse, and this project does not count the consequences of misuse as defects. The two that
-were defects, R28 and R30, were both confirmed by running something.
-
-That is the rule this pass earned: **an inspection finding is a hypothesis.** Probe it before
-filing it, and before filing it, check whether the behaviour it complains about is already written
-down as a precondition. A documented precondition moves the fault to the caller; what it does not
-excuse is a precondition that is inconsistent or untestable, which is what R31 turned out to be.
-
-## Follow-up the R28 fix exposed but did not close
-
-`~Object()` cancels pending work through the dispatcher its **current** affinity names. An object
-whose affinity changed after events were posted for it therefore cancels on the new thread and
-leaves its events sitting in the old thread's queue. `moveToThread()` migrates active timers
-([Object.cpp:399-445](src/Object.cpp#L399-L445)) but not posted events; Qt migrates both. Not
-probed, and not part of R28 — recorded here so the next pass has the thread to pull.
+R32 is filed under that rule: listed so it is not lost, labelled as unprobed so it is not mistaken
+for a finding.
