@@ -16,19 +16,22 @@ How every figure below was produced is at the end of this document, under
 | P3 | **Fixed** | Every emit builds a `std::function` on the heap, even for a direct call | Medium | 1.00 → **0.00** allocations per direct emit |
 | P4 | **By Design** | One dispatcher mutex serialises every thread posting to one thread | Medium | Measured — a post costs 47 ns alone, **1.19 µs** with 8 posters; Qt serialises identically |
 | P5 | **By Design** | Timer list is scanned linearly twice per dispatch pass | Low | Measured — **0.78 ns per timer** per idle pass; 130 ns at 100 timers |
-| P6 | **Queue** | Dispatch cost against Qt 6 — the whole comparison table is obsolete | Medium | Needs re-running; every row predates our own `Signal` |
+| P6 | **Fixed** | Dispatch cost against Qt 6 — "2–3.5x slower on every row" | Medium | Re-measured — direct emit **beats Qt 6**, queued is parity, and we beat boost on every row |
 | P7 | **Fixed** | `disconnect()` is O(slots on the signal), so tearing down N receivers of one signal is O(N²) | High | 671.2 ms → **3.98 ms** for 16 000 receivers, and flat |
 | P8 | **In progress** | A connect makes the next emit rebuild the whole slot list | Medium | Churn 16.8 → **13.1 µs** per cycle; the rebuild itself remains |
 | P9 | **By Design** | The R28 correctness fix costs one mutex per dispatched event | Low | **+3.3 ns** per event |
 
-Nothing open now degrades with scale under a single thread. P1 and P7 were the two that did, and
-both are fixed. **Everything is now measured** — P4 and P5 were the last two carrying "never
-measured", and both turned out to be accepted costs rather than work. The only item left in the
-queue is P6, which is a stale table rather than a finding.
+**Everything here is now measured, and nothing is queued.** Four items are fixed, four are accepted
+costs, and one is partly done and deliberately parked.
 
-P4 is the one to know about: it does not degrade with data size, it degrades with *concurrency*.
-Posting to a thread from eight others costs 25x what posting from one does. That is Qt's
-architecture as much as ours, and the entry says what changing it would take.
+Two things are worth knowing without reading further:
+
+- **We are faster than Qt 6 on direct emit and level with it on queued cross-thread** (P6), and
+  faster than the boost::signals2 we replaced on every row. Nothing degrades with scale on one
+  thread any more: P1 and P7 were the two that did.
+- **P4 degrades with *concurrency*, not with data.** Posting to a thread from eight others costs 25x
+  what posting from one does. That is Qt's architecture as much as ours, and the entry says what
+  changing it would take.
 
 ---
 
@@ -84,8 +87,12 @@ Qt's implementation are in `PERFORMANCE-20260808.md`.
   taken. P4 is now measured at up to 1.19 µs per post under contention, against this one's 5–6 ns,
   so removing this lock alone would move the queue by a rounding error.
 
-If it is ever done, fold it into the P6 change that moves the event queue into `ThreadData`. Both
-touch the same lifetime question, and doing them separately means solving it twice.
+What this lock still costs is visible in P6's auto same-thread row: ~46 ns against Qt 6's ~28 ns, on
+a path that reads the affinity on every emit. That row is the whole of P2's remaining impact, since
+a `DirectConnection` never reads the box at all.
+
+If it is ever done, fold it in with moving the event queue into `ThreadData` (see P4). Both touch the
+same lifetime question, and doing them separately means solving it twice.
 
 ## P3 — every emit builds a `std::function` on the heap *(Fixed)*
 
@@ -181,19 +188,60 @@ the first entry that is not due and the wait deadline is the head. The cost is t
 `unregisterTimer()` looks up by *id*, and a re-armed repeating timer has to be repositioned, so it
 needs an id index beside the ordering — which is why a sorted vector alone does not do it.
 
-## P6 — the Qt 6 comparison table is obsolete *(Queue)*
+## P6 — dispatch cost against Qt 6 *(Fixed)*
 
-Every row of the table in `PERFORMANCE-20260808.md` was measured with boost::signals2 underneath
-QtLikeSignal. **Do not quote it.** What is known:
+The 2026-08-08 finding was "dispatch costs 2–3.5x Qt 6's" and its table was measured with
+boost::signals2 underneath us. **Re-measured 2026-08-13**, `-O2`, no sanitizer, via
+`src/tests/test_QtLikeSignal_Performance.cpp`, which runs all three libraries in one process:
 
-- The emit rows are certainly better now — see P7 and P8 for measurements against boost.
-- The `connect()` row is a different code path entirely.
-- The queued row's three-mutex analysis still holds *structurally*: `ThreadData` still owns a
-  *pointer to a dispatcher* that owns the queue ([ThreadData.hpp:61-77](src/ThreadData.hpp#L61-L77)),
-  where QtMimic and Qt both put the queue in the thread data directly. That extra lookup is the
-  remaining architectural difference on the queued path.
+| scenario | Qt 6 | QtLikeSignal | QtMimic (boost) | then (2026-08-08) | now |
+|---|---|---|---|---|---|
+| `connect()` | ~110 ns | ~320 ns | ~760 ns | 4.4x slower | **2.9x slower** |
+| emit → receive, direct | ~29 ns | **~24 ns** | ~63 ns | 2.3x slower | **1.2x faster** |
+| emit → receive, auto same-thread | ~28 ns | ~46 ns | ~96 ns | 2.9x slower | **1.6x slower** |
+| emit → receive, queued cross-thread | ~490 ns | ~510 ns | ~550 ns | 1.9x slower | **parity** |
 
-Re-run `src/tests/test_QtLikeSignal_Performance.cpp` without a sanitizer and replace the table.
+**We are now faster than Qt 6 on direct emit and level on queued cross-thread**, and faster than the
+boost we replaced on every row. The two rows still behind Qt have known causes, below.
+
+Numbers are the range over three runs in declaration order plus two under `--gtest_shuffle`; the emit
+rows agreed to within a nanosecond or two across all five, so the ordering bias that invalidated the
+first version of this table is not present. `connect()` is the noisy one — Qt 6 measured anywhere
+from 76 to 119 ns depending on order — so treat its ratio as approximate.
+
+### What the re-measurement changed in the code
+
+The auto row was ~57 ns when this was first re-run, and is ~46 ns now. `Object::isCurrentThread()`
+was written as:
+
+```cpp
+return aData == Thread::currentThread()->threadData();     // shared_ptr copy, to compare pointers
+```
+
+`Thread::threadData()` returns by value, so every `Auto` emit paid an atomic increment and decrement
+to answer a pointer comparison. It now compares bare pointers through a new `threadDataPtr()`, which
+is safe precisely because it is not an ownership handle: `mData` is assigned once in the constructor
+and never reassigned, and the only caller asks it of `Thread::currentThread()` — this thread, which
+cannot be destroyed underneath its own comparison.
+
+**11 ns, about 19% of the auto path**, for four lines. Direct emit is unchanged at 23.3–23.5 ns,
+confirming the saving is on the path it was aimed at.
+
+### What is still behind Qt, and why it stays
+
+- **Auto same-thread, ~46 ns against ~28 ns.** The remainder is P2: the affinity read locks a mutex
+  where Qt does an atomic load, and it is accepted for the lifetime guarantee it buys. Direct
+  connections skip it entirely.
+- **`connect()`, ~320 ns against ~110 ns.** Three heap allocations per connection — `Slot`,
+  `ConnectionState`, and the growth of the working list — plus `connectImpl()` building a `Cleanup`
+  token and taking `mIncomingMutex`. Qt walks a preallocated connection list. `connect()` is not a
+  hot path, and the benchmark connects 20 000 slots to one signal so it also measures list growth.
+  Not worth chasing.
+- **Queued cross-thread is at parity**, so the three-mutex analysis in the 2026-08-08 entry no longer
+  describes a gap worth closing. It still describes the structure — `ThreadData` owns a *pointer to a
+  dispatcher* that owns the queue ([ThreadData.hpp:61-77](src/ThreadData.hpp#L61-L77)), where Qt puts
+  the queue in the thread data directly — and that is where P4's contention lives, but on a single
+  posting thread it costs nothing measurable.
 
 ## P7 — `disconnect()` is O(slots on the signal) *(Fixed)*
 

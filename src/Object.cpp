@@ -358,7 +358,10 @@ namespace QtLikeSignal
         const std::shared_ptr<ThreadData>& aData
         )
     {
-        return aData == Thread::currentThread()->threadData();
+        // Compared as bare pointers. Asking for the shared_ptr instead cost an atomic increment and
+        // decrement on every Auto emit, to answer a question that never needed ownership: the
+        // caller already holds aData alive, and the other side is this very thread's own data.
+        return aData.get() == Thread::currentThread()->threadDataPtr();
     }
 
     //! Gets the thread affinity of this object. Thread-safe. Never returns a dangling pointer: the
