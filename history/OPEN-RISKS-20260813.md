@@ -27,8 +27,8 @@ accepted and is not considered a bug. *Withdrawn* — investigated, and there wa
 *Queue* — not started. Nothing is In progress.
 
 Everything filed in this pass is closed, and so are the two carried items that could be closed here.
-What is left is R22, which cannot be tested on this machine, R25, which is a deliberate trade, and
-R32, which has not been probed and so is not yet a finding.
+Three remain open: **R22**, which cannot be tested on this machine; **R25**, a deliberate trade; and
+**R32**, which was probed on 2026-08-14 and is now the only confirmed defect still open.
 
 ---
 
