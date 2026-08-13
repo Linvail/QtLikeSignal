@@ -17,6 +17,21 @@ namespace QtLikeSignal
         struct ConnectionState
         {
             std::atomic<bool> mConnected { true };
+
+            //! The slot this state belongs to, type-erased, so disconnect() can reach it.
+            //!
+            //! Weak, because the slot owns this state and not the other way round. Type-erased,
+            //! because this struct cannot name Signal<Args...>::Slot; the Signal that created it
+            //! static_pointer_casts it back, which is well-defined because only that Signal ever
+            //! writes it.
+            //!
+            //! It exists so removing one connection is O(1). Without it the only way to find the
+            //! slot was to scan the signal's whole list, which made tearing down N receivers of one
+            //! signal O(N^2) -- see PERFORMANCE-20260813.md (P7).
+            //!
+            //! Written once, by connect(), before the handle reaches any caller. Never written
+            //! again, so concurrent readers need no lock.
+            std::weak_ptr<void> mSlot;
         };
 
         //! The part of a Signal a Connection can reach without knowing its argument types.
@@ -30,14 +45,19 @@ namespace QtLikeSignal
         public:
             virtual ~SignalImplBase() = default;
 
-            //! Drops every slot whose state reports itself disconnected.
+            //! Drops the one slot @p aState belongs to.
             //!
             //! Called after a Connection clears its own flag. Removing the slot is what destroys
             //! it, which is what the rest of the library depends on: the slot owns the Cleanup
             //! token that prunes Object::mIncoming, so a disconnect has to be visible there
             //! immediately rather than at some later sweep.
-            virtual void removeDisconnected() = 0;
-
+            //!
+            //! Takes the state rather than sweeping for dead slots, so the cost is O(1) in the
+            //! number of connections rather than O(all of them).
+            virtual void removeConnection
+                (
+                const std::shared_ptr<ConnectionState>& aState
+                ) = 0;
         };
     }
 
@@ -88,7 +108,7 @@ namespace QtLikeSignal
 
             if( auto impl = mImpl.lock() )
             {
-                impl->removeDisconnected();
+                impl->removeConnection( mState );
             }
         }
 

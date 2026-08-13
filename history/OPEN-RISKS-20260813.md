@@ -31,8 +31,8 @@ probe was written.
 | R30 | `unregisterEventSource()` does not stop a callback that is already in flight | Low-Med | Inspection — **Fixed 2026-08-13** |
 | R31 | Three dispatcher paths run the wake callback with `mMutex` held; `postEvent()` does not | — | **Not a defect** — contract widened 2026-08-13 |
 
-Carried from earlier passes and revisited at the end: **R9 closed**, **R15 reduced to one item**,
-R22 (Windows residual) and R25 unchanged.
+Carried from earlier passes and revisited at the end: **R9 and R15 closed**, R22 (Windows
+residual) and R25 unchanged.
 
 ---
 
@@ -364,7 +364,7 @@ the main thread runs `~CoreApplication()`. All four now carry the caveat in Qt's
 the same hole on `quit()` and states it the same way. That makes it the caller's, which under this
 project's rule ends it.
 
-### R15 — "Thread-safe" doc claims not audited against Qt *(reduced 2026-08-13)*
+### R15 — "Thread-safe" doc claims not audited against Qt *(closed 2026-08-13)*
 
 Sized properly, this was never 76 claims. It was **two false ones and a definition**, and both false
 ones are corrected.
@@ -377,12 +377,15 @@ ones are corrected.
   `objectName()` has no locking, and its cross-thread branch is commented `// Unsafe code path`.
 - **The four `CoreApplication` statics** — see R9 above.
 
-**Still open: the definition.** "Thread-safe" appears 76 times and has never been defined. It should
-mean *callable concurrently without a data race*, and nothing more — stated once, in
-[Global.h](src/Global.h). Several true claims promise less than a reader assumes: `Signal::empty()`,
-`Signal::receivers()`, `Thread::isRunning()` and `Thread::isFinished()` are all race-free and all
-return an answer that is stale on return. Qt handles exactly this by marking `QThread::isRunning()`
-`\threadsafe` **and** attaching a separate note that the thread may still be running afterwards.
+**The definition is now written**, at the top of [Global.h](src/Global.h): "Thread-safe" means
+callable concurrently without a data race, and nothing more — not that the answer is still true when
+it reaches you, and not that two such calls are atomic. "Not thread-safe" always names the thread
+that may call. The four claims that promise less than a reader assumes — `Signal::empty()`,
+`Signal::receivers()`, `Thread::isRunning()`, `Thread::isFinished()` — now say so at the function as
+well. Qt does exactly this: `\threadsafe` on `QThread::isRunning()` plus a separate note that the
+thread may still be running afterwards.
+
+**R15 is closed.**
 
 One process lesson worth keeping: both false claims lived in a `.cpp` while the truth lived in the
 `.h`. They were never read side by side. A thread-safety claim belongs on the declaration.
@@ -408,9 +411,10 @@ Fold it into the P6 change that moves the event queue into `ThreadData`, or leav
 3. ~~**R31**~~ — contract widened 2026-08-13; there was no defect here either.
 4. ~~**R30**~~ — fixed 2026-08-13.
 
-Everything filed in this pass is now closed, and so is R9. What remains anywhere is small and named:
-R15's definition, the R22 Windows residual, R25, and the performance items in
-`PERFORMANCE-20260813.md` — where P7 (quadratic teardown) is the largest thing still open.
+Everything filed in this pass is now closed, and so are R9 and R15. What remains anywhere is the R22
+Windows residual (deliberately left: it cannot be exercised from WSL), R25, and the performance items
+in `PERFORMANCE-20260813.md` — where P7 and P1, the two that grew without bound, were both fixed on
+2026-08-13 and only constant factors are left.
 
 **Two of the four were not defects, and both were filed from inspection alone.** R29 was simply
 wrong: the reasoning was local to one function and the disproof was one ownership fact three lines

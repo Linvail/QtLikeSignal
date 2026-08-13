@@ -6,6 +6,32 @@
 #include <memory>
 #include <type_traits>
 
+//! @file
+//!
+//! @section thread_safety What "Thread-safe" means in this library
+//!
+//! It appears on roughly seventy declarations, so it needs one meaning rather than seventy.
+//!
+//! **"Thread-safe" means: callable concurrently from any thread without a data race.** That is all
+//! it means. It is not a promise that the answer is still true when it reaches you, and it is not a
+//! promise that a sequence of two such calls is atomic.
+//!
+//! In particular, a query marked thread-safe may be **stale on return**. `Signal::empty()`,
+//! `Signal::receivers()`, `Thread::isRunning()` and `Thread::isFinished()` are all race-free and all
+//! answer about an instant that has already passed; another thread may connect, disconnect, start or
+//! finish before you act on the answer. Use them for diagnostics and assertions, not for decisions
+//! that must still hold a line later. Qt draws the same line: it marks `QThread::isRunning()`
+//! `\threadsafe` and separately warns that the thread may still be running afterwards.
+//!
+//! **"Not thread-safe" means the opposite is documented, not merely absent**, and it always names
+//! the thread that may call: "must be called from this object's own thread". Calling it from
+//! elsewhere is misuse. This library does not treat the consequences of misuse as defects, which is
+//! precisely why the claim has to be accurate -- a false "Thread-safe" moves the fault to us. Two
+//! were found and corrected on 2026-08-13; see history/OPEN-RISKS-20260813.md (R15).
+//!
+//! Neither claim says anything about *reentrancy* -- calling back into the same object from a slot
+//! it invoked. Where that matters it is documented at the function.
+
 namespace QtLikeSignal
 {
     //! Specifies the type of a signal-slot connection.

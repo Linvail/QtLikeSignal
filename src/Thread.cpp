@@ -249,13 +249,17 @@ namespace QtLikeSignal
         }
     }
 
-    //! Checks if the thread is currently running. Thread-safe.
+    //! Checks if the thread is currently running. Thread-safe, and stale on return: the thread may
+    //! start or finish before you act on the answer, so this reports an instant that has passed. To
+    //! synchronise with a thread's end, call wait(). Qt attaches the same warning to
+    //! QThread::isRunning(). See Global.h.
     bool Thread::isRunning() const
     {
         return mData->isThreadRunning();
     }
 
-    //! Checks if the thread has finished execution. Thread-safe.
+    //! Checks if the thread has finished execution. Thread-safe, and stale on return; see
+    //! isRunning() above and Global.h.
     bool Thread::isFinished() const
     {
         return mFinishing.load();

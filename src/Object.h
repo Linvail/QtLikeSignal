@@ -792,6 +792,26 @@ namespace QtLikeSignal
         std::shared_ptr<int> mLife;                          //!< Lifetime token; reset in ~Object() so weak references expire.
         const std::shared_ptr<Affinity> mAffinity;           //!< Thread affinity box; the box itself is never reassigned, only its contents (see moveToThread()).
         std::atomic<bool> mDeleteLaterPosted { false };       //!< True once deleteLater() has posted a DeferredDeleteEvent; de-bounces repeat calls, matching QObject::deleteLaterCalled.
+
+        //! True once this object has been the context of a callLater(), so ~Object() knows whether
+        //! the process-wide pending registry can possibly hold anything of ours. See ~Object().
+        //!
+        //! Atomic because callLater() is callable from any thread while the destructor reads it,
+        //! and set with release / read with acquire so that seeing it true also means seeing the
+        //! registry entry it stands for.
+        std::atomic<bool> mUsedCallLater { false };
+
+        //! True once an event has been posted for this object, so ~Object() knows whether the
+        //! dispatcher's queue can possibly hold anything of ours.
+        //!
+        //! Same shape and same reason as mUsedCallLater above, for the other O(backlog) scan the
+        //! destructor used to run unconditionally. Qt guards the identical call the identical way:
+        //! `if (d->postedEvents) QCoreApplication::removePostedEvents(this, 0);` in ~QObject().
+        //!
+        //! Set before the post, never cleared. An object that has received one queued call keeps
+        //! paying the scan; Qt keeps an exact count instead, which needs the dispatch side to
+        //! decrement and is more machinery than the difference is worth here.
+        std::atomic<bool> mMayHaveQueuedWork { false };
         //! This object's descriptive name.
         //!
         //! Deliberately unguarded, matching QObject, whose objectName() has no locking either. A

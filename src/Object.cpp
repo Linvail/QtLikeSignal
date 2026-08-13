@@ -186,6 +186,18 @@ namespace QtLikeSignal
             handle.disconnect();
         }
 
+        // Only objects that have actually used callLater() can have entries to drop.
+        //
+        // The scan below is O(every pending callLater in the process) and takes a lock shared by
+        // every thread, so running it unconditionally made destroying an unrelated Object cost
+        // 24 us against a backlog of 4000 -- 324x the 75 ns it costs otherwise, and worse as
+        // unrelated work queues up elsewhere. Most objects never call callLater() at all, and one
+        // flag takes all of them out of that path. See PERFORMANCE-20260813.md (P1).
+        //
+        // The flag is only ever set, never cleared: an object that used the feature once keeps
+        // paying the scan, which is the honest trade. Making it exact would mean counting entries
+        // per object, which is the deeper fix P1 describes and is not worth it for a bool.
+        if( mUsedCallLater.load( std::memory_order_acquire ) )
         {
             std::lock_guard<std::mutex> lock( CallLaterRegistry::sMutex );
             auto& pending = CallLaterRegistry::sPending;
@@ -202,23 +214,34 @@ namespace QtLikeSignal
             }
         }
 
-        std::shared_ptr<ThreadData> threadDataCopy = mAffinity->data();
-        if( threadDataCopy )
-        {
-            if( auto dispatcher = threadDataCopy->dispatcher() )
-            {
-                dispatcher->removeEventsForReceiver( this );
-            }
-        }
-
-        // Hand back any ids whose timers were still running. removeEventsForReceiver() above has
-        // already dropped this object's timers and its queued events, so nothing can still be
-        // referring to them by the time they are reissued.
+        // Taken before the strip below, because whether this object owns any timer is half of what
+        // decides if that strip has anything to do.
         std::vector<int> outstandingTimerIds;
         {
             std::lock_guard<std::mutex> lock( mRunningTimerIdsMutex );
             outstandingTimerIds.swap( mRunningTimerIds );
         }
+
+        // The other O(backlog) scan the destructor used to run for every object, whether or not it
+        // could possibly have anything queued: removeEventsForReceiver() walks the whole event
+        // queue and the whole timer list under the dispatcher's lock. An object that never received
+        // a queued call and never started a timer -- which is most of them -- has nothing there.
+        // Qt guards the same call the same way, with `if (d->postedEvents)` in ~QObject().
+        if( mMayHaveQueuedWork.load( std::memory_order_acquire ) || !outstandingTimerIds.empty() )
+        {
+            std::shared_ptr<ThreadData> threadDataCopy = mAffinity->data();
+            if( threadDataCopy )
+            {
+                if( auto dispatcher = threadDataCopy->dispatcher() )
+                {
+                    dispatcher->removeEventsForReceiver( this );
+                }
+            }
+        }
+
+        // Hand back any ids whose timers were still running. The strip above has already dropped
+        // this object's timers and its queued events, so nothing can still be referring to them by
+        // the time they are reissued.
         for( const int timerId : outstandingTimerIds )
         {
             TimerIdPool::release( timerId );
@@ -258,6 +281,10 @@ namespace QtLikeSignal
         {
             return;
         }
+
+        // Marked before the entry exists, so ~Object() can never see the entry without the flag.
+        // The reverse -- flag set, entry already gone -- costs one wasted scan and nothing else.
+        aContext->mUsedCallLater.store( true, std::memory_order_release );
 
         std::shared_ptr<CallLaterNode> node;
         bool isNew = false;
@@ -505,6 +532,7 @@ namespace QtLikeSignal
                     // A refusal means the dispatcher is closing, so nothing would ever drain this
                     // event; postEvent() has already freed it. Fall through to the synchronous
                     // delete rather than leaking the object.
+                    mMayHaveQueuedWork.store( true, std::memory_order_release );
                     if( disp->postEvent( this, static_cast<Event*>( event ) ) )
                     {
                         return;
@@ -708,6 +736,7 @@ namespace QtLikeSignal
             {
                 if( auto disp = tData->dispatcher() )
                 {
+                    aTarget->mMayHaveQueuedWork.store( true, std::memory_order_release );
                     disp->postEvent( aTarget, static_cast<Event*>( event ) );
                     return true;
                 }
@@ -747,6 +776,10 @@ namespace QtLikeSignal
         if( auto disp = aData ? aData->dispatcher() : nullptr )
         {
             auto* event = new MetaCallEvent( std::move( aSlot ) );
+            if( aReceiver )
+            {
+                aReceiver->mMayHaveQueuedWork.store( true, std::memory_order_release );
+            }
             return disp->postEvent( aReceiver, static_cast<Event*>( event ) );
         }
         return false;

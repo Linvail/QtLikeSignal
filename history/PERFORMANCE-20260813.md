@@ -30,16 +30,42 @@ one machine and one run; the **scaling curves** are the durable part.
 
 | ID | Finding | Impact | Confirmed by |
 |----|---------|--------|--------------|
-| P7 | `disconnect()` is O(slots on the signal), so tearing down N receivers of one signal is O(N²) | **High** | Measured — 245x QtMimic at N=16000, and diverging |
-| P8 | One connect/disconnect makes the next emit rebuild the whole slot list | Medium | Measured — 24 µs per cycle at 4000 resident slots |
-| P1 | `~Object()` scans the whole process-wide `callLater` registry *(unchanged since 2026-08-08)* | **High** | Re-measured — 324x with 4000 pending |
+| P7 | `disconnect()` is O(slots on the signal), so tearing down N receivers of one signal is O(N²) | **High** | Measured — 245x QtMimic at N=16000 — **Fixed 2026-08-13, now 169x faster and flat** |
+| P8 | One connect/disconnect makes the next emit rebuild the whole slot list | Medium | Measured — **Improved 2026-08-13 by 22%**; still O(resident) per rebuild |
+| P1 | `~Object()` scans the whole process-wide `callLater` registry | **High** | Measured — 324x with 4000 pending — **Fixed 2026-08-13, now flat** |
 | P9 | The R28 fix costs one mutex per dispatched event | Low — **accepted** | Measured — +3.3 ns per event |
 
 ---
 
-## P7 — `disconnect()` is O(slots on the signal)
+## P7 — `disconnect()` is O(slots on the signal) *(fixed 2026-08-13)*
 
 **Impact: High. Measured. A regression introduced by the in-house `Signal`.**
+
+> **Resolution (2026-08-13).** Each slot now records its own index in the working list, reached
+> through a type-erased back-pointer in the `ConnectionState` the handle already holds. Removing a
+> connection nulls that element where it stands and returns; nothing is searched for, and no other
+> slot's index moves, so emission order is untouched.
+>
+> The nulls are compacted away in bulk once they outnumber the live entries, which is amortised O(1)
+> per removal — each compaction costs one pass but at least halves the list, so the passes are
+> geometrically rare.
+>
+> Teardown of N receivers of one signal, minimum of five runs at N = 16 000:
+>
+> | | before | after | QtMimic (boost) |
+> |---|---|---|---|
+> | destroy 16 000 receivers | 671.2 ms | **3.98 ms** | 2.94 ms |
+> | per receiver | 41.95 µs, growing | **0.23 µs, flat** | 0.18 µs, flat |
+> | connect 16 000 | 3.62 ms | 4.13 ms | 9.73 ms |
+>
+> **169x faster, and the curve is flat rather than quadratic** — which is the part that matters, since
+> the old cost had no ceiling. We are 1.35x slower than boost on teardown alone and 2.4x faster on
+> connect; the composite of connect + emit + destroy is comfortably ahead.
+>
+> **A list was tried first and rejected, which is worth recording.** `std::list` gives O(1) removal
+> without tombstones and measured *better* on teardown (2.15 ms), but 66% *worse* on churn — 36.3 µs
+> against 21.9 — because every snapshot rebuild then chases pointers instead of copying a contiguous
+> block. The index-plus-tombstone form keeps the writers' side a vector and wins on both.
 
 `Connection::disconnect()` clears its own flag and then calls `removeDisconnected()` on the signal
 ([Connection.h:78-93](src/Connection.h#L78-L93)). That function takes the signal's mutex and
@@ -91,9 +117,29 @@ connections that are disconnected one by one pays O(K²). K is normally small, a
 the vector out first so the destructor path skips it entirely. Not worth fixing on its own; worth
 fixing in the same pass if the handle bookkeeping is touched.
 
-## P8 — one connect/disconnect makes the next emit rebuild the whole slot list
+## P8 — one connect/disconnect makes the next emit rebuild the whole slot list *(improved 2026-08-13)*
 
 **Impact: Medium. Measured. Same root as P7, different victim.**
+
+> **Partly resolved (2026-08-13).** The disconnect half went with P7: the removal is now O(1), so a
+> churn cycle no longer pays a scan on top of the rebuild. Measured at 4000 resident slots, minimum
+> of five runs, with the same fan-out subtracted:
+>
+> | | churn cost per cycle |
+> |---|---|
+> | before | 16.8 µs |
+> | after | **13.1 µs** |
+> | QtMimic (boost) | 5.3 µs |
+>
+> **The rebuild itself remains, and it is the connect that forces it.** A new slot must appear in the
+> next emission, so the immutable snapshot has to be rebuilt; a removal alone would not need one.
+> Closing that would take a two-tier published list — a stable snapshot plus a small overflow the
+> emit walks afterwards, merged in bulk — which is real complexity for a case where **we are already
+> ahead end to end**: the whole cycle costs 50 µs against boost's 104 µs, because our emit is 2.7x
+> faster. Not worth it on this evidence.
+>
+> Emit is unchanged by all of this, which was the thing to protect: 36.9 µs against 38.7 µs before,
+> at 4000 receivers.
 
 Readers walk an immutable snapshot, rebuilt whenever the working list changed
 ([Signal.h:375-384](src/Signal.h#L375-L384)). The design note is right that a steady emit loop
@@ -125,10 +171,40 @@ the same measurement against QtMimic at 2.9 µs vs 20.4 µs (1 000 slots) and 39
 (4 000). The new `Signal` bought real speed on the hot path; the regression is confined to
 connection lifecycle.
 
-## P1 — `~Object()` scans the whole process-wide `callLater` registry *(unchanged)*
+## P1 — `~Object()` scans the whole process-wide `callLater` registry *(fixed 2026-08-13)*
 
-**Impact: High. Re-measured 2026-08-13. Code unchanged since the 2026-08-08 finding
-([Object.cpp:189-203](src/Object.cpp#L189-L203)).**
+**Impact: High. First measured 2026-08-08, unchanged until now.**
+
+> **Resolution (2026-08-13).** One flag, as the 2026-08-08 entry proposed: `mUsedCallLater` is set
+> by `scheduleCallLater()` and tested by `~Object()`. An object that never used the feature — most
+> of them — skips the lock and the walk entirely.
+>
+> **Measuring it exposed a second scan of the same shape, and it was the larger one.**
+> `~Object()` also called `removeEventsForReceiver()` unconditionally, which walks the dispatcher's
+> whole event queue *and* its whole timer list under that dispatcher's lock. With the registry guard
+> in place the benchmark still grew — 51 ns to 1600 ns — because the pending `callLater`s it built
+> had also left 4000 undispatched events in the queue. Guarded the same way, with
+> `mMayHaveQueuedWork` plus "does this object own any timer". Qt guards the identical call the
+> identical way: `if (d->postedEvents) QCoreApplication::removePostedEvents(this, 0);` in
+> `~QObject()`.
+>
+> One `Object` construct-and-destruct against a growing backlog:
+>
+> | pending | before | after |
+> |---|---|---|
+> | 0 | 74.5 ns | 51.3 ns |
+> | 500 | 1 301 ns | 57.0 ns |
+> | 1 000 | 5 067 ns | 54.6 ns |
+> | 2 000 | 11 299 ns | 51.2 ns |
+> | 4 000 | 24 139 ns | **51.6 ns** |
+>
+> **468x at 4000 pending, and flat** — the growth is gone, not reduced. The empty-registry case also
+> improved, from 74.5 ns to 51.3 ns, because the dispatcher call is skipped as well.
+>
+> Both flags are set-once and never cleared. An object that used `callLater()` or received one
+> queued call keeps paying its scan for the rest of its life. Qt keeps an exact count instead, which
+> needs the dispatch side to decrement; that is the deeper fix the original entry described, and it
+> is not worth the machinery for the difference.
 
 Every `Object` destruction takes the process-wide `CallLaterRegistry::sMutex` and walks the whole
 pending map looking for its own entries — including for the overwhelming majority of objects that
@@ -188,7 +264,7 @@ The R30 fix adds a second lock of the same kind, and it is not worth measuring: 
 
 | ID | Then | Now |
 |----|------|-----|
-| P1 | `~Object()` scans the callLater registry | **Open, unchanged** — re-measured above |
+| P1 | `~Object()` scans the callLater registry | **Fixed 2026-08-13** — see above |
 | P2 | `Object::thread()` takes a mutex (= R25) | **Open, unchanged** — [ThreadData.hpp:127-131](src/ThreadData.hpp#L127-L131) still locks |
 | P3 | Every emit builds a `std::function` on the heap | **Fixed** — see below |
 | P4 | One dispatcher mutex serialises every object on a thread | **Open, still unmeasured** |
@@ -209,17 +285,19 @@ dispatcher* that owns the queue ([ThreadData.hpp:61-77](src/ThreadData.hpp#L61-L
 and Qt both put the queue in the thread data directly. Re-run
 `src/tests/test_QtLikeSignal_Performance.cpp` and replace the table.
 
-## If a real profile points here, the order is
+## What is left, if a real profile points here
 
-1. **P7 + P8 together** — one change to the slot list fixes both, and P7 is the only item that grows
-   without bound.
-2. **P1** — the cheapest fix in the document, and the only one that degrades with unrelated activity
-   elsewhere in the process.
-3. **P6** — re-measure before deciding anything.
-4. **P4**, then **P2/P5**.
+1. **P6** — re-measure before deciding anything. Every row of that table predates our own `Signal`.
+2. **P4** — one dispatcher mutex per thread, still never measured.
+3. **P8's remaining half** — the snapshot rebuild a connect forces. Only worth it if a profile shows
+   connection churn mattering, since the end-to-end cycle already beats boost.
+4. **P2/P5**.
 
 P9 is not on that list. It is a cost already paid for a correctness guarantee, and the only way to
 give it back is to give the guarantee back.
+
+**P7 and P1 are done, and they were the two that grew without bound.** Nothing open now degrades
+with scale; what remains is constant factors and one unmeasured lock.
 
 **Nothing here has been profiled against a real workload.** These are microbenchmarks with no work
 between iterations, which is the condition most favourable to making lock and allocation overhead

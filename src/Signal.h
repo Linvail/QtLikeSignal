@@ -188,7 +188,8 @@ namespace QtLikeSignal
             mImpl->disconnectAll();
         }
 
-        //! True if no slots are connected to this signal. Thread-safe.
+        //! True if no slots are connected to this signal. Thread-safe, and stale on return: a
+        //! connect() on another thread may land before you act on the answer. See Global.h.
         bool empty() const
         {
             return mImpl->connectionCount() == 0;
@@ -199,16 +200,24 @@ namespace QtLikeSignal
         //! Read-only diagnostic, mirroring Qt's QObject::receivers(). Mainly useful for asserting
         //! that a destroyed receiver really was disconnected rather than left as an inert slot --
         //! see ObjectDefectTest.DestroyedReceiverIsDisconnectedFromItsSender.
+        //!
+        //! Stale on return, like every count taken from another thread. See Global.h.
         std::size_t receivers() const
         {
             return mImpl->connectionCount();
         }
 
     private:
-        //! One connection: the slot itself, and the flag its handles share.
+        struct Slot;
+
+        //! The writers' list. Holds null entries where connections have been removed; see mLinked.
+        using SlotList = std::vector<std::shared_ptr<Slot> >;
+
+        //! One connection: the slot itself, the flag its handles share, and its place in the list.
         struct Slot
         {
-            //! Constructs a slot, taking ownership of both members.
+            //! Constructs a slot, taking ownership of both members. Unlinked until connect() has
+            //! put it in the list and recorded where.
             Slot
             (
                 std::function<void( Args... )> aSlot,               //!< The callable.
@@ -221,14 +230,36 @@ namespace QtLikeSignal
 
             std::function<void( Args... )> mSlot;
             std::shared_ptr<Private::ConnectionState> mState;
+
+            //! Where this slot sits in the owning Impl's mWorking. Guarded by that Impl's mMutex.
+            //!
+            //! An index rather than an iterator, so the writers' side can stay a *vector*. Removal
+            //! at a known index is O(1) if the element is merely nulled rather than erased, and the
+            //! nulls are compacted away in bulk later -- which keeps both of the things that matter
+            //! cheap. A std::list would also give O(1) removal, and was tried: it costs 66% more on
+            //! a connect/emit churn loop, because every snapshot rebuild then chases pointers
+            //! instead of copying a contiguous block.
+            std::size_t mIndex { 0 };
+
+            //! True while mIndex names a live element. Guarded by the owning Impl's mMutex.
+            //!
+            //! Needed because a slot can be removed by more than one route -- its own handle,
+            //! disconnectAll(), or the Signal being destroyed -- and whichever gets there second
+            //! must not null an element the first one has already given to somebody else.
+            bool mLinked { false };
         };
 
         //! The connection list, held behind a shared_ptr so a Connection can outlive the Signal.
         //!
-        //! Two lists, not one. Writers own a plain vector no reader ever touches; readers get an
-        //! immutable snapshot of it, rebuilt only when it has actually changed. So a run of emits
-        //! with no connects in it costs no allocation at all, and a run of connects with no emits
-        //! in it costs no copying at all -- each pays only when the other has been busy.
+        //! Two lists, not one. Writers own a list no reader ever touches; readers get an immutable
+        //! vector snapshot of it, rebuilt only when it has actually changed. So a run of emits with
+        //! no connects in it costs no allocation at all, and a run of connects with no emits in it
+        //! costs no copying at all -- each pays only when the other has been busy.
+        //!
+        //! Removal is O(1) and does not disturb the order: the element is nulled where it stands,
+        //! and the nulls are compacted away in bulk once they outnumber the live entries. Each slot
+        //! knows its own index, so nothing has to be searched for. This is what stops tearing down
+        //! N receivers of one signal costing O(N^2) -- see PERFORMANCE-20260813.md (P7).
         //!
         //! The obvious alternative -- one list, copied on write, mutated in place when
         //! shared_ptr::use_count() says nobody is reading -- is **wrong**, and was written and
@@ -240,12 +271,13 @@ namespace QtLikeSignal
         class Impl : public Private::SignalImplBase
         {
         public:
-            using SlotList = std::vector<std::shared_ptr<Slot> >;
-            using SlotListPtr = std::shared_ptr<const SlotList>;
+            //! What readers walk: a snapshot of mWorking, contiguous and immutable.
+            using PublishedList = std::vector<std::shared_ptr<Slot> >;
+            using PublishedListPtr = std::shared_ptr<const PublishedList>;
 
             //! Constructs an empty list. Never null, so readers need no null check.
             Impl()
-                : mPublished( std::make_shared<const SlotList>() )
+                : mPublished( std::make_shared<const PublishedList>() )
             {
             }
 
@@ -256,7 +288,16 @@ namespace QtLikeSignal
                 std::lock_guard<std::mutex> lock( mMutex );
                 for( const auto& slot : mWorking )
                 {
+                    if( !slot )
+                    {
+                        continue;
+                    }
                     slot->mState->mConnected.store( false, std::memory_order_release );
+
+                    // Unlinked as well as marked dead: a handle disconnected after this point still
+                    // reaches removeConnection(), which must not touch a list about to be destroyed
+                    // with us.
+                    slot->mLinked = false;
                 }
             }
 
@@ -268,15 +309,20 @@ namespace QtLikeSignal
                 )
             {
                 auto state = std::make_shared<Private::ConnectionState>();
-                auto slot = std::make_shared<Slot>( std::move( aSlot ), std::move( state ) );
-                auto handleState = slot->mState;
+                auto slot = std::make_shared<Slot>( std::move( aSlot ), state );
+
+                // The back-pointer disconnect() follows to find this slot in O(1). Set before the
+                // handle below can reach any caller, and never written again.
+                state->mSlot = slot;
 
                 {
                     std::lock_guard<std::mutex> lock( mMutex );
+                    slot->mIndex  = mWorking.size();
+                    slot->mLinked = true;
                     mWorking.push_back( std::move( slot ) );
                     mDirty = true;
                 }
-                return Connection( aSelf, std::move( handleState ) );
+                return Connection( aSelf, std::move( state ) );
             }
 
             //! Calls every connected slot, with no lock held. See the class comment.
@@ -289,7 +335,7 @@ namespace QtLikeSignal
                 // The snapshot is immutable and kept alive by this pointer for the whole loop,
                 // which is what lets the lock go before any slot runs, and what keeps a slot alive
                 // through its own call even if it disconnects itself.
-                const SlotListPtr slots = publishedSlots();
+                const PublishedListPtr slots = publishedSlots();
 
                 for( const auto& slot : *slots )
                 {
@@ -311,9 +357,18 @@ namespace QtLikeSignal
                     std::lock_guard<std::mutex> lock( mMutex );
                     for( const auto& slot : mWorking )
                     {
+                        if( !slot )
+                        {
+                            continue;
+                        }
                         slot->mState->mConnected.store( false, std::memory_order_release );
+
+                        // Unlinked before the list is emptied, so a handle disconnected after this
+                        // point finds nothing to remove instead of nulling somebody else's element.
+                        slot->mLinked = false;
                     }
                     dropped.swap( mWorking );
+                    mTombstones = 0;
                     discardSnapshot();
                 }
                 // `dropped` dies here, with the lock released. A slot's destructor runs the Cleanup
@@ -321,50 +376,98 @@ namespace QtLikeSignal
                 // nest the two locks in the opposite order to connect().
             }
 
-            //! Number of connections still live.
+            //! Number of connections still live. A diagnostic, so it counts rather than caches.
             std::size_t connectionCount() const
             {
                 std::lock_guard<std::mutex> lock( mMutex );
                 std::size_t count = 0;
                 for( const auto& slot : mWorking )
                 {
-                    count += slot->mState->mConnected.load( std::memory_order_acquire ) ? 1 : 0;
+                    if( slot && slot->mState->mConnected.load( std::memory_order_acquire ) )
+                    {
+                        ++count;
+                    }
                 }
                 return count;
             }
 
-            //! Drops every slot whose handle has disconnected it. See SignalImplBase.
-            virtual void removeDisconnected() override
+            //! Drops the one slot @p aState belongs to. See SignalImplBase.
+            //!
+            //! O(1). The slot is reached through the back-pointer in its own state and erased at
+            //! the iterator it carries, so no part of this depends on how many other connections
+            //! exist. It used to scan the whole list looking for anything marked dead, which made
+            //! destroying N receivers of one signal O(N^2) -- 671 ms for 16 000 of them, against
+            //! boost::signals2's 2.7 ms. See PERFORMANCE-20260813.md (P7).
+            virtual void removeConnection
+                (
+                const std::shared_ptr<Private::ConnectionState>& aState
+                ) override
             {
-                SlotList dropped;
+                if( !aState )
+                {
+                    return;
+                }
+
+                // Declared before the lock, so that when it turns out to hold the last reference
+                // the slot is destroyed *after* the unlock below. A slot's destructor runs the
+                // Cleanup token, which takes Object::mIncomingMutex, and holding ours across that
+                // would nest the two locks in the opposite order to connect().
+                const std::shared_ptr<Slot> slot
+                    = std::static_pointer_cast<Slot>( aState->mSlot.lock() );
+                if( !slot )
+                {
+                    return;
+                }
+
                 {
                     std::lock_guard<std::mutex> lock( mMutex );
-
-                    const auto isDead = []( const std::shared_ptr<Slot>& aSlot )
-                        {
-                            return !aSlot->mState->mConnected.load( std::memory_order_acquire );
-                        };
-
-                    auto firstDead = std::stable_partition( mWorking.begin(), mWorking.end(),
-                        [&isDead]( const std::shared_ptr<Slot>& aSlot )
-                        {
-                            return !isDead( aSlot );
-                        } );
-                    if( firstDead == mWorking.end() )
+                    if( !slot->mLinked )
                     {
-                        return;   // nothing to drop, so nothing to rebuild either
+                        return;   // already removed, by another handle or by disconnectAll()
                     }
 
-                    // Moved out rather than erased in place, so they are destroyed after the
-                    // unlock -- see disconnectAll().
-                    dropped.assign( std::make_move_iterator( firstDead ),
-                        std::make_move_iterator( mWorking.end() ) );
-                    mWorking.erase( firstDead, mWorking.end() );
+                    // Nulled where it stands rather than erased, so every other slot's index stays
+                    // valid and this costs nothing regardless of how many there are. The reference
+                    // dropped here is the list's; ours above is what keeps the slot alive until the
+                    // unlock.
+                    mWorking[slot->mIndex].reset();
+                    slot->mLinked = false;
+                    ++mTombstones;
                     discardSnapshot();
+                    compactIfMostlyDead();
                 }
             }
 
         private:
+            //! Squeezes the nulls out of mWorking once they outnumber the live entries.
+            //!
+            //! Amortised O(1) per removal: each compaction costs one pass but at least halves the
+            //! list, so the passes are geometrically rare. Callers already hold mMutex.
+            //!
+            //! Deferred rather than immediate because compacting reassigns indices, and doing that
+            //! on every removal would put back exactly the O(all connections) this design exists to
+            //! avoid.
+            void compactIfMostlyDead()
+            {
+                if( mTombstones * 2 <= mWorking.size() )
+                {
+                    return;
+                }
+
+                SlotList live;
+                live.reserve( mWorking.size() - mTombstones );
+                for( auto& slot : mWorking )
+                {
+                    if( slot )
+                    {
+                        slot->mIndex = live.size();
+                        live.push_back( std::move( slot ) );
+                    }
+                }
+                mWorking.swap( live );
+                mTombstones = 0;
+            }
+
             //! Returns the immutable snapshot readers walk, rebuilding it if the working list has
             //! changed since the last one was taken.
             //!
@@ -372,13 +475,24 @@ namespace QtLikeSignal
             //! rather than once per emit. A steady emit loop rebuilds nothing; a burst of connects
             //! with no emit between them rebuilds nothing either, and pays one copy on the emit
             //! that follows.
-            SlotListPtr publishedSlots() const
+            PublishedListPtr publishedSlots() const
             {
                 std::lock_guard<std::mutex> lock( mMutex );
                 if( mDirty )
                 {
-                    mPublished = std::make_shared<const SlotList>( mWorking );
-                    mDirty = false;
+                    // Built by hand rather than copy-constructed, because mWorking may hold nulls
+                    // and readers should never have to test for them.
+                    auto rebuilt = std::make_shared<PublishedList>();
+                    rebuilt->reserve( mWorking.size() - mTombstones );
+                    for( const auto& slot : mWorking )
+                    {
+                        if( slot )
+                        {
+                            rebuilt->push_back( slot );
+                        }
+                    }
+                    mPublished = std::move( rebuilt );
+                    mDirty     = false;
                 }
                 return mPublished;
             }
@@ -404,12 +518,16 @@ namespace QtLikeSignal
             //! slot call -- see the class comment for why that distinction is the whole design.
             mutable std::mutex mMutex;
 
-            //! The writers' list. No reader ever sees it, so it can be mutated freely.
+            //! The writers' list. No reader ever sees it, so it can be mutated freely. Holds a null
+            //! wherever a connection has been removed and not yet compacted away.
             SlotList mWorking;
+
+            //! How many of mWorking's entries are null. Guarded by mMutex.
+            std::size_t mTombstones { 0 };
 
             //! The readers' snapshot of mWorking. Null only while mDirty, which publishedSlots()
             //! resolves before handing anything out, so a reader never sees null.
-            mutable SlotListPtr mPublished;
+            mutable PublishedListPtr mPublished;
 
             //! True when mPublished no longer reflects mWorking, and so must be rebuilt.
             mutable bool mDirty { false };
