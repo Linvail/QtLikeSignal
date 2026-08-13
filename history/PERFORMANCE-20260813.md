@@ -33,6 +33,7 @@ one machine and one run; the **scaling curves** are the durable part.
 | P7 | `disconnect()` is O(slots on the signal), so tearing down N receivers of one signal is O(N²) | **High** | Measured — 245x QtMimic at N=16000, and diverging |
 | P8 | One connect/disconnect makes the next emit rebuild the whole slot list | Medium | Measured — 24 µs per cycle at 4000 resident slots |
 | P1 | `~Object()` scans the whole process-wide `callLater` registry *(unchanged since 2026-08-08)* | **High** | Re-measured — 324x with 4000 pending |
+| P9 | The R28 fix costs one mutex per dispatched event | Low — **accepted** | Measured — +3.3 ns per event |
 
 ---
 
@@ -146,6 +147,41 @@ nothing has changed. It remains the item with the worst ratio of cost to fix dif
 set in `scheduleCallLater()`, tested before the scan, removes it for every object that does not use
 the feature. See the 2026-08-08 entry for the two deeper options.
 
+## P9 — the R28 fix costs one mutex per dispatched event
+
+**Impact: Low. Measured. Accepted, not a proposal — recorded because a correctness fix that adds
+cost to a hot path should say how much.**
+
+Closing R28 meant that a dispatch loop can no longer read an entry of its own batch unguarded: the
+whole point is that `removeEventsForReceiver()` may cancel that entry from inside a handler. So all
+three loops now take `mMutex` around taking each entry, as the timer loop already did.
+
+Posting N events to an idle dispatcher and timing one `processEvents()` drain, `-O2`, 800 000
+events, **minimum of ten runs**:
+
+| | ns per dispatched event |
+|---|---|
+| with the per-event lock (current) | 14.8 |
+| without it | 11.5 |
+
+**+3.3 ns per event, about 29% of the bare drain loop.** That matches the uncontended-mutex figure
+measured independently on 2026-08-08 (P2: 2.7–3.5 ns), which is the corroboration that the number is
+real and not an artefact.
+
+In proportion it is nothing. A queued metacall costs roughly 850 ns end to end (P6), so this is
+under half a percent of the operation it sits inside. The alternative was a use-after-free that
+segfaults, so the trade is not close.
+
+The R30 fix adds a second lock of the same kind, and it is not worth measuring: one acquire per
+*ready descriptor per poll round*, not per event, on a path that has just returned from a syscall.
+
+> **Measurement note, and it cost real time.** Comparing medians over four runs each showed the two
+> builds overlapping — 16.8 vs 16.1 ns — and would have supported "no measurable difference". The
+> effect is 3 ns against a run-to-run spread of 5 ns, so the median cannot see it. **Minimum of ten
+> runs separates them cleanly**, because the minimum estimates "how fast can this go" rather than
+> "what did the scheduler do to us". Use the minimum for a small constant difference; the median is
+> for comparing distributions, which is not what this is.
+
 ---
 
 ## Status of the 2026-08-08 items
@@ -182,6 +218,9 @@ and Qt both put the queue in the thread data directly. Re-run
 3. **P6** — re-measure before deciding anything.
 4. **P4**, then **P2/P5**.
 
+P9 is not on that list. It is a cost already paid for a correctness guarantee, and the only way to
+give it back is to give the guarantee back.
+
 **Nothing here has been profiled against a real workload.** These are microbenchmarks with no work
 between iterations, which is the condition most favourable to making lock and allocation overhead
 look decisive. P7 is the exception worth stating plainly: a quadratic cost does not shrink as a
@@ -195,3 +234,7 @@ All six recorded on 2026-08-08 still apply and are not repeated here. One to add
   slot count and reported a clean linear curve — which was mostly the emit itself, since an emit to
   N slots is O(N) by definition. The churn cost is only visible as the *difference* between the same
   fan-out with and without the connect/disconnect. Measure the baseline in the same loop shape.
+- **Use the minimum, not the median, for a small constant difference.** P9's 3 ns effect sits inside
+  a 5 ns run-to-run spread, so medians over a handful of runs showed the two builds overlapping.
+  Minimum of ten separated them cleanly. The minimum estimates how fast the code can go; the median
+  mostly reports what else the machine was doing.

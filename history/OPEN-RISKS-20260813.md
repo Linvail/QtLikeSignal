@@ -31,7 +31,8 @@ probe was written.
 | R30 | `unregisterEventSource()` does not stop a callback that is already in flight | Low-Med | Inspection — **Fixed 2026-08-13** |
 | R31 | Three dispatcher paths run the wake callback with `mMutex` held; `postEvent()` does not | — | **Not a defect** — contract widened 2026-08-13 |
 
-Still open from earlier passes, restated at the end: R9, R15, R22 (Windows residual), R25.
+Carried from earlier passes and revisited at the end: **R9 closed**, **R15 reduced to one item**,
+R22 (Windows residual) and R25 unchanged.
 
 ---
 
@@ -337,22 +338,68 @@ remembering, and the Windows dispatcher would have had to honour it too.
 
 ---
 
-## Still open from earlier passes
+## From earlier passes
 
-Re-checked against the current tree, not re-probed.
+### R9 — `CoreApplication`'s singleton is unguarded *(closed 2026-08-13)*
 
-- **R9 — `CoreApplication`'s singleton is unguarded.** Now a warning rather than silence
-  ([CoreApplication.cpp:48-59](src/CoreApplication.cpp#L48-L59)): a second instance is refused
-  registration and says so on stderr. Qt asserts. Accepted as-is; recorded so it is not re-filed.
-- **R15 — "Thread-safe" doc claims not fully audited against Qt.** Unchanged. The new `Signal` and
-  `Connection` headers add a fresh set of such claims that no audit has covered.
-- **R22 residual — Windows OS-message dispatch is still untested.** Nothing in the suite creates a
-  real window or posts a real `WM_` message, so `TranslateMessage`/`DispatchMessage` and the
-  `WM_QUIT` branch of `EventDispatcherWin32` have still never executed. Mission stage 5's "I want to
-  receive OS/platform's messages" is proven on Linux only.
-- **R25 — `Object::thread()` costs a mutex.** Unchanged; `Affinity::data()` still locks
-  ([ThreadData.hpp:127-131](src/ThreadData.hpp#L127-L131)). Numbers live in `PERFORMANCE-20260808.md`
-  (P2), and the reasoning there still holds: the mutex buys a lifetime guarantee Qt does not offer.
+Two halves, and the one that was filed was the less important one.
+
+**Filed: a second application object is not rejected.** No change, deliberately. It is a warning
+rather than an abort ([CoreApplication.cpp](src/CoreApplication.cpp#L48-L59)); the first instance
+stays the one `instance()` reports, so the damage is contained and visible. Qt asserts. A diagnostic
+is more useful than killing the process, and constructing two is misuse either way.
+
+**Not filed, and the real problem: `sInstance` was a plain pointer.** `instance()`, `exit()`,
+`quit()` and `post()` are all callable from any thread and all read it, while the constructor and
+destructor write it from the main thread. Every one of those was a data race, under a "Thread-safe"
+that promised otherwise. Now `std::atomic<CoreApplication*>`, with a compare-exchange at both writes
+so "the first one wins" holds even under the misuse the warning exists to report.
+
+Qt 6 has the identical plain pointer and knows it: `QCoreApplication` keeps a second, atomic
+`g_self` for internal use and documents `instanceExists()` as "a Qt 6 thread-safe (no data races)
+version of `instance() != nullptr`". Qt 7 makes the pointer itself atomic behind a `#warning`.
+
+What is left is documented, not fixed: a caller may load the pointer and then dereference it while
+the main thread runs `~CoreApplication()`. All four now carry the caveat in Qt's own words — Qt has
+the same hole on `quit()` and states it the same way. That makes it the caller's, which under this
+project's rule ends it.
+
+### R15 — "Thread-safe" doc claims not audited against Qt *(reduced 2026-08-13)*
+
+Sized properly, this was never 76 claims. It was **two false ones and a definition**, and both false
+ones are corrected.
+
+- **`Object::objectName()` / `setObjectName()`** — said "Thread-safe"; they read and write a plain
+  `std::string` with no lock. The member's own comment in [Object.h](src/Object.h#L792-L799) said the
+  opposite ("deliberately unguarded … naming it from another is the same **misuse**"), so the header
+  blamed the caller and the implementation invited them in. Now "Not thread-safe: must be called from
+  this object's own thread", on the declarations as well. Comment change only. Qt agrees: its
+  `objectName()` has no locking, and its cross-thread branch is commented `// Unsafe code path`.
+- **The four `CoreApplication` statics** — see R9 above.
+
+**Still open: the definition.** "Thread-safe" appears 76 times and has never been defined. It should
+mean *callable concurrently without a data race*, and nothing more — stated once, in
+[Global.h](src/Global.h). Several true claims promise less than a reader assumes: `Signal::empty()`,
+`Signal::receivers()`, `Thread::isRunning()` and `Thread::isFinished()` are all race-free and all
+return an answer that is stale on return. Qt handles exactly this by marking `QThread::isRunning()`
+`\threadsafe` **and** attaching a separate note that the thread may still be running afterwards.
+
+One process lesson worth keeping: both false claims lived in a `.cpp` while the truth lived in the
+`.h`. They were never read side by side. A thread-safety claim belongs on the declaration.
+
+### R22 residual — Windows OS-message dispatch is still untested
+
+Unchanged. Nothing in the suite creates a real window or posts a real `WM_` message, so
+`TranslateMessage`/`DispatchMessage` and the `WM_QUIT` branch of `EventDispatcherWin32` have still
+never executed. Mission stage 5's "I want to receive OS/platform's messages" is proven on Linux only.
+
+### R25 — `Object::thread()` costs a mutex
+
+Unchanged; `Affinity::data()` still locks ([ThreadData.hpp:127-131](src/ThreadData.hpp#L127-L131)).
+Numbers live in `PERFORMANCE-20260808.md` (P2), and the reasoning there still holds: the mutex buys
+a lifetime guarantee Qt does not offer. Recommended **not** to do standalone — the direct emit path
+no longer reads the affinity box at all, so this is now a constant factor on the queued path only.
+Fold it into the P6 change that moves the event queue into `ThreadData`, or leave it.
 
 ## Suggested order
 
@@ -361,9 +408,9 @@ Re-checked against the current tree, not re-probed.
 3. ~~**R31**~~ — contract widened 2026-08-13; there was no defect here either.
 4. ~~**R30**~~ — fixed 2026-08-13.
 
-Everything filed in this pass is now closed. R9, R15, R22-residual and R25 remain from earlier
-passes, and the performance items in `PERFORMANCE-20260813.md` are untouched — P7 (quadratic
-teardown) is the largest thing still open anywhere.
+Everything filed in this pass is now closed, and so is R9. What remains anywhere is small and named:
+R15's definition, the R22 Windows residual, R25, and the performance items in
+`PERFORMANCE-20260813.md` — where P7 (quadratic teardown) is the largest thing still open.
 
 **Two of the four were not defects, and both were filed from inspection alone.** R29 was simply
 wrong: the reasoning was local to one function and the disproof was one ownership fact three lines
