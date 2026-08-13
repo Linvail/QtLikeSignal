@@ -20,7 +20,7 @@ How each item was confirmed, and the test baseline, are at the end under
 | R29 | **Withdrawn** | ~~`connectImpl()` publishes the `Connection` handle outside `mIncomingMutex`~~ | — | **Not a defect.** TSan probe, 200 000 racing connects against the pre-"fix" code: silent |
 | R30 | **Fixed** | `unregisterEventSource()` does not stop a callback already in flight | Low-Med | Inspection. Unregistration is now synchronous on the loop's own thread |
 | R31 | **Withdrawn** | Three dispatcher paths run the wake callback with `mMutex` held | — | **Not a defect** — the constraint was documented. Contract widened anyway, to remove a trap |
-| R32 | **Queue** | `moveToThread()` does not migrate already-posted events | Unknown | **Inspection only, not probed.** A hypothesis, not a finding |
+| R32 | **Queue** | `moveToThread()` does not migrate already-posted events | **Medium** | Probe — a queued slot runs on the thread the object *left*; Qt runs it on the new one |
 
 **Statuses.** *Fixed* — code changed and the defect is gone. *By Design* — the current state is
 accepted and is not considered a bug. *Withdrawn* — investigated, and there was no defect to fix.
@@ -346,19 +346,91 @@ it is written on if something fails when it narrows again by accident.
 
 ## R32 — `moveToThread()` does not migrate already-posted events *(Queue)*
 
-**Inspection only, and not probed. This is a hypothesis, not a finding** — see the note on inspection
-findings at the end of this document.
+**Severity: Medium. Confirmed by probe, against Qt 6 run side by side. Filed as an unprobed
+hypothesis on 2026-08-13 and probed on 2026-08-14; the hypothesis was right, and the consequence is
+not the one it guessed.**
 
-`~Object()` cancels pending work through the dispatcher its **current** affinity names. An object
-whose affinity changed after events were posted for it would therefore cancel on the new thread and
-leave those events sitting in the old thread's queue. `moveToThread()` migrates active timers
-([Object.cpp:399-445](src/Object.cpp#L399-L445)) but not posted events; Qt migrates both.
+`moveToThread()` migrates active timers ([Object.cpp:399-445](src/Object.cpp#L399-L445)) but nothing
+migrates events already sitting in the old thread's queue. Qt migrates both, in
+`QObjectPrivate::setThreadData_helper()`:
 
-Exposed by the R28 fix, which is what made the affinity-dependence of cancellation explicit, but not
-part of it. The `deletedReceivers` guard in `processEvents()` was kept precisely because of this case.
+```cpp
+// move posted events
+qsizetype eventsMoved = 0;
+for (qsizetype i = 0; i < currentData->postEventList.size(); ++i) {
+    const QPostEvent &pe = currentData->postEventList.at(i);
+    if (!pe.event) continue;
+    if (pe.receiver == q) {
+        targetData->postEventList.addEvent(pe);          // move it across
+        const_cast<QPostEvent &>(pe).event = nullptr;    // blank the old entry
+        ++eventsMoved;
+    }
+}
+if (eventsMoved > 0 && targetData->hasEventDispatcher()) {
+    targetData->canWait = false;
+    targetData->eventDispatcher.loadRelaxed()->wakeUp();  // and wake the new thread
+}
+```
 
-Before filing this as a defect, probe it: move an object between threads with events already queued,
-destroy it, and see whether the old thread's dispatcher then walks a freed pointer.
+### The divergence, measured
+
+The same program in both libraries: post a queued call while the receiver lives on the main thread,
+move the receiver to a worker, then let both loops run. The move is confirmed to have taken effect
+(`thread() == worker`) before anything is dispatched.
+
+| | slot ran on |
+|---|---|
+| **QtLikeSignal** | **MAIN — the thread the object left** |
+| **Qt 6** | **WORKER — the thread it now lives on** |
+
+**This is the guarantee a queued connection exists to provide.** The slot runs on a thread the object
+no longer belongs to, with no warning and no crash, which is the failure mode this library's thread
+affinity is meant to prevent. Nothing tells the caller it happened.
+
+### `deleteLater()` is the sharper case
+
+`deleteLater()` posts its `DeferredDeleteEvent` into the current thread's queue, so a move afterwards
+strands it too:
+
+```
+deleteLater() on main, then moved to the worker
+  destructor ran on: MAIN (the thread it left)
+Object::~Object: object destroyed from a thread other than the one it lives in while that
+thread's event loop is still running; this is not safe. Use deleteLater() to destroy an object
+from another thread.
+```
+
+**Our own `deleteLater()` trips our own cross-thread-destruction warning**, and the warning's advice
+is to do the thing that caused it. Qt runs the destructor on the worker, as it should.
+
+### What it is *not*
+
+The hypothesis this entry was filed on — that a stranded event outlives the object and becomes a
+use-after-free — is **not confirmed**. Post a queued call, move the object, destroy it on its new
+thread, then drain the old thread's queue: no crash, and AddressSanitizer is silent. That is the same
+shape as R28's queued half and for the same reason: `Object::event()` is not virtual and its
+`MetaCall` branch never touches `this`, so the freed object is never dereferenced. It is undefined
+behaviour with no observable today, and it would become a crash the moment `event()` becomes virtual.
+
+So the defect is wrong-thread execution, not memory corruption. Filed severity Unknown; measured
+severity Medium, and for a reason the original note did not anticipate.
+
+### The fix, and what it costs
+
+Mirror Qt: in `moveToThread()`, walk the outgoing dispatcher's queue, move the entries whose receiver
+is this object into the incoming dispatcher's queue, and wake the target. The pieces already exist —
+`takeTimersForReceiver()` is the same operation for timers, and returning the events instead of
+deleting them is a variation on `removeEventsForReceiver()`.
+
+**Two things make it harder than the timer case.** First, it needs *both* dispatcher mutexes at once.
+Qt solves this with `QOrderedMutexLocker`, which orders the two by address so two concurrent moves in
+opposite directions cannot deadlock; we have no such helper and would need one. Second, the R28
+dispatch frames mean an event can be in a batch rather than the queue — in flight on the old thread —
+and those cannot be moved, only left to run. Qt does not have that problem because it never
+snapshots.
+
+Closing this would also close the residual noted in R28: `deletedReceivers` is kept in
+`processEvents()` precisely because an object's affinity can change after its events were posted.
 
 ---
 
@@ -399,5 +471,7 @@ whether the behaviour it complains about is already written down as a preconditi
 precondition moves the fault to the caller. What that does *not* excuse is a precondition that is
 inconsistent or untestable, which is what R31 turned out to be.
 
-R32 is filed under that rule: listed so it is not lost, labelled as unprobed so it is not mistaken
-for a finding.
+R32 was filed under that rule — listed so it would not be lost, labelled unprobed so it would not be
+mistaken for a finding — and probed a day later. The rule earned its keep twice over: the hypothesis
+was right that something was wrong, and wrong about what. It guessed a use-after-free; the actual
+defect is wrong-thread execution, which is worse in practice because nothing reports it.
