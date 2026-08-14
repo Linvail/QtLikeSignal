@@ -368,6 +368,91 @@ time** — 3.5x per connection, which matters for the embedded-ish target
 `ForAI/mission-signal-code-generator.md` argues for, where per-object footprint was already the
 stronger case.
 
+### The plan
+
+Three stages, each independently verifiable and each leaving the tree green. The allocation guard
+`PerformanceRegression.OneConnectionCostsAtMostFiveHeapBlocks` measures the result exactly, so every
+stage has a number to hit rather than an impression to argue about — tighten its bar as each lands.
+
+**Stage 1 — fuse `Slot`, `ConnectionState` and `Cleanup` into one node. 5 blocks → 3.**
+
+The obstacle is that `ConnectionState` must stay untemplated: a `Connection` answers `connected()`
+and compares equal without knowing `Args...`. Split the node by what actually needs the types:
+
+```cpp
+struct ConnectionNode                    // untemplated: what a Connection can name
+{
+    std::atomic<bool> mConnected { true };
+    std::size_t       mIndex { 0 };      // place in the Signal's working list
+    bool              mLinked { false };
+    Object*           mOwner { nullptr };   // receiver, for the mIncoming prune
+    std::weak_ptr<int> mLife;               // its life token
+    virtual ~ConnectionNode();              // the prune that ~Cleanup does today
+};
+
+template <typename... Args>
+struct Slot : ConnectionNode             // templated: the callable
+{
+    std::function<void( Args... )> mSlot;
+};
+```
+
+One `make_shared<Slot<Args...>>` allocates the whole thing, and `shared_ptr<Slot>` converts to
+`shared_ptr<ConnectionNode>` free of charge, sharing the one control block. `Connection` holds the
+base pointer. The `weak_ptr<void>` back-pointer P7 added disappears — the state *is* the slot.
+
+No behaviour changes, so the existing suites are the check. Expected: 3 blocks, ~220 B.
+
+**Stage 2 — make `Object::mIncoming` intrusive. 3 blocks → 2, and P7's residual goes with it.**
+
+`mIncoming` is a `std::vector<Connection>`, so each incoming connection costs a 32 B entry plus the
+vector's growth, and `~Cleanup` finds its entry with a linear `std::remove`. Give the node two
+sibling pointers and the Object a head pointer instead: registering becomes an O(1) link, and
+pruning an O(1) unlink. That removes the **O(K²)** noted at the end of P7 for an object whose K
+incoming connections are disconnected one at a time.
+
+This is the stage with real risk, and it is all lifetime. The links are raw, so the node must unlink
+itself when it dies, which is what `~Cleanup` already does — the ordering rules carry over intact:
+
+- `~Object()` resets the life token *before* walking the list, so a node's destructor sees an expired
+  token and does not try to prune a receiver already tearing itself down.
+- The unlink must happen with the receiver's mutex held and the Signal's released, which is the lock
+  order the current code takes pains to preserve.
+
+Expected: 2 blocks, ~190 B.
+
+**Stage 3 — slim the wrapper closure. Bytes, probably not blocks.**
+
+The 88 B closure captures five things the node will own by then: the life token, the receiver, the
+affinity box, the connection type, and the cleanup token. Pass the node to the invoker instead of
+capturing them, and the closure shrinks to the slot adapter alone — around 24 B. That is still over
+libstdc++'s 16 B small-object buffer, so it will very likely still allocate; the win is footprint,
+not block count. Do it only if per-connection memory is the reason for the whole exercise.
+
+Expected: 2 blocks, ~130 B.
+
+### How each stage is checked
+
+- **Counts** — the allocation guard, tightened to 3.5 then 2.5. Exact and machine-independent.
+- **Shape** — `TeardownStaysLinearInTheNumberOfReceivers` must stay near 4x. Stage 2 should improve
+  it, since the O(K²) prune is what it does not currently isolate.
+- **Guarantees** — the four in `ForAI/mission-signal.md` section 2. Stage 2 moves lifetime rules
+  around, so this is the stage that needs both sanitizers, not just a green suite.
+- **Both libraries** — QtMimic now shares this implementation, so each stage lands in both and both
+  suites must pass.
+
+### Recommendation
+
+**Do stages 1 and 2; leave stage 3 unless memory is the goal.** Together they take a connection from
+five blocks to two and 364 B to ~190 B, put `connect()` within reach of Qt's, and delete the last
+quadratic term left anywhere in the library. Stage 1 is mechanical. Stage 2 is the one to review
+carefully.
+
+The counterweight from the original entry still stands and should be weighed before starting:
+intrusive lifetime management is what this `Signal` was written to avoid. What has changed since is
+that the same code now serves both libraries, so the work is paid for once and collected twice.
+
+
 ---
 
 # How these were measured
