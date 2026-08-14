@@ -5,6 +5,7 @@
 #include "Thread.h"
 
 #include <algorithm>
+#include <climits>
 #include <cstdio>
 #include <deque>
 #include <unordered_map>
@@ -37,63 +38,68 @@ namespace QtLikeSignal
         Object::CallLaterKeyHash>
     CallLaterRegistry::sPending;
 
-    //! Process-wide pool of timer ids, handing out reusable ids rather than an ever-rising count.
-    //!
-    //! Qt does the same with a lock-free QFreeList capped at 2^24 simultaneous timers; a mutex and a
-    //! deque is the proportionate equivalent here, since allocation happens once per startTimer()
-    //! rather than on any hot path.
-    //!
-    //! Reuse is **FIFO, deliberately**. A freed id going straight back out (LIFO) would make the
-    //! narrowest recycling hazard trivially reachable: a handler that kills one timer and starts
-    //! another would get the same id back immediately, and any TimerEvent for the old timer still
-    //! in flight would then match the new one. Taking the oldest free id instead means an id is only
-    //! reused after every other freed id has been, which is what makes that window practically
-    //! unreachable rather than merely unlikely.
-    struct TimerIdPool
+    namespace
     {
-        //! Takes an id, reusing the oldest freed one if there is any.
-        static int allocate()
+        //! Process-wide pool of timer ids, handing out reusable ids rather than an ever-rising count.
+        //!
+        //! Qt does the same with a lock-free QFreeList capped at 2^24 simultaneous timers; a mutex and a
+        //! deque is the proportionate equivalent here, since allocation happens once per startTimer()
+        //! rather than on any hot path.
+        //!
+        //! Reuse is **FIFO, deliberately**. A freed id going straight back out (LIFO) would make the
+        //! narrowest recycling hazard trivially reachable: a handler that kills one timer and starts
+        //! another would get the same id back immediately, and any TimerEvent for the old timer still
+        //! in flight would then match the new one. Taking the oldest free id instead means an id is only
+        //! reused after every other freed id has been, which is what makes that window practically
+        //! unreachable rather than merely unlikely.
+        struct TimerIdPool
         {
-            std::lock_guard<std::mutex> lock( sMutex );
-            if( !sFree.empty() )
+            //! Takes an id, reusing the oldest freed one if there is any.
+            static int allocate()
             {
-                const int id = sFree.front();
-                sFree.pop_front();
+                std::lock_guard<std::mutex> lock( sMutex );
+                if( !sFree.empty() )
+                {
+                    const int id = sFree.front();
+                    sFree.pop_front();
+                    return id;
+                }
+                // Never hand out 0 or a negative value: -1 is startTimer()'s failure sentinel and the
+                // value Timer::stop() tests against, so an id colliding with it would be indisguishable
+                // from "no timer". The old monotonic counter would eventually have wrapped onto exactly
+                // that.
+                if( sNextFresh <= 0 )
+                {
+                    return -1;
+                }
+                const int id = sNextFresh;
+                sNextFresh = ( sNextFresh == INT_MAX ) ? -1 : sNextFresh + 1;
                 return id;
             }
-            // Never hand out 0 or a negative value: -1 is startTimer()'s failure sentinel and the
-            // value Timer::stop() tests against, so an id colliding with it would be indisguishable
-            // from "no timer". The old monotonic counter would eventually have wrapped onto exactly
-            // that.
-            if( sNextFresh <= 0 )
+
+            //! Returns an id to the pool.
+            static void release
+                (
+                int aTimerId
+                )
             {
-                return -1;
+                if( aTimerId <= 0 )
+                {
+                    return;
+                }
+                std::lock_guard<std::mutex> lock( sMutex );
+                sFree.push_back( aTimerId );
             }
-            return sNextFresh++;
-        }
 
-        //! Returns an id to the pool.
-        static void release
-            (
-            int aTimerId
-            )
-        {
-            if( aTimerId <= 0 )
-            {
-                return;
-            }
-            std::lock_guard<std::mutex> lock( sMutex );
-            sFree.push_back( aTimerId );
-        }
+            static std::mutex sMutex;        //!< Guards both members below.
+            static std::deque<int> sFree;    //!< Freed ids, oldest first.
+            static int sNextFresh;           //!< Next never-yet-issued id.
+        };
 
-        static std::mutex sMutex;        //!< Guards both members below.
-        static std::deque<int> sFree;    //!< Freed ids, oldest first.
-        static int sNextFresh;           //!< Next never-yet-issued id.
-    };
-
-    std::mutex TimerIdPool::sMutex;
-    std::deque<int> TimerIdPool::sFree;
-    int TimerIdPool::sNextFresh = 1;
+        std::mutex TimerIdPool::sMutex;
+        std::deque<int> TimerIdPool::sFree;
+        int TimerIdPool::sNextFresh = 1;
+    }
 
     //! Constructs an object living in the given thread, or in the calling thread if none is given.
     Object::Object
@@ -261,25 +267,313 @@ namespace QtLikeSignal
         }
     }
 
-    //! Removes this connection from its receiver's mIncoming as the connection is destroyed.
-    //!
-    //! Runs when the Signal destroys the slot holding this token -- a manual disconnect(), the
-    //! sender Signal being destroyed, or ~Object()'s own disconnect loop. Without it mIncoming would
-    //! only ever grow for an object that outlives connections made to it, and would eventually hold
-    //! stale handles.
-    Object::Cleanup::~Cleanup()
+    //! Gets the thread affinity of this object. Thread-safe. Never returns a dangling pointer: the
+    //! affinity is stored as a ThreadData (which outlives its Thread), so this reports nullptr once
+    //! the Thread it lived in has been destroyed rather than a stale Thread*.
+    Thread* Object::thread() const
     {
-        // The receiver is gone or already being destroyed; ~Object() has taken mIncoming over and
-        // touching mOwner here would be a use-after-free. This is also what makes ~Object()'s own
-        // disconnect loop non-re-entrant, since it resets the token before disconnecting.
-        if( mLife.expired() )
+        const std::shared_ptr<ThreadData> data = mAffinity->data();
+        return data ? data->thread() : nullptr;
+    }
+
+    //! Changes the thread affinity of this object.
+    //!
+    //! **Not thread-safe: must be called from this object's own thread**, matching Qt's
+    //! QObject::moveToThread() ("Current thread is not the object's thread. Cannot move to target
+    //! thread"). Only the thread that currently owns an object may hand it to another; letting any
+    //! thread re-home an object at will would race the owner's own use of it.
+    //!
+    //! Qt's one exception is reproduced: an object with *no* thread affinity yet may be adopted by
+    //! the calling thread. That is what lets a freshly constructed object be moved onto a worker,
+    //! and what lets Thread adopt itself when its run loop starts. Returns true if the object now
+    //! lives in the requested thread (including when it already did); false if the move was
+    //! refused, in which case the affinity is unchanged.
+    bool Object::moveToThread
+        (
+        Thread* aThread  //!< The new thread this object will live in; nullptr clears the affinity.
+        )
+    {
+        Thread* const currentAffinity = thread();
+        Thread* const callerThread = Thread::currentThread();
+
+        if( currentAffinity == aThread )
+        {
+            // Already there; nothing to do and nothing to refuse.
+            return true;
+        }
+
+        // Transcribed from Qt's QObject::moveToThread(). The general rule is that only the thread that
+        // owns an object may re-home it, with one exception: an object that has no affinity yet may be
+        // adopted by the calling thread. That exception is what makes the two normal idioms work --
+        // moving a freshly constructed object onto a worker, and Thread adopting itself once its run
+        // loop starts -- while still rejecting one thread yanking another thread's live object away.
+        const bool adoptingUnownedObject = ( currentAffinity == nullptr && aThread == callerThread )
+        ;
+        if( !adoptingUnownedObject && currentAffinity != callerThread )
+        {
+            std::fprintf( stderr,
+                "Object::moveToThread: current thread is not the object's thread; cannot "
+                "move it to the target thread\n" );
+            return false;
+        }
+
+        // Take any active timers off the outgoing dispatcher before the affinity changes. Qt documents
+        // this behaviour ("all active timers for the object will be reset ... stopped in the current
+        // thread and restarted, with the same interval, in the targetThread"); without it the timers
+        // would keep firing on the thread the object just left, delivering timerEvent() somewhere it
+        // no longer lives.
+        std::vector<AbstractEventDispatcher::TimerRegistration> timersToMove;
+        {
+            std::shared_ptr<ThreadData> oldData = mAffinity->data();
+            if( oldData )
+            {
+                if( auto oldDispatcher = oldData->dispatcher() )
+                {
+                    timersToMove = oldDispatcher->takeTimersForReceiver( this );
+                }
+            }
+        }
+
+        // Resolve the new thread's data and store it in the Affinity box in one step, so concurrent
+        // readers of thread()/threadData() (notably a connect() wrapper resolving affinity at emit
+        // time) never see a half-updated pairing of thread and dispatcher.
+        const std::shared_ptr<ThreadData> oldData = mAffinity->data();
+        std::shared_ptr<ThreadData> newData = aThread ? aThread->threadData() : nullptr;
+        mAffinity->setData( newData );
+
+        migratePostedEvents( oldData, newData );
+
+        if( !timersToMove.empty() && newData == nullptr )
+        {
+            // moveToThread(nullptr) leaves nothing to service the timers, so they are gone rather
+            // than merely paused, and their ids go back to the pool at once instead of waiting for
+            // ~Object(). The object's own record has to be cleared too, or a later killTimer()
+            // would release the same id a second time. Queueing the re-registration below would
+            // achieve nothing here: with no affinity there is no dispatcher to deliver it.
+            for( const auto& timer : timersToMove )
+            {
+                forgetTimerId( timer.mTimerId );
+                TimerIdPool::release( timer.mTimerId );
+            }
+        }
+        else if( !timersToMove.empty() )
+        {
+            // Re-register on the destination thread rather than from here: registerTimer() must run
+            // where the timer will be serviced. Qt solves it the same way, queueing the
+            // re-registration with invokeMethod(..., Qt::QueuedConnection) so it lands on the new
+            // thread. If this object is destroyed before the queued call runs, ~Object() strips its
+            // pending events from the dispatcher, so the call is dropped rather than dangling.
+            dispatchMetaCall(
+                this,
+                [this, timersToMove]()
+                {
+                    if( auto tData = threadData() )
+                    {
+                        if( auto disp = tData->dispatcher() )
+                        {
+                            for( const auto& timer : timersToMove )
+                            {
+                                disp->registerTimer( timer.mTimerId, timer.mIntervalMs, this );
+                            }
+                        }
+                    }
+                },
+                ConnectionType::Queued );
+        }
+
+        return true;
+    }
+
+    //! Gets the object's descriptive name.
+    //!
+    //! **Not thread-safe: must be called from this object's own thread.** The name is a plain
+    //! std::string with no lock, so a concurrent setObjectName() is a data race. This said
+    //! "Thread-safe" until 2026-08-13 and was never true -- see mObjectName for why the member is
+    //! deliberately unguarded, which is the same reason QObject::objectName() has no locking either.
+    std::string Object::objectName() const
+    {
+        return mObjectName;
+    }
+
+    //! Sets the object's descriptive name.
+    //!
+    //! **Not thread-safe: must be called from this object's own thread**, for the same reason as
+    //! objectName() above.
+    void Object::setObjectName
+        (
+        const std::string& aName  //!< The new object name.
+        )
+    {
+        mObjectName = aName;
+    }
+
+    //! Schedules this object for deletion in the event loop. Thread-safe.
+    void Object::deleteLater()
+    {
+        // De-bounce repeated calls: only the first ever posts a DeferredDeleteEvent, matching Qt's
+        // own guard ("De-bounce QDeferredDeleteEvents" over QObjectPrivate::deleteLaterCalled,
+        // qobject.cpp).
+        //
+        // This is Qt parity and defense-in-depth, not a fix for a reachable bug: a duplicate event
+        // is already harmless, since the deletedReceivers set in processEvents() covers the case
+        // where both land in one batch, and ~Object()'s removeEventsForReceiver() strips any that
+        // are still queued. What the guard adds is that the invariant "at most one deferred delete
+        // exists per object" holds at the source, rather than depending on two separate downstream
+        // mechanisms to keep covering every interleaving -- plus it skips a redundant allocation.
+        if( mDeleteLaterPosted.exchange( true ) )
         {
             return;
         }
 
-        std::lock_guard<std::mutex> lock( mOwner->mIncomingMutex );
-        auto& handles = mOwner->mIncoming;
-        handles.erase( std::remove( handles.begin(), handles.end(), mHandle ), handles.end() );
+        auto* event = new DeferredDeleteEvent();
+        if( auto tData = threadData() )
+        {
+            // Queue only if there is a live thread to dispatch it. A destroyed Thread leaves its
+            // ThreadData -- and that ThreadData's still-working dispatcher -- behind, so without
+            // this check the event is accepted by a queue nothing will ever drain and the object is
+            // leaked outright rather than deleted. Falling through to the synchronous delete below
+            // is the lesser evil, and the same trade QtMimic makes when its post() refuses the task:
+            // "Doing nothing here would leak self forever, which is strictly worse than the
+            // thread-affinity violation of deleting it synchronously."
+            if( tData->thread() != nullptr )
+            {
+                if( auto disp = tData->dispatcher() )
+                {
+                    // A refusal means the dispatcher is closing, so nothing would ever drain this
+                    // event; postEvent() has already freed it. Fall through to the synchronous
+                    // delete rather than leaking the object.
+                    mMayHaveQueuedWork.store( true, std::memory_order_release );
+                    if( disp->postEvent( this, static_cast<Event*>( event ) ) )
+                    {
+                        return;
+                    }
+                    delete this;
+                    return;
+                }
+            }
+        }
+        delete event;
+        delete this;
+    }
+
+    //! Handles timer events sent to this object.
+    void Object::timerEvent
+        (
+        TimerEvent* aEvent  //!< The timer event containing the timer ID.
+        )
+    {
+        ( void )aEvent;
+    }
+
+    //! Starts a timer for this object with the specified interval.
+    //!
+    //! **Not thread-safe: must be called from this object's own thread.** Timers are owned by the
+    //! dispatcher of the thread the object lives in, and only that thread's event loop can deliver
+    //! the resulting timerEvent(). Calling from any other thread is rejected with a warning on
+    //! stderr and returns -1, matching Qt, whose QObject::startTimer() likewise refuses
+    //! ("Timers cannot be started from another thread"). To start a timer for an object living in
+    //! another thread, get onto that thread first -- for example with callLater(). Returns the
+    //! unique timer ID, or -1 if the timer could not be started.
+    int Object::startTimer
+        (
+        int aIntervalMs  //!< Interval in milliseconds.
+        )
+    {
+        // Thread-confined, as in Qt. The timer lives in the dispatcher belonging to this object's
+        // thread, and only that thread's event loop can ever deliver the resulting timerEvent().
+        // Registering from elsewhere would either race that dispatcher's lifetime or quietly install
+        // a timer whose events the caller is not positioned to receive, so refuse it outright rather
+        // than doing something surprising.
+        if( thread() != Thread::currentThread() )
+        {
+            std::fprintf( stderr,
+                "Object::startTimer: timers cannot be started from another thread\n" );
+            return -1;
+        }
+
+        if( auto tData = threadData() )
+        {
+            if( auto disp = tData->dispatcher() )
+            {
+                // Only consume an id once the timer is actually going to be registered.
+                const int timerId = TimerIdPool::allocate();
+                if( timerId < 0 )
+                {
+                    std::fprintf( stderr,
+                        "Object::startTimer: no timer ids left\n" );
+                    return -1;
+                }
+                disp->registerTimer( timerId, aIntervalMs, this );
+                {
+                    // Recorded so ~Object() can hand the id back even if the timer is never killed.
+                    std::lock_guard<std::mutex> lock( mRunningTimerIdsMutex );
+                    mRunningTimerIds.push_back( timerId );
+                }
+                return timerId;
+            }
+        }
+
+        std::fprintf( stderr,
+            "Object::startTimer: this thread has no event dispatcher, so the timer cannot "
+            "be started\n" );
+        return -1;
+    }
+
+    void Object::killTimer
+        (
+        int aTimerId  //!< The timer ID to stop.
+        )
+    {
+        // Thread-confined for the same reason as startTimer().
+        if( thread() != Thread::currentThread() )
+        {
+            std::fprintf( stderr,
+                "Object::killTimer: timers cannot be stopped from another thread\n" );
+            return;
+        }
+
+        const bool wasOurs = forgetTimerId( aTimerId );
+
+        if( auto tData = threadData() )
+        {
+            if( auto disp = tData->dispatcher() )
+            {
+                disp->unregisterTimer( aTimerId );
+            }
+        }
+
+        // Released only after unregisterTimer() has both dropped the timer and purged any event it
+        // had already queued, so the id cannot be reissued while something still referring to it is
+        // in the queue. Only ids this object actually owns are returned, so a bogus or double
+        // killTimer() cannot inject a duplicate into the pool.
+        if( wasOurs )
+        {
+            TimerIdPool::release( aTimerId );
+        }
+    }
+
+    //! Kills the timer with the specified ID.
+    //!
+    //! **Not thread-safe: must be called from this object's own thread**, for the same reason as
+    //! startTimer(). Calls from another thread are rejected with a warning and do nothing.
+    //! Drops @p aTimerId from this object's record of running timers. Returns whether it was there.
+    //!
+    //! The id is *not* returned to the pool here. Both callers have to unregister the timer with
+    //! the dispatcher first, and releasing before that could reissue an id an already-queued
+    //! TimerEvent still names.
+    bool Object::forgetTimerId
+        (
+        int aTimerId  //!< The timer ID to forget.
+        )
+    {
+        std::lock_guard<std::mutex> lock( mRunningTimerIdsMutex );
+        auto it = std::find( mRunningTimerIds.begin(), mRunningTimerIds.end(), aTimerId );
+        if( it == mRunningTimerIds.end() )
+        {
+            return false;
+        }
+        mRunningTimerIds.erase( it );
+        return true;
     }
 
     //! Internal helper to schedule or update a callLater deferred invocation.
@@ -363,7 +657,6 @@ namespace QtLikeSignal
         }
     }
 
-
     //! Return true if the specified aData belongs to the calling thread.
     //! We need this helper function because we cannot include Thread.h in Object.h.
     bool Object::isCurrentThread
@@ -377,15 +670,6 @@ namespace QtLikeSignal
         return aData.get() == Thread::currentThread()->threadDataPtr();
     }
 
-    //! Gets the thread affinity of this object. Thread-safe. Never returns a dangling pointer: the
-    //! affinity is stored as a ThreadData (which outlives its Thread), so this reports nullptr once
-    //! the Thread it lived in has been destroyed rather than a stale Thread*.
-    Thread* Object::thread() const
-    {
-        const std::shared_ptr<ThreadData> data = mAffinity->data();
-        return data ? data->thread() : nullptr;
-    }
-
     //! Gets the thread data container holding this object's event dispatcher.
     //!
     //! Private: this is internal plumbing with no QObject equivalent -- Qt's
@@ -396,101 +680,6 @@ namespace QtLikeSignal
     std::shared_ptr<ThreadData> Object::threadData() const
     {
         return mAffinity->data();
-    }
-
-    //! Changes the thread affinity of this object.
-    //!
-    //! **Not thread-safe: must be called from this object's own thread**, matching Qt's
-    //! QObject::moveToThread() ("Current thread is not the object's thread. Cannot move to target
-    //! thread"). Only the thread that currently owns an object may hand it to another; letting any
-    //! thread re-home an object at will would race the owner's own use of it.
-    //!
-    //! Qt's one exception is reproduced: an object with *no* thread affinity yet may be adopted by
-    //! the calling thread. That is what lets a freshly constructed object be moved onto a worker,
-    //! and what lets Thread adopt itself when its run loop starts. Returns true if the object now
-    //! lives in the requested thread (including when it already did); false if the move was
-    //! refused, in which case the affinity is unchanged.
-    bool Object::moveToThread
-        (
-        Thread* aThread  //!< The new thread this object will live in; nullptr clears the affinity.
-        )
-    {
-        Thread* const currentAffinity = thread();
-        Thread* const callerThread = Thread::currentThread();
-
-        if( currentAffinity == aThread )
-        {
-            // Already there; nothing to do and nothing to refuse.
-            return true;
-        }
-
-        // Transcribed from Qt's QObject::moveToThread(). The general rule is that only the thread that
-        // owns an object may re-home it, with one exception: an object that has no affinity yet may be
-        // adopted by the calling thread. That exception is what makes the two normal idioms work --
-        // moving a freshly constructed object onto a worker, and Thread adopting itself once its run
-        // loop starts -- while still rejecting one thread yanking another thread's live object away.
-        const bool adoptingUnownedObject = ( currentAffinity == nullptr && aThread == callerThread )
-        ;
-        if( !adoptingUnownedObject && currentAffinity != callerThread )
-        {
-            std::fprintf( stderr,
-                "Object::moveToThread: current thread is not the object's thread; cannot "
-                "move it to the target thread\n" );
-            return false;
-        }
-
-        // Take any active timers off the outgoing dispatcher before the affinity changes. Qt documents
-        // this behaviour ("all active timers for the object will be reset ... stopped in the current
-        // thread and restarted, with the same interval, in the targetThread"); without it the timers
-        // would keep firing on the thread the object just left, delivering timerEvent() somewhere it
-        // no longer lives.
-        std::vector<AbstractEventDispatcher::TimerRegistration> timersToMove;
-        {
-            std::shared_ptr<ThreadData> oldData = mAffinity->data();
-            if( oldData )
-            {
-                if( auto oldDispatcher = oldData->dispatcher() )
-                {
-                    timersToMove = oldDispatcher->takeTimersForReceiver( this );
-                }
-            }
-        }
-
-        // Resolve the new thread's data and store it in the Affinity box in one step, so concurrent
-        // readers of thread()/threadData() (notably a connect() wrapper resolving affinity at emit
-        // time) never see a half-updated pairing of thread and dispatcher.
-        const std::shared_ptr<ThreadData> oldData = mAffinity->data();
-        std::shared_ptr<ThreadData> newData = aThread ? aThread->threadData() : nullptr;
-        mAffinity->setData( newData );
-
-        migratePostedEvents( oldData, newData );
-
-        if( !timersToMove.empty() )
-        {
-            // Re-register on the destination thread rather than from here: registerTimer() must run
-            // where the timer will be serviced. Qt solves it the same way, queueing the
-            // re-registration with invokeMethod(..., Qt::QueuedConnection) so it lands on the new
-            // thread. If this object is destroyed before the queued call runs, ~Object() strips its
-            // pending events from the dispatcher, so the call is dropped rather than dangling.
-            dispatchMetaCall(
-                this,
-                [this, timersToMove]()
-                {
-                    if( auto tData = threadData() )
-                    {
-                        if( auto disp = tData->dispatcher() )
-                        {
-                            for( const auto& timer : timersToMove )
-                            {
-                                disp->registerTimer( timer.mTimerId, timer.mIntervalMs, this );
-                            }
-                        }
-                    }
-                },
-                ConnectionType::Queued );
-        }
-
-        return true;
     }
 
     //! Carries this object's already-posted events from @p aOldData's dispatcher to @p aNewData's.
@@ -567,78 +756,6 @@ namespace QtLikeSignal
         }
     }
 
-    //! Gets the object's descriptive name.
-    //!
-    //! **Not thread-safe: must be called from this object's own thread.** The name is a plain
-    //! std::string with no lock, so a concurrent setObjectName() is a data race. This said
-    //! "Thread-safe" until 2026-08-13 and was never true -- see mObjectName for why the member is
-    //! deliberately unguarded, which is the same reason QObject::objectName() has no locking either.
-    std::string Object::objectName() const
-    {
-        return mObjectName;
-    }
-
-    //! Sets the object's descriptive name.
-    //!
-    //! **Not thread-safe: must be called from this object's own thread**, for the same reason as
-    //! objectName() above.
-    void Object::setObjectName
-        (
-        const std::string& aName  //!< The new object name.
-        )
-    {
-        mObjectName = aName;
-    }
-
-    //! Schedules this object for deletion in the event loop. Thread-safe.
-    void Object::deleteLater()
-    {
-        // De-bounce repeated calls: only the first ever posts a DeferredDeleteEvent, matching Qt's
-        // own guard ("De-bounce QDeferredDeleteEvents" over QObjectPrivate::deleteLaterCalled,
-        // qobject.cpp).
-        //
-        // This is Qt parity and defense-in-depth, not a fix for a reachable bug: a duplicate event
-        // is already harmless, since the deletedReceivers set in processEvents() covers the case
-        // where both land in one batch, and ~Object()'s removeEventsForReceiver() strips any that
-        // are still queued. What the guard adds is that the invariant "at most one deferred delete
-        // exists per object" holds at the source, rather than depending on two separate downstream
-        // mechanisms to keep covering every interleaving -- plus it skips a redundant allocation.
-        if( mDeleteLaterPosted.exchange( true ) )
-        {
-            return;
-        }
-
-        auto* event = new DeferredDeleteEvent();
-        if( auto tData = threadData() )
-        {
-            // Queue only if there is a live thread to dispatch it. A destroyed Thread leaves its
-            // ThreadData -- and that ThreadData's still-working dispatcher -- behind, so without
-            // this check the event is accepted by a queue nothing will ever drain and the object is
-            // leaked outright rather than deleted. Falling through to the synchronous delete below
-            // is the lesser evil, and the same trade QtMimic makes when its post() refuses the task:
-            // "Doing nothing here would leak self forever, which is strictly worse than the
-            // thread-affinity violation of deleting it synchronously."
-            if( tData->thread() != nullptr )
-            {
-                if( auto disp = tData->dispatcher() )
-                {
-                    // A refusal means the dispatcher is closing, so nothing would ever drain this
-                    // event; postEvent() has already freed it. Fall through to the synchronous
-                    // delete rather than leaking the object.
-                    mMayHaveQueuedWork.store( true, std::memory_order_release );
-                    if( disp->postEvent( this, static_cast<Event*>( event ) ) )
-                    {
-                        return;
-                    }
-                    delete this;
-                    return;
-                }
-            }
-        }
-        delete event;
-        delete this;
-    }
-
     //! Internal event dispatch plumbing; routes an event to its handler.
     //!
     //! Deliberately private and non-virtual: this is not an extension point. The event queue is
@@ -674,116 +791,6 @@ namespace QtLikeSignal
             // own internals. Nothing can inject an arbitrary event for an arbitrary receiver, so
             // any other type is unreachable rather than something to hand to a user hook.
             return false;
-        }
-    }
-
-    //! Handles timer events sent to this object.
-    void Object::timerEvent
-        (
-        TimerEvent* aEvent  //!< The timer event containing the timer ID.
-        )
-    {
-        ( void )aEvent;
-    }
-
-    //! Starts a timer for this object with the specified interval.
-    //!
-    //! **Not thread-safe: must be called from this object's own thread.** Timers are owned by the
-    //! dispatcher of the thread the object lives in, and only that thread's event loop can deliver
-    //! the resulting timerEvent(). Calling from any other thread is rejected with a warning on
-    //! stderr and returns -1, matching Qt, whose QObject::startTimer() likewise refuses
-    //! ("Timers cannot be started from another thread"). To start a timer for an object living in
-    //! another thread, get onto that thread first -- for example with callLater(). Returns the
-    //! unique timer ID, or -1 if the timer could not be started.
-    int Object::startTimer
-        (
-        int aInterval  //!< Interval in milliseconds.
-        )
-    {
-        // Thread-confined, as in Qt. The timer lives in the dispatcher belonging to this object's
-        // thread, and only that thread's event loop can ever deliver the resulting timerEvent().
-        // Registering from elsewhere would either race that dispatcher's lifetime or quietly install
-        // a timer whose events the caller is not positioned to receive, so refuse it outright rather
-        // than doing something surprising.
-        if( thread() != Thread::currentThread() )
-        {
-            std::fprintf( stderr,
-                "Object::startTimer: timers cannot be started from another thread\n" );
-            return -1;
-        }
-
-        if( auto tData = threadData() )
-        {
-            if( auto disp = tData->dispatcher() )
-            {
-                // Only consume an id once the timer is actually going to be registered.
-                const int timerId = TimerIdPool::allocate();
-                if( timerId < 0 )
-                {
-                    std::fprintf( stderr,
-                        "Object::startTimer: no timer ids left\n" );
-                    return -1;
-                }
-                disp->registerTimer( timerId, aInterval, this );
-                {
-                    // Recorded so ~Object() can hand the id back even if the timer is never killed.
-                    std::lock_guard<std::mutex> lock( mRunningTimerIdsMutex );
-                    mRunningTimerIds.push_back( timerId );
-                }
-                return timerId;
-            }
-        }
-
-        std::fprintf( stderr,
-            "Object::startTimer: this thread has no event dispatcher, so the timer cannot "
-            "be started\n" );
-        return -1;
-    }
-
-    //! Kills the timer with the specified ID.
-    //!
-    //! **Not thread-safe: must be called from this object's own thread**, for the same reason as
-    //! startTimer(). Calls from another thread are rejected with a warning and do nothing.
-    void Object::killTimer
-        (
-        int aId  //!< The timer ID to stop.
-        )
-    {
-        // Thread-confined for the same reason as startTimer().
-        if( thread() != Thread::currentThread() )
-        {
-            std::fprintf( stderr,
-                "Object::killTimer: timers cannot be stopped from another thread\n" )
-            ;
-            return;
-        }
-
-        bool wasOurs = false;
-        {
-            std::lock_guard<std::mutex> lock( mRunningTimerIdsMutex );
-            auto it = std::find( mRunningTimerIds.begin(), mRunningTimerIds.end(), aId );
-            if( it != mRunningTimerIds.end() )
-            {
-                mRunningTimerIds.erase( it );
-                wasOurs = true;
-            }
-        }
-
-        if( auto tData = threadData() )
-        {
-            if( auto disp = tData->dispatcher() )
-            {
-                disp->unregisterTimer( aId );
-            }
-        }
-
-        // Released only after unregisterTimer() has both dropped the timer and purged any event it
-        // had already queued, so the id cannot be reissued while something still referring to it is
-        // in the queue. Only ids this object actually owns are returned, so a bogus or double
-        // killTimer() cannot inject a duplicate into the pool.
-        if( wasOurs )
-        {
-            TimerIdPool::release( aId );
         }
     }
 
@@ -876,5 +883,26 @@ namespace QtLikeSignal
             return disp->postEvent( aReceiver, static_cast<Event*>( event ) );
         }
         return false;
+    }
+
+    //! Removes this connection from its receiver's mIncoming as the connection is destroyed.
+    //!
+    //! Runs when the Signal destroys the slot holding this token -- a manual disconnect(), the
+    //! sender Signal being destroyed, or ~Object()'s own disconnect loop. Without it mIncoming would
+    //! only ever grow for an object that outlives connections made to it, and would eventually hold
+    //! stale handles.
+    Object::Cleanup::~Cleanup()
+    {
+        // The receiver is gone or already being destroyed; ~Object() has taken mIncoming over and
+        // touching mOwner here would be a use-after-free. This is also what makes ~Object()'s own
+        // disconnect loop non-re-entrant, since it resets the token before disconnecting.
+        if( mLife.expired() )
+        {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock( mOwner->mIncomingMutex );
+        auto& handles = mOwner->mIncoming;
+        handles.erase( std::remove( handles.begin(), handles.end(), mHandle ), handles.end() );
     }
 }
