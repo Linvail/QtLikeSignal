@@ -39,12 +39,16 @@ thread:20
 coreapplication:20
 thread-priority:15
 thread-adoption:15
+signal:2
+argument-copying:2
+eventdispatcher-linux:2
+defect-regressions:2
 "
 
-# Deliberately NOT compared: defect-regressions. A regression suite is a record of what actually
-# broke in that codebase, so the two are supposed to differ -- QtMimic never had QtLikeSignal's
-# dispatcher bugs and QtLikeSignal never had QtMimic's. Tracking them here would imply a
-# convergence that should not happen. See the plan's category C.
+# defect-regressions used to be excluded here, on the grounds that a regression suite records what
+# actually broke in one codebase and the two are therefore supposed to differ. That stopped being
+# true once the libraries were made functionally identical: a defect in one is a defect in both, and
+# both suites now carry the union. It is compared like everything else, at a tight budget.
 
 # Collapses the differences that are legal by design, so what remains is real drift.
 normalise()

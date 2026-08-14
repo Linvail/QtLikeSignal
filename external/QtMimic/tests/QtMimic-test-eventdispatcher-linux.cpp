@@ -8,12 +8,12 @@
 #if defined( __linux__ )
 
 #include <gtest/gtest.h>
-#include "CoreApplication.h"
-#include "EventDispatcherLinux.h"
-#include "Object.h"
-#include "TestCpuTime.h"
-#include "Thread.h"
-#include "Timer.h"
+#include "CoreApplication.hpp"
+#include "EventDispatcherLinux.hpp"
+#include "Object.hpp"
+#include "TestCpuTime.hpp"
+#include "Thread.hpp"
+#include "Timer.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -23,7 +23,7 @@
 #include <poll.h>
 #include <unistd.h>
 
-using namespace QtLikeSignal;
+using namespace QtMimic;
 
 namespace
 {

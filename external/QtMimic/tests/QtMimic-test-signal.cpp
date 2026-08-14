@@ -10,19 +10,19 @@
 //! Four of them matter, and they are the four ForAI/mission-signal.md identified as the reason
 //! replacing boost::signals2 was delicate. Each one fails silently rather than at compile time.
 
-#include "QtLikeSignal-test-types.h"
+#include "QtMimic-test-types.hpp"
 
 #include "gtest/gtest.h"
-#include "Object.h"
-#include "Signal.h"
-#include "Thread.h"
+#include "Object.hpp"
+#include "Signal.hpp"
+#include "Thread.hpp"
 #include <atomic>
 #include <memory>
 #include <thread>
 #include <vector>
 #include <algorithm>
 
-using namespace QtLikeSignal;
+using namespace QtMimic;
 
 //! Counts its own copies and moves, for asserting exactly what an emit() costs.
 //!
@@ -323,7 +323,7 @@ TEST( SignalTest, EmitCopiesOncePerByValueSlotAndNoMore )
 }
 
 //! A view connects to the signal it views, and cannot emit it -- the latter asserted at compile
-//! time in QtLikeSignal-test-object.cpp, which checks SignalView has no emit().
+//! time in QtMimic-test-object.cpp, which checks SignalView has no emit().
 TEST( SignalTest, ViewConnectsToTheViewedSignal )
 {
     Signal<int> sig;
