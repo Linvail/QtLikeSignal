@@ -7,6 +7,8 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -19,6 +21,7 @@
 
 namespace QtLikeSignal
 {
+    class Object;
     class Thread;
     template <typename ... Args> class Signal;
     class AbstractEventDispatcher;
@@ -795,7 +798,10 @@ namespace QtLikeSignal
                         } );
                 };
 
-            Connection handle = aSignal.connect( wrapper );
+            // Moved, not copied: connect() takes the slot by value, so passing the named local
+            // built a second closure -- two shared_ptrs, a weak_ptr and the slot itself -- and
+            // threw the first away.
+            Connection handle = aSignal.connect( std::move( wrapper ) );
 
             // Written without a lock, which is safe for a reason worth stating: `cleanup` is a
             // local shared_ptr, so this function holds a reference for its whole body. ~Cleanup()

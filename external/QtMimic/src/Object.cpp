@@ -133,8 +133,8 @@ namespace QtMimic
         (
         std::shared_ptr<ThreadData> aThreadData
         )
-        : mAffinity( std::make_shared<Affinity>( std::move( aThreadData ) ) )
-        , mLife( std::make_shared<int>( 0 ) )
+        : mLife( std::make_shared<int>( 0 ) )
+        , mAffinity( std::make_shared<Affinity>( std::move( aThreadData ) ) )
     {
     }
 
@@ -392,12 +392,6 @@ namespace QtMimic
         mObjectName = aName;
     }
 
-    //! @brief Number of live connections where this object is the receiver (diagnostics/tests).
-    std::size_t Object::incomingConnectionCount() const
-    {
-        std::lock_guard<std::mutex> locker( mIncomingMutex );
-        return mIncoming.size();
-    }
 
     //! @brief Queue the object's destruction to its affinity thread.
     //! Qt-like QObject::deleteLater(). If the object has no thread, or its thread has stopped/gone
@@ -813,16 +807,6 @@ namespace QtMimic
     // Object::Cleanup
     //================================================================
 
-    //! Constructor
-    Object::Cleanup::Cleanup
-        (
-        Object* aOwner,
-        std::weak_ptr<int> aLife
-        )
-        : mOwner( aOwner )
-        , mLife( aLife )
-    {
-    }
 
     //! Destructor - prune this connection from the receiver's mIncoming.
     Object::Cleanup::~Cleanup()

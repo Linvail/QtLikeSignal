@@ -25,10 +25,8 @@
 
 #include "Event.hpp"
 #include "Global.hpp"
-#include "Signal.hpp"
 #include "ThreadData.hpp"
 
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -51,6 +49,7 @@ namespace QtMimic
     // handful of places that need the definition, and isCurrentThread() below exists precisely so
     // the inline connect machinery in this header does not.
     class Thread;
+    template <typename ... Args> class Signal;
     class AbstractEventDispatcher;
     class EventDispatcherDefault;
     class CoreApplication;
@@ -64,8 +63,8 @@ namespace QtMimic
 
     //! Return true if child object is derived from parent.
     template <typename Child, typename Parent>
-    constexpr bool obj_is_child_of = std::is_base_of<Parent, Child>::value && !std::is_same<Parent,
-            Child>::value && is_obj<Parent>;
+    constexpr bool obj_is_child_of = std::is_base_of<Parent, Child>::value
+        && !std::is_same<Parent, Child>::value && is_obj<Parent>;
 
     //! Return true if T is void type.
     template <typename T> constexpr bool is_void = std::is_same<void, T>::value;
@@ -97,6 +96,16 @@ namespace QtMimic
             const Object&
             ) = delete;
 
+        Object
+            (
+            Object&&
+            ) = delete;
+
+        Object& operator=
+            (
+            Object&&
+            ) = delete;
+
         Thread* thread() const;
 
         bool moveToThread
@@ -112,37 +121,6 @@ namespace QtMimic
             );
 
         void deleteLater();
-
-        std::size_t incomingConnectionCount() const;
-
-        //! Gets the weak pointer tracking the lifetime of this object. Thread-safe.
-        //!
-        //! Callers testing whether the object is still alive should use `expired()`, **not**
-        //! `lock()`. The two are equally safe here and `expired()` is far cheaper: it is a plain
-        //! load where `lock()` is an atomic read-modify-write on the control block.
-        //!
-        //! Equally safe because the token is an `int`, not the Object. Holding the `shared_ptr`
-        //! that `lock()` returns keeps that `int` alive; it does nothing whatsoever to stop the
-        //! Object being destroyed a moment later. Both forms answer exactly one question -- "had
-        //! destruction begun at the instant of the check" -- and neither closes the check-then-use
-        //! race that follows it. What actually stops a destroyed receiver being called is
-        //! ~Object() disconnecting its incoming connections.
-        std::weak_ptr<int> objectLife() const
-        {
-            return mLife;
-        }
-
-        //! Disconnects a signal connection using a connection handle. Thread-safe.
-        //!
-        //! A named spelling of handle.disconnect(), so a call site reads as the counterpart of
-        //! Object::connect() rather than reaching into the Signal directly.
-        static void disconnect
-            (
-            const Connection& aHandle  //!< The handle to disconnect.
-            )
-        {
-            aHandle.disconnect();
-        }
 
         //! Called when one of this object's timers comes due. Override to react to it; the default
         //! does nothing. Delivered by the event loop of the thread the object lives in, so an
@@ -165,6 +143,34 @@ namespace QtMimic
             int aTimerId
             );
 
+        //! Number of live connections where this object is the receiver. Thread-safe.
+        //!
+        //! A diagnostic, for asserting that a disconnect really pruned the entry rather than
+        //! leaving an inert slot behind.
+        std::size_t incomingConnectionCount() const
+        {
+            std::lock_guard<std::mutex> lock( mIncomingMutex );
+            return mIncoming.size();
+        }
+
+        //! Gets the weak pointer tracking the lifetime of this object. Thread-safe.
+        //!
+        //! Callers testing whether the object is still alive should use `expired()`, **not**
+        //! `lock()`. The two are equally safe here and `expired()` is far cheaper: it is a plain
+        //! load where `lock()` is an atomic read-modify-write on the control block.
+        //!
+        //! Equally safe because the token is an `int`, not the Object. Holding the `shared_ptr`
+        //! that `lock()` returns keeps that `int` alive; it does nothing whatsoever to stop the
+        //! Object being destroyed a moment later. Both forms answer exactly one question -- "had
+        //! destruction begun at the instant of the check" -- and neither closes the check-then-use
+        //! race that follows it. What actually stops a destroyed receiver being called is
+        //! ~Object() disconnecting its incoming connections.
+        std::weak_ptr<int> objectLife() const
+        {
+            return mLife;
+        }
+
+
         //! [Connect Overload 1]: Connects a signal to a non-overloaded member function slot.
         //!
         //! Why it exists: This is the primary overload for standard member functions. Because the target
@@ -179,8 +185,9 @@ namespace QtMimic
         //! @param aType The type of connection.
         //! @return A handle representing the connection. Thread-safe.
         template <typename Signal, typename Receiver, typename Slot>
-        static std::enable_if_t<is_obj<Receiver> && MemberFunctionTraits<Slot>::is_member_function,
-            Connection>connect
+        static std::enable_if_t<MemberFunctionTraits<Slot>::is_member_function,
+            Connection>
+        connect
             (
             Signal& aSignal,
             Receiver* aReceiver,
@@ -190,14 +197,15 @@ namespace QtMimic
         {
             using SlotClass = typename MemberFunctionTraits<Slot>::class_type;
 
+            static_assert( is_obj<Receiver>, "Receiver must be an instance of Object." );
             static_assert( MemberFunctionTraits<Slot>::is_member_function,
                 "Slot must be a member function pointer." );
             static_assert( obj_is_base_of<Receiver, SlotClass>,
                 "Slot must be a member function of Receiver or one of its base classes." );
 
-            auto adapter = [aReceiver, aSlot]( auto&&... args )
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
                 {
-                    ( aReceiver->*aSlot )( std::forward<decltype( args )>( args )... );
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
                 };
 
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
@@ -220,20 +228,18 @@ namespace QtMimic
         //! @return A handle representing the connection. Thread-safe.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename SlotClass>
-        static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, Connection>connect
+        static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, Connection>
+        connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
-            void ( SlotClass::* aSlot )
-            (
-            SignalArgs...
-            ),
+            void ( SlotClass::*aSlot )( SignalArgs... ),
             ConnectionType aType = ConnectionType::Auto
             )
         {
-            auto adapter = [aReceiver, aSlot]( auto&&... args )
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
                 {
-                    ( aReceiver->*aSlot )( std::forward<decltype( args )>( args )... );
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
                 };
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
@@ -253,17 +259,18 @@ namespace QtMimic
         //! @return A handle representing the connection. Thread-safe.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename SlotClass>
-        static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, Connection>connect
+        static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, Connection>
+        connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
-            void ( SlotClass::* aSlot )( SignalArgs... ) const,
+            void ( SlotClass::*aSlot )( SignalArgs... ) const,
             ConnectionType aType = ConnectionType::Auto
             )
         {
-            auto adapter = [aReceiver, aSlot]( auto&&... args )
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
                 {
-                    ( aReceiver->*aSlot )( std::forward<decltype( args )>( args )... );
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
                 };
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
@@ -290,16 +297,13 @@ namespace QtMimic
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
-            Ret ( SlotClass::* aSlot )
-            (
-            SignalArgs...
-            ),
+            Ret ( SlotClass::*aSlot )( SignalArgs... ),
             ConnectionType aType = ConnectionType::Auto
             )
         {
-            auto adapter = [aReceiver, aSlot]( auto&&... args )
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
                 {
-                    ( aReceiver->*aSlot )( std::forward<decltype( args )>( args )... );
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
                 };
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
@@ -324,13 +328,13 @@ namespace QtMimic
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
-            Ret ( SlotClass::* aSlot )( SignalArgs... ) const,
+            Ret ( SlotClass::*aSlot )( SignalArgs... ) const,
             ConnectionType aType = ConnectionType::Auto
             )
         {
-            auto adapter = [aReceiver, aSlot]( auto&&... args )
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
                 {
-                    ( aReceiver->*aSlot )( std::forward<decltype( args )>( args )... );
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
                 };
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
@@ -352,17 +356,18 @@ namespace QtMimic
         //! @return A handle representing the connection. Thread-safe.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver>
-        static std::enable_if_t<is_obj<Receiver>, Connection>connect
+        static std::enable_if_t<is_obj<Receiver>, Connection>
+        connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
-            void( NonDeduced<Receiver>::* aSlot )( SignalArgs ... ),
+            void ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ),
             ConnectionType aType = ConnectionType::Auto
             )
         {
-            auto adapter = [aReceiver, aSlot]( auto&&... args )
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
                 {
-                    ( aReceiver->*aSlot )( std::forward<decltype( args )>( args )... );
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
                 };
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
@@ -381,17 +386,18 @@ namespace QtMimic
         //! @return A handle representing the connection. Thread-safe.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver>
-        static std::enable_if_t<is_obj<Receiver>, Connection>connect
+        static std::enable_if_t<is_obj<Receiver>, Connection>
+        connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
-            void( NonDeduced<Receiver>::* aSlot )( SignalArgs ... ) const,
+            void ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ) const,
             ConnectionType aType = ConnectionType::Auto
             )
         {
-            auto adapter = [aReceiver, aSlot]( auto&&... args )
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
                 {
-                    ( aReceiver->*aSlot )( std::forward<decltype( args )>( args )... );
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
                 };
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
@@ -413,17 +419,18 @@ namespace QtMimic
         //! @return A handle representing the connection. Thread-safe.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename Ret>
-        static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, Connection>connect
+        static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, Connection>
+        connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
-            Ret( NonDeduced<Receiver>::* aSlot )( SignalArgs ... ),
+            Ret ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ),
             ConnectionType aType = ConnectionType::Auto
             )
         {
-            auto adapter = [aReceiver, aSlot]( auto&&... args )
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
                 {
-                    ( aReceiver->*aSlot )( std::forward<decltype( args )>( args )... );
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
                 };
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
@@ -443,17 +450,18 @@ namespace QtMimic
         //! @return A handle representing the connection. Thread-safe.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename Ret>
-        static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, Connection>connect
+        static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, Connection>
+        connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
-            Ret( NonDeduced<Receiver>::* aSlot )( SignalArgs ... ) const,
+            Ret ( NonDeduced<Receiver>::*aSlot )( SignalArgs... ) const,
             ConnectionType aType = ConnectionType::Auto
             )
         {
-            auto adapter = [aReceiver, aSlot]( auto&&... args )
+            auto adapter = [aReceiver, aSlot]( auto&&... aCallArgs )
                 {
-                    ( aReceiver->*aSlot )( std::forward<decltype( args )>( args )... );
+                    ( aReceiver->*aSlot )( std::forward<decltype( aCallArgs )>( aCallArgs )... );
                 };
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
@@ -483,15 +491,26 @@ namespace QtMimic
         {
             #if __cplusplus >= 201703L
                 static_assert( std::is_invocable_v<Func, Args...>,
-                "The provided lambda or callable does not match the Signal's arguments." );
+                    "The provided lambda or callable does not match the Signal's arguments." );
             #endif
 
             return connectImpl( aSignal, aContext, std::forward<Func>( aSlot ), aType );
         }
 
+        //! Disconnects a signal connection using a connection handle. Thread-safe.
+        //!
+        //! A named spelling of handle.disconnect(), so a call site reads as the counterpart of
+        //! Object::connect() rather than reaching into the Signal directly.
+        static void disconnect
+            (
+            const Connection& aHandle  //!< The handle to disconnect.
+            );
+
+
         //! CallLater Overload 1: schedules a non-overloaded member function slot to run deferred.
         template <typename Receiver, typename Slot, typename ... Args>
-        static std::enable_if_t<is_obj<Receiver> && MemberFunctionTraits<Slot>::is_member_function, void>
+        static std::enable_if_t<is_obj<Receiver> && MemberFunctionTraits<Slot>::is_member_function,
+            void>
         callLater
             (
             Receiver* aReceiver,
@@ -504,8 +523,8 @@ namespace QtMimic
         template <typename Receiver, typename SlotClass, typename ... Args>
         static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, void>
         callLater( Receiver* aReceiver,
-            void ( SlotClass::*aSlot ) ( NonDeduced<Args>... ),
-            Args&& ... aArgs );
+            void ( SlotClass::*aSlot )( NonDeduced<Args>... ),
+            Args&&... aArgs );
 
         //! CallLater Overload 3: schedules an overloaded const void member function slot inherited
         //! from a base class.
@@ -519,9 +538,9 @@ namespace QtMimic
         //! inherited from a base class.
         template <typename Receiver, typename SlotClass, typename Ret, typename ... Args>
         static std::enable_if_t<obj_is_child_of<Receiver, SlotClass> && !is_void<Ret>, void>
-        callLater( Receiver* aReceiver, Ret ( SlotClass::*aSlot )( NonDeduced<Args>... ), Args&&
-            ...
-            aArgs );
+        callLater( Receiver* aReceiver,
+            Ret ( SlotClass::*aSlot )( NonDeduced<Args>... ),
+            Args&&... aArgs );
 
         //! CallLater Overload 5: schedules an overloaded non-void returning const member function
         //! slot inherited from a base class.
@@ -569,11 +588,11 @@ namespace QtMimic
             std::is_function<std::remove_pointer_t<Func> >::value,
             void>
         callLater
-        (
+            (
             Object* aContext,
             Func aFunc,
             Args&&... aArgs
-        );
+            );
 
         //! CallLater Overload 11: schedules a Signal emission to run deferred.
         //!
@@ -581,11 +600,11 @@ namespace QtMimic
         //! which is exactly what a view exists to withhold.
         template <typename ... SignalArgs, typename ... Args>
         static void callLater
-        (
+            (
             Object* aContext,
             Signal<SignalArgs...>& aSignal,
             Args&&... aArgs
-        );
+            );
 
         //! CallLater Overload 12: fallback overload producing a compile-time error for unsupported
         //! targets (e.g. lambdas).
@@ -596,11 +615,11 @@ namespace QtMimic
             !IsSignal<std::decay_t<Target> >::value,
             void>
         callLater
-        (
+            (
             Object* aContext,
             Target&& aTarget,
             Args&&... aArgs
-        );
+            );
 
     protected:
         //! Construct an Object directly on stable thread data. Used by internal helpers that must
@@ -611,124 +630,6 @@ namespace QtMimic
             );
 
     private:
-        //! Internal implementation of the connect() overloads. Handles thread affinity,
-        //! queued/direct invocation, and lifetime management.
-        //! @tparam SignalType The type of the signal being connected.
-        //! @tparam ContextType The type of the context object (must derive from Object).
-        //! @tparam Callable The type of the callable (lambda, functor, std::function).
-        //! @param aSignal The signal to connect.
-        //! @param aContext The context object for thread affinity and lifetime management.
-        //! @param aSlot The callable to invoke when the signal is emitted.
-        //! @param aType The type of connection (Auto, Direct, Queued).
-        //! @return A handle representing the connection. Thread-safe.
-        template <typename SignalType, typename ContextType, typename Callable>
-        static Connection connectImpl
-            (
-            SignalType& aSignal,
-            ContextType* aContext,
-            Callable&& aSlot,
-            ConnectionType aType
-            )
-        {
-            // No context, no connection. Everything that makes a connection safe hangs off the
-            // context: the life token that lets a queued invocation be dropped when the receiver
-            // dies, the affinity that decides which thread it runs on, and the cleanup token that
-            // prunes it on disconnect. A connection without one has none of that -- it would fire
-            // forever, on whichever thread emitted, with nothing able to stop it. Qt refuses the
-            // same call for the same reason, returning an invalid QMetaObject::Connection.
-            if( !aContext )
-            {
-                return {};
-            }
-
-            // Capture a weak reference to the context's life token so queued
-            // invocations can be safely dropped if the receiver is destroyed before
-            // they run. (Only used on the queued path, which requires a context.)
-            std::weak_ptr<int> life = aContext->mLife;
-
-            // Capture the receiver's Affinity box, not a Thread* and not a snapshot of its
-            // ThreadData. The box is resolved at emit time, so moveToThread() redirects even a
-            // connection made before it, and it stays readable after the Object is destroyed.
-            std::shared_ptr<Affinity> ctxAffinity = aContext->mAffinity;
-
-            // Cleanup token captured by the slot: when the connection ends, the Signal destroys
-            // the slot, which prunes the handle from the receiver immediately. The weak life token
-            // stops it touching a receiver that is already gone.
-            std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aContext, life );
-
-            // aContext is captured as a raw pointer, but never dereferenced here: it is handed to
-            // dispatchMetaCallTo() purely as the queue key that removeEventsForReceiver() later
-            // matches on. ~Object() strips every event still queued for it before it goes away, so
-            // the dispatcher never delivers to a dead receiver.
-            Connection handle = aSignal.connect( [slot = std::forward<Callable>( aSlot ),
-                life, ctxAffinity, aType, cleanup, aContext]( auto&&... args )
-                {
-                    if( aType == ConnectionType::Direct )
-                    {
-                        // Always synchronous in the emitting thread, whatever the affinity is --
-                        // Qt::DirectConnection ignores thread affinity too.
-                        slot( args ... );
-                        return;
-                    }
-
-                    // Resolve the receiver's CURRENT affinity on every emit, like Qt reading
-                    // QObjectPrivate::threadData at activate time. This is what makes moveToThread()
-                    // affect connections made before it.
-                    const std::shared_ptr<ThreadData> ctxData =
-                    ctxAffinity ? ctxAffinity->data()
-                    : std::shared_ptr<ThreadData>();
-
-                    // No live thread to deliver on: either the receiver was detached with
-                    // moveToThread(nullptr), or the Thread it lived in has been destroyed. Qt parks
-                    // such an object on an orphan QThreadData whose event loop never runs, so the
-                    // invocation is silently dropped -- "if targetThread is nullptr, all event
-                    // processing for this object stops". Deliberately NOT a fallback direct call:
-                    // that would run the slot on the emitting thread, which is precisely the thread
-                    // confinement the caller gave up. thread() is read only as a yes/no test, never
-                    // followed, so it cannot dangle.
-                    if( ctxData == nullptr || ctxData->thread() == nullptr )
-                    {
-                        return;
-                    }
-
-                    if( aType == ConnectionType::Auto && isCurrentThread( ctxData ) )
-                    {
-                        // Already on the receiver's thread: deliver inline, like Qt::AutoConnection.
-                        slot( args ... );
-                        return;
-                    }
-
-                    // Queued connection: copy the arguments and run later in the receiver's
-                    // event loop. Dispatched through the ThreadData (kept alive by the captured
-                    // ctxData shared_ptr), NEVER a raw Thread* -- so a concurrent ~Thread()
-                    // cannot turn this into a use-after-free. If the target thread has no
-                    // dispatcher, dispatchMetaCallTo() returns false and the invocation is safely
-                    // dropped, exactly as Qt leaves events undelivered once the thread is gone.
-                    // Skip too if the receiver itself is gone by the time the call runs (the life
-                    // token), which is only known then and not at emit time.
-                    //
-                    // The argument tuple lives in the closure itself rather than behind a
-                    // make_shared box: dispatchMetaCallTo() takes the std::function by value and
-                    // moves it into the MetaCallEvent, so the tuple is built once and never
-                    // copied, and the second heap allocation the box cost is gone.
-                    dispatchMetaCallTo( ctxData, aContext,
-                    [slot, life,
-                    argTuple = std::make_tuple( std::forward<decltype( args )>( args )... )]()
-                    {
-                        if( !life.expired() )
-                        {
-                            std::apply( slot, argTuple );
-                        }
-                    } );
-                } );
-
-            cleanup->mHandle = handle;
-            {
-                std::lock_guard<std::mutex> locker( aContext->mIncomingMutex );
-                aContext->mIncoming.push_back( handle );
-            }
-            return handle;
-        }
 
         //! Key identifying a deduplicated deferred call.
         //!
@@ -826,6 +727,11 @@ namespace QtMimic
             const std::shared_ptr<ThreadData>& aData
             );
 
+        bool forgetTimerId
+            (
+            int aTimerId
+            );
+
         std::shared_ptr<ThreadData> threadData() const;
 
         //! Carries this object's already-posted events across in moveToThread(). See the definition.
@@ -840,7 +746,8 @@ namespace QtMimic
             Event* aEvent
             );
 
-        static bool dispatchMetaCall
+        static bool
+        dispatchMetaCall
             (
             Object* aTarget,
             std::function<void()> aSlot,
@@ -855,7 +762,8 @@ namespace QtMimic
         //! constructed on one thread and then runs on another, so routing post() through its Object
         //! affinity would deliver to whoever created it until its loop started and re-pointed the
         //! affinity at itself.
-        static bool dispatchMetaCallTo
+        static bool
+        dispatchMetaCallTo
             (
             const std::shared_ptr<ThreadData>& aData,
             Object* aReceiver,
@@ -871,22 +779,166 @@ namespace QtMimic
                 (
                 Object* aOwner,
                 std::weak_ptr<int> aLife
-                );
+                )
+                : mOwner( aOwner )
+                , mLife( std::move( aLife ) )
+            {
+            }
 
             ~Cleanup();
+
+            Cleanup
+                (
+                const Cleanup&
+                ) = delete;
+
+            Cleanup& operator=
+                (
+                const Cleanup&
+                ) = delete;
 
             Object* mOwner;
             std::weak_ptr<int> mLife;
             Connection mHandle;
         };
-        bool forgetTimerId
+
+        //! Internal implementation of the connect() overloads. Handles thread affinity,
+        //! queued/direct invocation, and lifetime management.
+        //! @tparam SignalType The type of the signal being connected.
+        //! @tparam ContextType The type of the context object (must derive from Object).
+        //! @tparam Callable The type of the callable (lambda, functor, std::function).
+        //! @param aSignal The signal to connect.
+        //! @param aContext The context object for thread affinity and lifetime management.
+        //! @param aSlot The callable to invoke when the signal is emitted.
+        //! @param aType The type of connection (Auto, Direct, Queued).
+        //! @return A handle representing the connection. Thread-safe.
+        template <typename SignalType, typename Callable>
+        static Connection connectImpl
             (
-            int aTimerId
-            );
+            SignalType& aSignal,
+            Object* aContext,
+            Callable&& aSlot,
+            ConnectionType aType
+            )
+        {
+            // No context, no connection. Everything that makes a connection safe hangs off the
+            // context: the life token that lets a queued invocation be dropped when the receiver
+            // dies, the affinity that decides which thread it runs on, and the cleanup token that
+            // prunes it on disconnect. A connection without one has none of that -- it would fire
+            // forever, on whichever thread emitted, with nothing able to stop it. Qt refuses the
+            // same call for the same reason, returning an invalid QMetaObject::Connection.
+            if( !aContext )
+            {
+                return {};
+            }
 
+            // Capture a weak reference to the context's life token so queued
+            // invocations can be safely dropped if the receiver is destroyed before
+            // they run. (Only used on the queued path, which requires a context.)
+            std::weak_ptr<int> weakLife = aContext->objectLife();
 
+            // Capture the receiver's Affinity box, not a Thread* and not a snapshot of its
+            // ThreadData. The box is resolved at emit time, so moveToThread() redirects even a
+            // connection made before it, and it stays readable after the Object is destroyed.
+            std::shared_ptr<Affinity> ctxAffinity = aContext->mAffinity;
+
+            // Cleanup token captured by the slot: when the connection ends, the Signal destroys
+            // the slot, which prunes the handle from the receiver immediately. The weak life token
+            // stops it touching a receiver that is already gone.
+            std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aContext, weakLife );
+
+            // aContext is captured as a raw pointer, but never dereferenced here: it is handed to
+            // dispatchMetaCallTo() purely as the queue key that removeEventsForReceiver() later
+            // matches on. ~Object() strips every event still queued for it before it goes away, so
+            // the dispatcher never delivers to a dead receiver.
+            auto wrapper = [weakLife, aContext, slot = std::forward<Callable>( aSlot ), aType,
+                ctxAffinity, cleanup]( auto&&... aArgs )
+                {
+                    if( aType == ConnectionType::Direct )
+                    {
+                        // Always synchronous in the emitting thread, whatever the affinity is --
+                        // Qt::DirectConnection ignores thread affinity too.
+                        slot( aArgs ... );
+                        return;
+                    }
+
+                    // Resolve the receiver's CURRENT affinity on every emit, like Qt reading
+                    // QObjectPrivate::threadData at activate time. This is what makes moveToThread()
+                    // affect connections made before it.
+                    const auto ctxData = ctxAffinity ? ctxAffinity->data() : std::shared_ptr<
+                            ThreadData>();
+
+                    // No live thread to deliver on: either the receiver was detached with
+                    // moveToThread(nullptr), or the Thread it lived in has been destroyed. Qt parks
+                    // such an object on an orphan QThreadData whose event loop never runs, so the
+                    // invocation is silently dropped -- "if targetThread is nullptr, all event
+                    // processing for this object stops". Deliberately NOT a fallback direct call:
+                    // that would run the slot on the emitting thread, which is precisely the thread
+                    // confinement the caller gave up. thread() is read only as a yes/no test, never
+                    // followed, so it cannot dangle.
+                    if( ctxData == nullptr || ctxData->thread() == nullptr )
+                    {
+                        return;
+                    }
+
+                    if( aType == ConnectionType::Auto && isCurrentThread( ctxData ) )
+                    {
+                        // Already on the receiver's thread: deliver inline, like Qt::AutoConnection.
+                        slot( aArgs ... );
+                        return;
+                    }
+
+                    // Queued connection: copy the arguments and run later in the receiver's
+                    // event loop. Dispatched through the ThreadData (kept alive by the captured
+                    // ctxData shared_ptr), NEVER a raw Thread* -- so a concurrent ~Thread()
+                    // cannot turn this into a use-after-free. If the target thread has no
+                    // dispatcher, dispatchMetaCallTo() returns false and the invocation is safely
+                    // dropped, exactly as Qt leaves events undelivered once the thread is gone.
+                    // Skip too if the receiver itself is gone by the time the call runs (the life
+                    // token), which is only known then and not at emit time.
+                    //
+                    // The argument tuple lives in the closure itself rather than behind a
+                    // make_shared box: dispatchMetaCallTo() takes the std::function by value and
+                    // moves it into the MetaCallEvent, so the tuple is built once and never
+                    // copied, and the second heap allocation the box cost is gone.
+                    dispatchMetaCallTo( ctxData, aContext,
+                        [weakLife, slot,
+                        argTuple = std::make_tuple( std::forward<decltype( aArgs )>( aArgs )... )]()
+                        {
+                            if( !weakLife.expired() )
+                            {
+                                std::apply( slot, argTuple );
+                            }
+                        } );
+                };
+
+            // Moved, not copied: connect() takes the slot by value, so passing the named local
+            // built a second closure -- two shared_ptrs, a weak_ptr and the slot itself -- and
+            // threw the first away.
+            Connection handle = aSignal.connect( std::move( wrapper ) );
+
+            cleanup->mHandle = handle;
+            {
+                std::lock_guard<std::mutex> lock( aContext->mIncomingMutex );
+                aContext->mIncoming.push_back( handle );
+            }
+            return handle;
+        }
+        //! Grants the event queue access to event(), which it alone invokes.
+        friend class EventDispatcherDefault;
+
+        //! Grants the callLater pending-call registry (defined in Object.cpp) the ability to
+        //! name the private CallLaterKey/CallLaterKeyHash types its map is keyed on.
+        friend struct CallLaterRegistry;
+
+        //! Grants Thread access to threadData() and mAffinity, which it needs to adopt a thread's
+        //! affinity, and to dispatchMetaCallTo(), which Thread::post() queues through.
+        friend class Thread;
+
+        friend class Timer;
+
+        std::shared_ptr<int> mLife;              //!< Liveness token; reset in ~Object() so weak references expire.
         const std::shared_ptr<Affinity> mAffinity;     //!< Affinity holder; never reassigned after ctor
-        std::shared_ptr<int> mLife;              //!< Liveness token for queued slots
         std::atomic<bool> mDeleteLaterPosted { false }; //!< true once deleteLater() has posted delete
 
         //! True once this object has been the context of a callLater(), so ~Object() knows whether
@@ -900,9 +952,6 @@ namespace QtMimic
         //! every destruction, including for the objects -- most of them -- that never used either
         //! feature. Qt guards the same call the same way: `if (d->postedEvents)` in ~QObject().
         std::atomic<bool> mMayHaveQueuedWork { false };
-        mutable std::mutex mIncomingMutex;       //!< Protects mIncoming
-        std::vector<Connection> mIncoming;       //!< Connections where this is the receiver
-
         //! This object's descriptive name.
         //!
         //! Deliberately unguarded, matching QObject, whose objectName() has no locking either. A
@@ -911,6 +960,10 @@ namespace QtMimic
         //! and naming it from another is the same misuse as calling any of its other setters from
         //! there. Use the object from the thread it lives in.
         std::string mObjectName;
+
+        std::vector<Connection> mIncoming;       //!< Connections where this is the receiver
+        mutable std::mutex mIncomingMutex;       //!< Guards mIncoming.
+
 
         //! Ids of timers started on this object and not yet killed.
         //!
@@ -927,28 +980,22 @@ namespace QtMimic
         //! quite that tightly, so the list is not single-threaded in practice.
         mutable std::mutex mRunningTimerIdsMutex;
 
-        //! Grants the event queue access to event(), which it alone invokes.
-        friend class EventDispatcherDefault;
-
-        //! Grants the callLater pending-call registry (defined in Object.cpp) the ability to
-        //! name the private CallLaterKey/CallLaterKeyHash types its map is keyed on.
-        friend struct CallLaterRegistry;
-
-        //! Grants Thread access to threadData() and mAffinity, which it needs to adopt a thread's
-        //! affinity, and to dispatchMetaCallTo(), which Thread::post() queues through.
-        friend class Thread;
-
-        friend class CoreApplication;
-
-        friend class Timer;
     };
+
+    //! Disconnects a signal connection using a connection handle. Thread-safe.
+    inline void Object::disconnect
+        (
+        const Connection& aHandle
+        )
+    {
+        aHandle.disconnect();
+    }
 
     //! CallLater Overload 1 definition. This is the primary overload for standard member
     //! functions. Because the target slot is not overloaded, the compiler can directly deduce the
     //! Slot type.
     template <typename Receiver, typename Slot, typename ... Args>
-    std::enable_if_t<is_obj<Receiver> &&
-        MemberFunctionTraits<Slot>::is_member_function,
+    std::enable_if_t<is_obj<Receiver> && MemberFunctionTraits<Slot>::is_member_function,
         void>Object::callLater
         (
         Receiver* aReceiver,  //!< Target object receiving the call.
@@ -958,11 +1005,10 @@ namespace QtMimic
     {
         using SlotClass = typename MemberFunctionTraits<Slot>::class_type;
 
-        static_assert(
-            is_obj<Receiver>, "Receiver must be an instance of Object." );
+        static_assert( is_obj<Receiver>, "Receiver must be an instance of Object." );
         static_assert( MemberFunctionTraits<Slot>::is_member_function,
             "Slot must be a member function pointer." );
-        static_assert( std::is_base_of<SlotClass, Receiver>::value,
+        static_assert( obj_is_base_of<Receiver, SlotClass>,
             "Slot must be a member function of Receiver or one of its base classes." );
         static_assert( std::is_invocable_v<Slot, Receiver*, Args...>,
             "Arguments do not match the parameters of the member function." );
@@ -999,10 +1045,7 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<void ( SlotClass::* )
-            (
-            Args...
-            )>( aReceiver, aSlot,
+        dispatchCallLater<void ( SlotClass::* )( Args... )>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1025,10 +1068,7 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<void ( SlotClass::* )
-            (
-            Args...
-            ) const>( aReceiver, aSlot,
+        dispatchCallLater<void ( SlotClass::* )( Args... ) const>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1055,10 +1095,7 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<Ret ( SlotClass::* )
-            (
-            Args...
-            )>( aReceiver, aSlot,
+        dispatchCallLater<Ret ( SlotClass::* )( Args... )>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1081,10 +1118,7 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<Ret ( SlotClass::* )
-            (
-            Args...
-            ) const>( aReceiver, aSlot,
+        dispatchCallLater<Ret ( SlotClass::* )( Args... ) const>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1108,10 +1142,7 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<void ( Receiver::* )
-            (
-            Args...
-            )>( aReceiver, aSlot,
+        dispatchCallLater<void ( Receiver::* )( Args... )>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1134,10 +1165,7 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<void ( Receiver::* )
-            (
-            Args...
-            ) const>( aReceiver, aSlot,
+        dispatchCallLater<void ( Receiver::* )( Args... ) const>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1161,10 +1189,7 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<Ret ( Receiver::* )
-            (
-            Args...
-            )>( aReceiver, aSlot,
+        dispatchCallLater<Ret ( Receiver::* )( Args... )>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1187,10 +1212,7 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<Ret ( Receiver::* )
-            (
-            Args...
-            ) const>( aReceiver, aSlot,
+        dispatchCallLater<Ret ( Receiver::* )( Args... ) const>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1202,7 +1224,8 @@ namespace QtMimic
     //! execution to the provided context object's thread loop.
     template <typename Func, typename ... Args>
     std::enable_if_t<std::is_pointer<Func>::value &&
-        std::is_function<std::remove_pointer_t<Func> >::value, void> Object::callLater
+        std::is_function<std::remove_pointer_t<Func> >::value,
+        void>Object::callLater
         (
         Object* aContext,  //!< Target Object defining thread affinity and lifetime.
         Func aFunc,          //!< Function pointer.
@@ -1246,7 +1269,7 @@ namespace QtMimic
 
         Signal<SignalArgs...>* sigPtr = &aSignal;
 
-        dispatchCallLater<Signal<SignalArgs...> >( aContext, sigPtr,
+        dispatchCallLater<Signal<SignalArgs...>>( aContext, sigPtr,
             [sigPtr]( auto&&... a )
             {
                 sigPtr->emit( std::forward<decltype( a )>( a )... );
