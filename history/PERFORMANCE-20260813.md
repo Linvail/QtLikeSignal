@@ -461,6 +461,36 @@ The six recorded on 2026-08-08 all still apply and are not repeated here. Three 
   baseline column, not just the derived one — the invalid result is obvious there and invisible in
   the difference.
 
+## The guards that fail on a regression
+
+Everything above is a measurement: it prints a number for a human to read. Nine tests in
+`src/tests/test_QtLikeSignal_Regression.cpp` and `test_Qt6_Performance.cpp` **fail** instead, so a
+regression is reported rather than noticed. They run in the benchmark binary, take under a second in
+total, and each one was verified by reintroducing the defect it guards.
+
+| kind | guard | fires when |
+|---|---|---|
+| Shape | teardown stays linear in the receiver count | 4.0–4.4x healthy, bar 8x, **12.2x** with P7's sweep restored |
+| Shape | destroying an Object ignores other objects' backlogs | ~1x healthy, bar 3x, hundreds with P1's scan restored |
+| Count | direct emit allocates nothing | 0 healthy, **1 per emit** with an allocation added |
+| Count | same-thread auto emit allocates nothing | 0 healthy |
+| Count | one connection costs at most five heap blocks | 5 today (P10) |
+| Count | queued emit allocations stay bounded | ~2.8 today, bar 4 |
+| Time | direct emit keeps up with Qt 6 | 0.8x healthy, bar 2x, **2.4x** with a delay injected |
+| Time | same-thread auto emit keeps up with Qt 6 | 1.7x healthy, bar 3.5x |
+| Time | connect() keeps up with Qt 6 | 2.9x healthy, bar 6x |
+
+**Prefer the shape and count guards.** A count is exact and identical on every machine, so its
+threshold never needs recalibrating; a ratio between two workload sizes is immune to machine speed.
+Only the timing guards need a reference, which is why they are expressed against Qt 6 measured in
+the same process and skipped entirely in an unoptimised build — where our `-O0` code would be
+compared against Qt's prebuilt optimised library and fail for no reason.
+
+**The shape guards are the ones that matter most.** P7 was a *quadratic* regression: 16 000
+receivers went from 4 ms to 671 ms, and no absolute threshold would have caught it early, because at
+small N it looked fine. A constant-factor regression costs nanoseconds; an accidental O(N²) is the
+one that takes a program down.
+
 ## Standing caveat
 
 **Nothing here has been profiled against a real workload.** These are microbenchmarks with no work

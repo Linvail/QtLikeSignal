@@ -48,7 +48,8 @@ namespace PerfHarness
         )
     {
         results().push_back( { aScenario, aLibrary, aNsPerOp } );
-        std::printf( "  %-34s %-13s %10.1f ns/op\n", aScenario.c_str(), aLibrary.c_str(), aNsPerOp );
+        std::printf( "  %-34s %-13s %10.1f ns/op\n", aScenario.c_str(), aLibrary.c_str(), aNsPerOp )
+        ;
         std::fflush( stdout );
     }
 
@@ -73,7 +74,7 @@ namespace PerfHarness
             volatile auto sink = aValue;
             ( void )sink;
         #else
-            asm volatile ( "" : : "r,m"( aValue ) : "memory" );
+            asm volatile ( "" : : "r,m" ( aValue ) : "memory" );
         #endif
     }
 
@@ -194,6 +195,70 @@ namespace PerfHarness
     constexpr int kConnectOps = 20000;
     constexpr int kDirectOps  = 1000000;
     constexpr int kQueuedOps  = 200000;
+
+    //! Runs @p aBody @p aRepeats times and keeps the fastest result.
+    //!
+    //! The minimum, not the mean or the median. A constant-factor regression of a few nanoseconds
+    //! sits inside the run-to-run spread of a loaded machine, and averaging buries it -- comparing
+    //! medians over four runs once reported two builds as identical when one was 29% slower. The
+    //! minimum estimates how fast the code can go; everything above it is the scheduler.
+    template <typename Body>
+    double bestOf
+        (
+        int aRepeats,   //!< How many times to measure.
+        Body aBody      //!< Returns one measurement.
+        )
+    {
+        double best = aBody();
+        for( int i = 1; i < aRepeats; ++i )
+        {
+            best = std::min( best, aBody() );
+        }
+        return best;
+    }
+
+    //! Counts heap allocations between start() and stop(), process-wide.
+    //!
+    //! Exact, and therefore the most durable check in this file: an allocation count does not vary
+    //! with machine speed, load, or compiler version, so a threshold on it never flakes and never
+    //! needs recalibrating. Two of the regressions this suite exists to catch -- a per-emit
+    //! allocation, and connect() spreading a connection over more blocks -- are countable rather
+    //! than timeable.
+    //!
+    //! Requires the operator new/delete replacements in PerfAllocationCounter.cpp; without them the
+    //! counter simply stays at zero, so the tests that use it are skipped rather than wrong.
+    //! QtLikeSignal measurements, callable from the Qt translation unit.
+    //!
+    //! Declared here and defined in test_QtLikeSignal_Regression.cpp because the timing guards
+    //! compare the two libraries and have to live somewhere that can measure both -- and no single
+    //! file can: Qt defines `emit` as an empty macro, so a translation unit that includes Qt headers
+    //! cannot also call `signal.emit( 1 )`. This header is the seam, and contains no `emit` for the
+    //! same reason.
+    namespace Measure
+    {
+        //! Nanoseconds per emit through an explicit direct connection.
+        double qtLikeSignalDirectEmitNs();
+
+        //! Nanoseconds per emit through an auto connection whose receiver shares this thread.
+        double qtLikeSignalAutoEmitNs();
+
+        //! Nanoseconds per connect().
+        double qtLikeSignalConnectNs();
+
+    }
+
+    namespace Allocations
+    {
+        //! True when the counting operator new is linked in. See PerfAllocationCounter.cpp.
+        bool available();
+
+        //! Starts counting on the calling thread. Nested calls are not supported.
+        void start();
+
+        //! Stops counting and returns how many allocations happened since start().
+        long stop();
+
+    }
 }
 
 #include <chrono>
