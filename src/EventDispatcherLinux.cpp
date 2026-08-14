@@ -42,7 +42,8 @@ namespace QtLikeSignal
     //! @p aEvents is a poll(2) mask (POLLIN, POLLOUT, ...). @p aCallback runs on the dispatcher's
     //! own thread with no lock held, so it may freely post events, start timers, or register and
     //! unregister sources. Registering a descriptor that is already registered replaces its mask
-    //! and callback. Returns false if @p aFd is negative or @p aCallback is empty. Thread-safe.
+    //! and callback, and counts as a new registration for the purposes of unregisterEventSource().
+    //! Returns false if @p aFd is negative or @p aCallback is empty. Thread-safe.
     bool EventDispatcherLinux::registerEventSource
         (
         int aFd,                          //!< Descriptor to poll; must be >= 0.
@@ -57,21 +58,28 @@ namespace QtLikeSignal
 
         {
             std::lock_guard<std::mutex> lock( mMutex );
+
+            // A fresh generation either way, so a poll() round already in flight against the old
+            // registration cannot deliver to the new callback.
+            const unsigned long long generation = mNextGeneration++;
+
+            bool replaced = false;
             for( auto& source : mSources )
             {
                 if( source.mFd == aFd )
                 {
-                    source.mEvents   = aEvents;
-                    source.mCallback = std::move( aCallback );
+                    source.mEvents     = aEvents;
+                    source.mCallback   = std::move( aCallback );
+                    source.mGeneration = generation;
                     // Fall through to the wake below: a loop already blocked in poll() is waiting on
                     // the old mask and has to rebuild its descriptor set to honour the new one.
-                    aFd = -1;
+                    replaced = true;
                     break;
                 }
             }
-            if( aFd >= 0 )
+            if( !replaced )
             {
-                mSources.push_back( { aFd, aEvents, std::move( aCallback ) } );
+                mSources.push_back( { aFd, aEvents, std::move( aCallback ), generation } );
             }
         }
 
@@ -82,7 +90,19 @@ namespace QtLikeSignal
         return true;
     }
 
-    //! Stops polling a descriptor. Returns true if it was registered. Thread-safe.
+    //! Stops polling a descriptor. Returns true if it was registered.
+    //!
+    //! **Called from the dispatcher's own thread -- including from inside a callback -- this is
+    //! synchronous:** the callback will not run again, not even for a readiness this poll() round
+    //! has already observed, because every invocation re-checks the registration first.
+    //!
+    //! Called from another thread it is not, and cannot be without blocking on a callback that may
+    //! be running arbitrary code. The callback can still be in progress when this returns. A caller
+    //! that is about to destroy what the callback captures must either unregister from the loop's
+    //! own thread or arrange its own hand-off; closing the descriptor is safe either way, since a
+    //! closed descriptor is re-checked and skipped rather than dispatched.
+    //!
+    //! Thread-safe.
     bool EventDispatcherLinux::unregisterEventSource
         (
         int aFd  //!< Descriptor previously passed to registerEventSource().
@@ -126,20 +146,21 @@ namespace QtLikeSignal
             return;
         }
 
-        // Snapshot the descriptor set while we still hold the lock. Callbacks are copied out with
-        // it so they can be invoked after the lock is dropped -- a callback is arbitrary user code
-        // and may call straight back into this dispatcher.
+        // Snapshot the descriptor set while we still hold the lock. Only the identity of each
+        // source is taken, not its callback: the callback is looked up again, under the lock, at
+        // the moment it is about to be invoked. Copying them out here instead would pin a callback
+        // that unregisterEventSource() has since removed, and deliver to it anyway.
         std::vector<pollfd> pollSet;
-        std::vector<EventSourceCallback> callbacks;
+        std::vector<unsigned long long> generations;
         pollSet.reserve( mSources.size() + 1 );
-        callbacks.reserve( mSources.size() + 1 );
+        generations.reserve( mSources.size() + 1 );
 
         pollSet.push_back( pollfd { mWakeFd, POLLIN, 0 } );
-        callbacks.push_back( nullptr );   // index 0 is the wakeup FD; it has no user callback
+        generations.push_back( 0 );   // index 0 is the wakeup FD; it has no user callback
         for( const auto& source : mSources )
         {
             pollSet.push_back( pollfd { source.mFd, source.mEvents, 0 } );
-            callbacks.push_back( source.mCallback );
+            generations.push_back( source.mGeneration );
         }
 
         // Block with the lock released: poll() cannot hold a std::mutex, and holding it would stop
@@ -158,11 +179,23 @@ namespace QtLikeSignal
 
             // Invoke platform callbacks unlocked, before re-acquiring. Index 0 is the wakeup FD and
             // is deliberately skipped -- it is ours, not a user source.
+            //
+            // Each callback is resolved immediately before it is called, so a source unregistered
+            // by an earlier callback in this same round is not then called itself. That is the
+            // whole of what makes unregisterEventSource() synchronous on this thread, and it is the
+            // same rule the dispatch batches follow: re-check under the lock, act outside it.
             for( size_t i = 1; i < pollSet.size(); ++i )
             {
-                if( pollSet[i].revents != 0 && callbacks[i] )
+                if( pollSet[i].revents == 0 )
                 {
-                    callbacks[i]( pollSet[i].revents );
+                    continue;
+                }
+
+                const EventSourceCallback callback
+                    = callbackIfStillRegistered( pollSet[i].fd, generations[i] );
+                if( callback )
+                {
+                    callback( pollSet[i].revents );
                 }
             }
         }
@@ -174,6 +207,28 @@ namespace QtLikeSignal
         }
 
         aLock.lock();
+    }
+
+    //! Copies the callback of the registration identified by @p aFd and @p aGeneration.
+    //!
+    //! Empty if that registration is gone -- unregistered, or replaced by a later
+    //! registerEventSource() on the same descriptor. Takes mMutex itself, since it is called from
+    //! waitForEvents() with the lock released.
+    EventDispatcherLinux::EventSourceCallback EventDispatcherLinux::callbackIfStillRegistered
+        (
+        int aFd,                        //!< The descriptor that poll() reported ready.
+        unsigned long long aGeneration  //!< The registration the poll set was built from.
+        )
+    {
+        std::lock_guard<std::mutex> lock( mMutex );
+        for( const auto& source : mSources )
+        {
+            if( source.mFd == aFd && source.mGeneration == aGeneration )
+            {
+                return source.mCallback;
+            }
+        }
+        return {};
     }
 
     //! Wakes a thread blocked in poll(). Thread-safe and non-blocking.

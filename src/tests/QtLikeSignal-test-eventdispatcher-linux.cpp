@@ -293,4 +293,64 @@ TEST( EventDispatcherLinuxTest, IdleLoopDoesNotSpin )
     dispatcher->unregisterEventSource( pipe.readFd() );
 }
 
+//! Verifies a source unregistered from inside a callback is not itself called in that same round.
+//!
+//! Both descriptors are ready before the loop wakes, so one poll() reports both and the dispatcher
+//! is holding the readiness of the second when the first callback runs. Unregistering there has to
+//! take effect immediately: the caller is entitled to close the descriptor, or to destroy whatever
+//! the callback captured, the moment unregisterEventSource() returns.
+//!
+//! Copying the callbacks out with the descriptor set -- which is what the loop used to do -- makes
+//! that impossible, because the copy outlives the registration it came from. The set is still
+//! snapshotted, but each callback is now looked up again, under the lock, immediately before it is
+//! invoked.
+TEST( EventDispatcherLinuxTest, SourceUnregisteredFromACallbackIsNotCalledInThatRound )
+{
+    CoreApplication app;
+    auto dispatcher = currentLinuxDispatcher();
+    ASSERT_NE( dispatcher, nullptr ) << "the main thread should be running EventDispatcherLinux";
+
+    TestPipe first;
+    TestPipe second;
+    ASSERT_GE( first.readFd(), 0 );
+    ASSERT_GE( second.readFd(), 0 );
+
+    std::atomic<int> firstCalls { 0 };
+    std::atomic<int> secondCalls { 0 };
+
+    // Registration order is the order the loop invokes ready callbacks in, so `first` is the one
+    // that gets to unregister the other before the other has been reached.
+    ASSERT_TRUE( dispatcher->registerEventSource( first.readFd(), POLLIN,
+        [&]( short )
+        {
+            first.drain();
+            firstCalls.fetch_add( 1 );
+
+            // The sibling is ready in this very poll() round, and its callback has not run yet.
+            dispatcher->unregisterEventSource( second.readFd() );
+            CoreApplication::quit();
+        } ) );
+
+    ASSERT_TRUE( dispatcher->registerEventSource( second.readFd(), POLLIN,
+        [&]( short )
+        {
+            second.drain();
+            secondCalls.fetch_add( 1 );
+        } ) );
+
+    // Both ready before the loop looks, so one poll() returns both.
+    second.signal();
+    first.signal();
+
+    EXPECT_EQ( app.exec(), 0 );
+
+    EXPECT_EQ( firstCalls.load(), 1 );
+    EXPECT_EQ( secondCalls.load(), 0 )
+        << "the second source was unregistered from the first source's callback, but its own "
+        "callback still ran in the same round -- the loop was holding a copy taken before the "
+        "unregistration, so unregisterEventSource() did not take effect until the next round.";
+
+    dispatcher->unregisterEventSource( first.readFd() );
+}
+
 #endif // __linux__

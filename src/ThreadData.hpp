@@ -6,9 +6,12 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <vector>
 
 namespace QtLikeSignal
 {
+    class Event;
+    class Object;
     class Thread;
 
     //! Per-thread state owning that thread's event dispatcher.
@@ -32,6 +35,9 @@ namespace QtLikeSignal
     {
     public:
         ThreadData() = default;
+
+        //! Frees any events parked for a dispatcher that never arrived. See mParkedEvents.
+        ~ThreadData();
 
         ThreadData
             (
@@ -65,6 +71,27 @@ namespace QtLikeSignal
             std::shared_ptr<AbstractEventDispatcher> aDispatcher
             );
 
+        //! Hands back the dispatcher to post @p aEvent to, or parks the event and returns nullptr.
+        //!
+        //! One call rather than "ask, then decide", because the answer must not change in between:
+        //! a thread that installs its dispatcher a moment after we looked would leave the event
+        //! parked forever, and one that drops it a moment after would have us post into a dispatcher
+        //! that is going away. Both are decided under the same lock here.
+        //!
+        //! Ownership of @p aEvent passes to this ThreadData when it is parked, and stays with the
+        //! caller when a dispatcher comes back.
+        std::shared_ptr<AbstractEventDispatcher> dispatcherOrPark
+            (
+            Object* aReceiver,
+            Event* aEvent
+            );
+
+        //! Drops any parked events for @p aReceiver, called by ~Object() before it dies.
+        void removeParkedEventsFor
+            (
+            Object* aReceiver
+            );
+
         std::atomic<Thread*> mThread { nullptr };                 //!< Owning thread; nulled by ~Thread().
 
         //! True while the owning thread's body is executing. Lives here rather than in Thread so
@@ -73,8 +100,28 @@ namespace QtLikeSignal
         //! ThreadData outliving its Thread. Thread::isRunning() reads through to this, so there is
         //! one source of truth rather than a mirror that could drift.
         std::atomic<bool> mThreadRunning { false };
-        mutable std::mutex mDispatcherMutex;                      //!< Guards mDispatcher.
+        mutable std::mutex mDispatcherMutex;                      //!< Guards mDispatcher and mParkedEvents.
         std::shared_ptr<AbstractEventDispatcher> mDispatcher;    //!< This thread's dispatcher, if any.
+
+        //! One event waiting for this thread to have a dispatcher at all.
+        struct ParkedEvent
+        {
+            Object* mReceiver;
+            Event*  mEvent;
+        };
+
+        //! Events moved here by Object::moveToThread() before this thread had a dispatcher.
+        //!
+        //! The canonical idiom builds a Thread, moves objects onto it, and only then calls start()
+        //! -- and a Thread has no dispatcher until its run body creates one. Anything already posted
+        //! for a migrating object would otherwise have nowhere to go: dropping it loses work
+        //! silently, and leaving it behind runs it on the thread the object just left, which is the
+        //! defect the migration exists to fix.
+        //!
+        //! Qt has no equivalent because its queue lives in QThreadData rather than in the
+        //! dispatcher, so a target thread always has somewhere to put events. This is the smallest
+        //! version of that: a holding area the dispatcher drains the moment it is installed.
+        std::vector<ParkedEvent> mParkedEvents;
 
         friend class Object;
         friend class Thread;

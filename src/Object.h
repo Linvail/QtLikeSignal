@@ -77,6 +77,9 @@ namespace QtLikeSignal
             Thread* aThread
             );
 
+        //! **Not thread-safe: both must be called from this object's own thread.** Stated here as
+        //! well as on the definitions, because the member these two touch is documented as
+        //! unguarded further down this file and the two comments have to agree.
         std::string objectName() const;
 
         void setObjectName
@@ -579,6 +582,13 @@ namespace QtLikeSignal
 
         std::shared_ptr<ThreadData> threadData() const;
 
+        //! Carries this object's already-posted events across in moveToThread(). See the definition.
+        void migratePostedEvents
+            (
+            const std::shared_ptr<ThreadData>& aOldData,
+            const std::shared_ptr<ThreadData>& aNewData
+            );
+
         bool event
             (
             Event* aEvent
@@ -641,7 +651,14 @@ namespace QtLikeSignal
 
             Object* mOwner;                //!< Receiver owning the mIncoming entry.
             std::weak_ptr<int> mLife;      //!< Receiver's life token; expired means it is gone.
-            Connection mHandle;      //!< The entry to prune; set once the handle exists.
+
+            //! The entry to prune; set by connectImpl() once the handle exists.
+            //!
+            //! Unguarded, and does not need to be. connectImpl() holds its own shared_ptr to this
+            //! token across the whole of its body, so ~Cleanup() cannot start until connectImpl()
+            //! has finished writing this and registering it -- a disconnect racing that window drops
+            //! the *slot's* reference, which is not the last one. See connectImpl().
+            Connection mHandle;
         };
 
         //! The one body shared by all ten connect() overloads.
@@ -746,9 +763,20 @@ namespace QtLikeSignal
                 return handle;
             }
 
-            // Publish the handle into the Cleanup before registering it, so that if the connection is
-            // torn down concurrently the destructor below has something to match on rather than the
-            // default-constructed handle.
+            // Record the handle in both places under one lock. The slot is live from the moment
+            // connect() returned above, so another thread may already be tearing this connection
+            // down -- Signal::disconnectAll(), or the sender Signal being destroyed -- and that runs
+            // ~Cleanup(), which reads mHandle under this same mutex. Assigning it outside the lock
+            // was a data race on a Connection's two smart pointers, and it left the loser of the
+            // race a stale mIncoming entry: ~Cleanup() would find nothing to erase, because the push
+            // had not happened yet, and the push would then add a handle to a connection that was
+            // already dead.
+            // Written without a lock, which is safe for a reason worth stating: `cleanup` is a local
+            // shared_ptr, so this function holds a reference for its whole body. ~Cleanup() cannot
+            // run while we are here, however fast another thread disconnects -- disconnecting drops
+            // the slot's reference, not ours, and the token outlives the slot. So the write below
+            // and the destructor's read of the same member cannot overlap, and the push that
+            // follows completes before the destructor can look for it.
             cleanup->mHandle = handle;
 
             Object* receiver = cleanup->mOwner;
@@ -771,6 +799,26 @@ namespace QtLikeSignal
         std::shared_ptr<int> mLife;                          //!< Lifetime token; reset in ~Object() so weak references expire.
         const std::shared_ptr<Affinity> mAffinity;           //!< Thread affinity box; the box itself is never reassigned, only its contents (see moveToThread()).
         std::atomic<bool> mDeleteLaterPosted { false };       //!< True once deleteLater() has posted a DeferredDeleteEvent; de-bounces repeat calls, matching QObject::deleteLaterCalled.
+
+        //! True once this object has been the context of a callLater(), so ~Object() knows whether
+        //! the process-wide pending registry can possibly hold anything of ours. See ~Object().
+        //!
+        //! Atomic because callLater() is callable from any thread while the destructor reads it,
+        //! and set with release / read with acquire so that seeing it true also means seeing the
+        //! registry entry it stands for.
+        std::atomic<bool> mUsedCallLater { false };
+
+        //! True once an event has been posted for this object, so ~Object() knows whether the
+        //! dispatcher's queue can possibly hold anything of ours.
+        //!
+        //! Same shape and same reason as mUsedCallLater above, for the other O(backlog) scan the
+        //! destructor used to run unconditionally. Qt guards the identical call the identical way:
+        //! `if (d->postedEvents) QCoreApplication::removePostedEvents(this, 0);` in ~QObject().
+        //!
+        //! Set before the post, never cleared. An object that has received one queued call keeps
+        //! paying the scan; Qt keeps an exact count instead, which needs the dispatch side to
+        //! decrement and is more machinery than the difference is worth here.
+        std::atomic<bool> mMayHaveQueuedWork { false };
         //! This object's descriptive name.
         //!
         //! Deliberately unguarded, matching QObject, whose objectName() has no locking either. A

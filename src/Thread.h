@@ -154,6 +154,19 @@ namespace QtLikeSignal
             return mData;
         }
 
+        //! The same data as a bare pointer, for callers that only want to *compare* it.
+        //!
+        //! Exists because the same-thread test on every Auto emit was copying a shared_ptr -- an
+        //! atomic increment and decrement -- to answer a pointer comparison. Safe precisely because
+        //! it is not an ownership handle: mData is assigned once in the constructor and never
+        //! reassigned, and the only caller asks it of Thread::currentThread(), which is by
+        //! definition the calling thread and so cannot be destroyed underneath the comparison.
+        //! Anything that needs the data to stay alive must keep using threadData() above.
+        ThreadData* threadDataPtr() const
+        {
+            return mData.get();
+        }
+
         void applyPriority
             (
             Priority aPriority

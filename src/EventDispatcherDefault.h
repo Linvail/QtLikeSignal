@@ -72,6 +72,11 @@ namespace QtLikeSignal
             Object* aReceiver
             ) override;
 
+        virtual std::vector<Event*> takeEventsForReceiver
+            (
+            Object* aReceiver
+            ) override;
+
         // The three hooks below are the whole platform seam. Everything else -- the event queue,
         // the timer list, the mutex that guards them, and the dispatch loop -- stays here and is
         // shared, so a platform dispatcher only has to answer three questions: how do we block,
@@ -93,9 +98,16 @@ namespace QtLikeSignal
             int aTimeoutMs
             );
 
-        //! Wakes a thread blocked in waitForEvents(). Callable from any thread, with or without
-        //! mMutex held, so it must not block. Every mutation of the queue, the timer list or the
-        //! interrupt flag ends in a call to this.
+        //! Wakes a thread blocked in waitForEvents(). Callable from any thread, so it must not
+        //! block. Every mutation of the queue, the timer list or the interrupt flag ends in a call
+        //! to this.
+        //!
+        //! **Called with mMutex released, on every path.** It may run mWakeCallback, which is user
+        //! code, and user code that touches the dispatcher it was woken by is the obvious thing to
+        //! write -- so calling it under a non-recursive mutex is a deadlock waiting for the first
+        //! caller who does the obvious thing. postEvent() always released the lock first; the three
+        //! timer paths did not, which made the hazard depend on which operation happened to wake
+        //! the loop.
         virtual void wakeWaiter();
 
         //! Drains and dispatches OS/platform events. Called once per processEvents() pass with
@@ -144,13 +156,69 @@ namespace QtLikeSignal
         // bare notify_all() from wakeUp() cannot end the wait.
         bool mWakeUpRequested { false };
 
-        //! The timer batch currently being dispatched, or nullptr outside a dispatch pass.
+        //! The batches one dispatch pass is working through, published so that a cancellation
+        //! arriving mid-pass can reach them.
         //!
-        //! Timers that expire together are collected into one batch and then dispatched with mMutex
-        //! released, so a killTimer() from inside one handler lands after the others' events already
-        //! exist. This lets unregisterTimer() reach into that batch and cancel them. Guarded by
-        //! mMutex, and every read of an entry takes mMutex too, so cancelling races nothing.
-        std::vector<EventPair>* mDispatchingTimerBatch { nullptr };
+        //! Every pass takes its work out of the shared containers first and then dispatches it with
+        //! mMutex released, because a handler is arbitrary user code that will re-enter this
+        //! dispatcher. That hand-off is what makes the pass lock-free, and it is also what puts the
+        //! work out of reach of unregisterTimer() and removeEventsForReceiver(), which can only see
+        //! mEventQueue and mTimers. An entry for a timer killed -- or an object destroyed -- by an
+        //! earlier handler in the same pass would then still be delivered, and in the destroyed case
+        //! that is a call through a freed pointer.
+        //!
+        //! A pass fills in only the batches it has: processEvents() publishes mEvents and mTimers,
+        //! processDeferredDeletes() publishes mDeletes.
+        struct DispatchFrame
+        {
+            std::deque<EventPair>*  mEvents { nullptr };   //!< Queued events taken from mEventQueue.
+            std::vector<EventPair>* mTimers { nullptr };   //!< Timers that expired in this pass.
+            std::vector<EventPair>* mDeletes { nullptr };  //!< Deferred deletes taken from mEventQueue.
+            DispatchFrame*          mOuter { nullptr };    //!< The pass this one is nested inside.
+        };
+
+        //! Every dispatch pass currently running on this dispatcher, innermost first.
+        //!
+        //! A chain rather than one frame because passes nest: a handler may run a nested
+        //! processEvents(), which is an ordinary thing for user code to do, and a cancellation
+        //! raised inside the nested pass must still reach the outer pass's batches -- the outer pass
+        //! will go on dispatching them after the inner one returns. Publishing a single frame would
+        //! make the inner pass hide the outer one and then un-publish it on the way out, which is
+        //! worse than not publishing at all, because it looks safe.
+        //!
+        //! Guarded by mMutex, as is every access to any entry of any frame, so ownership of each
+        //! event passes to exactly one party: whoever clears the slot first has it, and the other
+        //! sees nullptr and skips.
+        DispatchFrame* mDispatchFrames { nullptr };
+
+        //! Cancels every entry in every published batch that targets @p aReceiver, freeing its event
+        //! and clearing the slot so the dispatch loop skips it. Callers must hold mMutex.
+        void cancelPublishedEntriesFor
+            (
+            Object* aReceiver
+            );
+
+        //! Cancels every published TimerEvent carrying @p aTimerId, for the same reason and with the
+        //! same ownership rule. Callers must hold mMutex.
+        void cancelPublishedTimerEvents
+            (
+            int aTimerId
+            );
+
+        //! Removes @p aFrame from mDispatchFrames. Callers must hold mMutex.
+        void unlinkDispatchFrame
+            (
+            DispatchFrame* aFrame
+            );
+
+        //! Removes a timer and every pending event for it. Callers must hold mMutex.
+        //!
+        //! Split out of unregisterTimer() so that the wake, which runs user code, happens after the
+        //! lock is released.
+        bool takeTimerLocked
+            (
+            int aTimerId
+            );
 
         //! Nudges an adopted thread's own native loop when work is posted; empty if unused.
         std::function<void()> mWakeCallback;
@@ -170,10 +238,9 @@ namespace QtLikeSignal
 
         //! Guards mWakeCallback -- deliberately NOT mMutex.
         //!
-        //! wakeWaiter() is reached both with mMutex held (registerTimer, unregisterTimer) and
-        //! without it (postEvent, wakeUp, interrupt). Reading the callback under mMutex would
-        //! therefore relock a non-recursive mutex this thread already owns on half the paths. A
-        //! separate lock makes the read safe from either.
+        //! wakeWaiter() runs with mMutex released so that the callback it may invoke is not user
+        //! code under our lock, which means it cannot use mMutex to guard the callback either. A
+        //! separate lock keeps the read safe without re-entering the one the callers just dropped.
         mutable std::mutex mWakeCallbackMutex;
     };
 }

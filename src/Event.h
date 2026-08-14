@@ -123,4 +123,4 @@ namespace QtLikeSignal
     };
 }
 
-#endif // QT_LIKE_SIGNAL_EVENT_H
+#endif  // QT_LIKE_SIGNAL_EVENT_H

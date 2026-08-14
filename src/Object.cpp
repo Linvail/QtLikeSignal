@@ -186,6 +186,18 @@ namespace QtLikeSignal
             handle.disconnect();
         }
 
+        // Only objects that have actually used callLater() can have entries to drop.
+        //
+        // The scan below is O(every pending callLater in the process) and takes a lock shared by
+        // every thread, so running it unconditionally made destroying an unrelated Object cost
+        // 24 us against a backlog of 4000 -- 324x the 75 ns it costs otherwise, and worse as
+        // unrelated work queues up elsewhere. Most objects never call callLater() at all, and one
+        // flag takes all of them out of that path. See PERFORMANCE-20260813.md (P1).
+        //
+        // The flag is only ever set, never cleared: an object that used the feature once keeps
+        // paying the scan, which is the honest trade. Making it exact would mean counting entries
+        // per object, which is the deeper fix P1 describes and is not worth it for a bool.
+        if( mUsedCallLater.load( std::memory_order_acquire ) )
         {
             std::lock_guard<std::mutex> lock( CallLaterRegistry::sMutex );
             auto& pending = CallLaterRegistry::sPending;
@@ -202,23 +214,38 @@ namespace QtLikeSignal
             }
         }
 
-        std::shared_ptr<ThreadData> threadDataCopy = mAffinity->data();
-        if( threadDataCopy )
-        {
-            if( auto dispatcher = threadDataCopy->dispatcher() )
-            {
-                dispatcher->removeEventsForReceiver( this );
-            }
-        }
-
-        // Hand back any ids whose timers were still running. removeEventsForReceiver() above has
-        // already dropped this object's timers and its queued events, so nothing can still be
-        // referring to them by the time they are reissued.
+        // Taken before the strip below, because whether this object owns any timer is half of what
+        // decides if that strip has anything to do.
         std::vector<int> outstandingTimerIds;
         {
             std::lock_guard<std::mutex> lock( mRunningTimerIdsMutex );
             outstandingTimerIds.swap( mRunningTimerIds );
         }
+
+        // The other O(backlog) scan the destructor used to run for every object, whether or not it
+        // could possibly have anything queued: removeEventsForReceiver() walks the whole event
+        // queue and the whole timer list under the dispatcher's lock. An object that never received
+        // a queued call and never started a timer -- which is most of them -- has nothing there.
+        // Qt guards the same call the same way, with `if (d->postedEvents)` in ~QObject().
+        if( mMayHaveQueuedWork.load( std::memory_order_acquire ) || !outstandingTimerIds.empty() )
+        {
+            std::shared_ptr<ThreadData> threadDataCopy = mAffinity->data();
+            if( threadDataCopy )
+            {
+                if( auto dispatcher = threadDataCopy->dispatcher() )
+                {
+                    dispatcher->removeEventsForReceiver( this );
+                }
+
+                // Events moved here before this thread had a dispatcher are not in any queue yet,
+                // so the strip above cannot see them. See ThreadData::mParkedEvents.
+                threadDataCopy->removeParkedEventsFor( this );
+            }
+        }
+
+        // Hand back any ids whose timers were still running. The strip above has already dropped
+        // this object's timers and its queued events, so nothing can still be referring to them by
+        // the time they are reissued.
         for( const int timerId : outstandingTimerIds )
         {
             TimerIdPool::release( timerId );
@@ -227,9 +254,9 @@ namespace QtLikeSignal
 
     //! Removes this connection from its receiver's mIncoming as the connection is destroyed.
     //!
-    //! Runs when boost destroys the slot holding this token -- a manual disconnect(), the sender
-    //! Signal being destroyed, or ~Object()'s own disconnect loop. Without it mIncoming would only
-    //! ever grow for an object that outlives connections made to it, and would eventually hold
+    //! Runs when the Signal destroys the slot holding this token -- a manual disconnect(), the
+    //! sender Signal being destroyed, or ~Object()'s own disconnect loop. Without it mIncoming would
+    //! only ever grow for an object that outlives connections made to it, and would eventually hold
     //! stale handles.
     Object::Cleanup::~Cleanup()
     {
@@ -258,6 +285,10 @@ namespace QtLikeSignal
         {
             return;
         }
+
+        // Marked before the entry exists, so ~Object() can never see the entry without the flag.
+        // The reverse -- flag set, entry already gone -- costs one wasted scan and nothing else.
+        aContext->mUsedCallLater.store( true, std::memory_order_release );
 
         std::shared_ptr<CallLaterNode> node;
         bool isNew = false;
@@ -331,7 +362,10 @@ namespace QtLikeSignal
         const std::shared_ptr<ThreadData>& aData
         )
     {
-        return aData == Thread::currentThread()->threadData();
+        // Compared as bare pointers. Asking for the shared_ptr instead cost an atomic increment and
+        // decrement on every Auto emit, to answer a question that never needed ownership: the
+        // caller already holds aData alive, and the other side is this very thread's own data.
+        return aData.get() == Thread::currentThread()->threadDataPtr();
     }
 
     //! Gets the thread affinity of this object. Thread-safe. Never returns a dangling pointer: the
@@ -416,8 +450,11 @@ namespace QtLikeSignal
         // Resolve the new thread's data and store it in the Affinity box in one step, so concurrent
         // readers of thread()/threadData() (notably a connect() wrapper resolving affinity at emit
         // time) never see a half-updated pairing of thread and dispatcher.
+        const std::shared_ptr<ThreadData> oldData = mAffinity->data();
         std::shared_ptr<ThreadData> newData = aThread ? aThread->threadData() : nullptr;
-        mAffinity->setData( std::move( newData ) );
+        mAffinity->setData( newData );
+
+        migratePostedEvents( oldData, newData );
 
         if( !timersToMove.empty() )
         {
@@ -447,13 +484,95 @@ namespace QtLikeSignal
         return true;
     }
 
-    //! Gets the object's descriptive name. Thread-safe.
+    //! Carries this object's already-posted events from @p aOldData's dispatcher to @p aNewData's.
+    //!
+    //! Called by moveToThread() **after** the affinity has been swapped, which is what makes it
+    //! safe without holding both dispatcher mutexes at once. Qt needs `QOrderedMutexLocker` over
+    //! the two post-event lists precisely because it moves the events and the affinity together;
+    //! doing the affinity first means each queue is only ever touched alone, so two moves in
+    //! opposite directions cannot deadlock against each other.
+    //!
+    //! The ordering that buys is fine because **moveToThread() runs on the object's own thread**:
+    //! the old thread is inside this call and therefore cannot be dispatching the events being
+    //! taken. The only other writer is a foreign thread that read the affinity before the swap and
+    //! is still on its way into the old queue, which is what the re-sweep below is for.
+    //!
+    //! Without this, a queued call posted just before the move runs on the thread the object has
+    //! left -- silently, since nothing checks affinity again once an event is queued. That is the
+    //! one guarantee a queued connection exists to provide. See OPEN-RISKS-20260813.md (R32).
+    void Object::migratePostedEvents
+        (
+        const std::shared_ptr<ThreadData>& aOldData,  //!< Thread the object is leaving; may be null.
+        const std::shared_ptr<ThreadData>& aNewData   //!< Thread it now lives on; may be null.
+        )
+    {
+        if( aOldData == aNewData )
+        {
+            return;
+        }
+
+        const std::shared_ptr<AbstractEventDispatcher> oldDispatcher
+            = aOldData ? aOldData->dispatcher() : nullptr;
+        if( !oldDispatcher )
+        {
+            return;
+        }
+
+        // Swept more than once. A thread that resolved this object's affinity before the swap can
+        // still be inside postEvent() on the old dispatcher, and its event would be stranded by a
+        // single pass. Every such poster is already in flight, so the set drains; the cap is there
+        // because a caller that never stops posting to a moving object is misusing it, and a bounded
+        // loop is better than one that can be kept spinning.
+        constexpr int kMaxSweeps = 8;
+        for( int sweep = 0; sweep < kMaxSweeps; ++sweep )
+        {
+            std::vector<Event*> taken = oldDispatcher->takeEventsForReceiver( this );
+            if( taken.empty() )
+            {
+                break;
+            }
+
+            for( Event* event : taken )
+            {
+                if( !aNewData )
+                {
+                    // moveToThread(nullptr) means "this object stops processing events", so there
+                    // is no later at which these could run. Qt parks them on an orphan QThreadData
+                    // whose loop never runs, which comes to the same thing without the bookkeeping.
+                    delete event;
+                    continue;
+                }
+
+                // Asked in one step, so the destination cannot gain or lose its dispatcher between
+                // the question and the answer. A null return means the event is parked and now
+                // belongs to the destination's ThreadData -- see ThreadData::mParkedEvents, which
+                // is what makes "moveToThread() before start()" work.
+                const std::shared_ptr<AbstractEventDispatcher> newDispatcher
+                    = aNewData->dispatcherOrPark( this, event );
+                if( newDispatcher )
+                {
+                    // postEvent() deletes the event itself when it refuses.
+                    newDispatcher->postEvent( this, event );
+                }
+            }
+        }
+    }
+
+    //! Gets the object's descriptive name.
+    //!
+    //! **Not thread-safe: must be called from this object's own thread.** The name is a plain
+    //! std::string with no lock, so a concurrent setObjectName() is a data race. This said
+    //! "Thread-safe" until 2026-08-13 and was never true -- see mObjectName for why the member is
+    //! deliberately unguarded, which is the same reason QObject::objectName() has no locking either.
     std::string Object::objectName() const
     {
         return mObjectName;
     }
 
-    //! Sets the object's descriptive name. Thread-safe.
+    //! Sets the object's descriptive name.
+    //!
+    //! **Not thread-safe: must be called from this object's own thread**, for the same reason as
+    //! objectName() above.
     void Object::setObjectName
         (
         const std::string& aName  //!< The new object name.
@@ -496,6 +615,7 @@ namespace QtLikeSignal
                     // A refusal means the dispatcher is closing, so nothing would ever drain this
                     // event; postEvent() has already freed it. Fall through to the synchronous
                     // delete rather than leaking the object.
+                    mMayHaveQueuedWork.store( true, std::memory_order_release );
                     if( disp->postEvent( this, static_cast<Event*>( event ) ) )
                     {
                         return;
@@ -699,6 +819,7 @@ namespace QtLikeSignal
             {
                 if( auto disp = tData->dispatcher() )
                 {
+                    aTarget->mMayHaveQueuedWork.store( true, std::memory_order_release );
                     disp->postEvent( aTarget, static_cast<Event*>( event ) );
                     return true;
                 }
@@ -738,6 +859,10 @@ namespace QtLikeSignal
         if( auto disp = aData ? aData->dispatcher() : nullptr )
         {
             auto* event = new MetaCallEvent( std::move( aSlot ) );
+            if( aReceiver )
+            {
+                aReceiver->mMayHaveQueuedWork.store( true, std::memory_order_release );
+            }
             return disp->postEvent( aReceiver, static_cast<Event*>( event ) );
         }
         return false;

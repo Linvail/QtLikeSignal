@@ -7,7 +7,7 @@
 //! indirectly, and a signal that broke one of them would show up as a puzzling failure three
 //! layers away. These tests aim at the guarantees directly.
 //!
-//! Four of them matter, and they are the four ForAI/mission-signal.txt identified as the reason
+//! Four of them matter, and they are the four ForAI/mission-signal.md identified as the reason
 //! replacing boost::signals2 was delicate. Each one fails silently rather than at compile time.
 
 

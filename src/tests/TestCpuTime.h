@@ -1,5 +1,5 @@
-#ifndef TEST_CPU_TIME_H
-#define TEST_CPU_TIME_H
+#ifndef QT_LIKE_SIGNAL_TEST_CPU_TIME_H
+#define QT_LIKE_SIGNAL_TEST_CPU_TIME_H
 
 //! @file
 //!
@@ -73,4 +73,4 @@ namespace TestSupport
     }
 }
 
-#endif // TEST_CPU_TIME_H
+#endif // QT_LIKE_SIGNAL_TEST_CPU_TIME_H

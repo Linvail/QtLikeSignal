@@ -35,7 +35,12 @@ def build(bld):
     # to belong in the correctness suite. Excluded here on both counts.
     kw["source"] = bld.path.ant_glob(
         "*.cpp",
-        excl=["test_QtLikeSignal_Performance.cpp", "test_Qt6_Performance.cpp"],
+        excl=[
+            "test_QtLikeSignal_Performance.cpp",
+            "test_QtLikeSignal_Regression.cpp",
+            "test_Qt6_Performance.cpp",
+            "PerfAllocationCounter.cpp",
+        ],
     )
     kw["includes"] = ["."]
     kw["use"] = ["QtLikeSignal", "google-test"]
@@ -47,7 +52,14 @@ def build(bld):
 
     kw = {}
     kw["features"] = ["cxx", "cxxprogram", "debug-info"]
-    kw["source"] = ["test_QtLikeSignal_Performance.cpp"]
+    # The regression guards and the allocation counter ship with the benchmarks, not with the
+    # correctness suite: the counter replaces global operator new, which no other binary should
+    # carry, and the guards are only meaningful in an optimised build.
+    kw["source"] = [
+        "test_QtLikeSignal_Performance.cpp",
+        "test_QtLikeSignal_Regression.cpp",
+        "PerfAllocationCounter.cpp",
+    ]
     kw["includes"] = ["."]
     kw["use"] = ["QtLikeSignal", "google-test"]
 

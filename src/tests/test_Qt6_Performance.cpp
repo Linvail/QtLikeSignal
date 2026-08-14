@@ -76,8 +76,8 @@ TEST( Performance, Qt6_Connect )
     const double ns = PerfHarness::timeLoop( PerfHarness::kConnectOps, [&]( int )
         {
             QObject::connect( &sender, &Qt6PerfSender::fired, &receiver, []( int )
-                {
-                }, Qt::DirectConnection );
+            {
+            }, Qt::DirectConnection );
         } );
     PerfHarness::record( "connect()", "Qt6", ns );
 }
@@ -187,4 +187,160 @@ TEST( Performance, Qt6_QueuedEmitCrossThread )
     // receiver afterwards, with no loop left that could be dispatching to it.
     worker.quit();
     worker.wait();
+}
+
+// -------------------------------------------------------------------------------------------
+// Timing guards
+//
+// Expressed as a ratio against Qt 6 measured in the same process, on the same machine, in the same
+// run. That is what makes a timing guard usable at all: an absolute nanosecond threshold has to be
+// recalibrated for every machine and fails on a busy one, while a ratio moves only when our cost
+// moves relative to a reference that is not changing. Qt 6 is a good reference precisely because we
+// do not maintain it.
+//
+// Each guard measures both libraries itself rather than reading the table the benchmarks above
+// build, so it does not depend on test order and survives --gtest_shuffle.
+//
+// The bars are set at roughly twice the current ratio. Wide enough that a loaded machine never
+// fails one, tight enough that the regressions this project has actually had -- a per-emit
+// allocation, an extra shared_ptr copy on the auto path -- would trip them.
+// -------------------------------------------------------------------------------------------
+
+namespace
+{
+    //! Nanoseconds per direct emit, Qt 6.
+    double qt6DirectEmitNs()
+    {
+        Qt6PerfSender sender;
+        Qt6PerfReceiver receiver;
+        long long received = 0;
+        QObject::connect( &sender, &Qt6PerfSender::fired, &receiver, [&received]( int aValue )
+            {
+                received += aValue;
+            }, Qt::DirectConnection );
+        sender.fire( 1 );
+        const double ns = PerfHarness::timeLoop( PerfHarness::kDirectOps, [&]( int )
+            {
+                sender.fire( 1 );
+                PerfHarness::keep( received );
+            } );
+        return ns;
+    }
+
+    //! Nanoseconds per same-thread auto emit, Qt 6.
+    double qt6AutoEmitNs()
+    {
+        Qt6PerfSender sender;
+        Qt6PerfReceiver receiver;
+        long long received = 0;
+        QObject::connect( &sender, &Qt6PerfSender::fired, &receiver, [&received]( int aValue )
+            {
+                received += aValue;
+            }, Qt::AutoConnection );
+        sender.fire( 1 );
+        const double ns = PerfHarness::timeLoop( PerfHarness::kDirectOps, [&]( int )
+            {
+                sender.fire( 1 );
+                PerfHarness::keep( received );
+            } );
+        return ns;
+    }
+
+    //! Nanoseconds per connect(), Qt 6.
+    double qt6ConnectNs()
+    {
+        Qt6PerfSender sender;
+        Qt6PerfReceiver receiver;
+        return PerfHarness::timeLoop( PerfHarness::kConnectOps, [&]( int )
+            {
+                QObject::connect( &sender, &Qt6PerfSender::fired, &receiver, []( int )
+                {
+                }, Qt::DirectConnection );
+            } );
+    }
+}
+
+//! True when this build is optimised, which the timing guards below require.
+//!
+//! In a debug build our code is `-O0` while Qt 6 is a prebuilt optimised library, so every ratio
+//! against it is meaningless and would fail. The shape and allocation guards next door have no such
+//! problem -- a ratio between two sizes, or a count, is the same at any optimisation level -- which
+//! is another reason to prefer them.
+constexpr bool kOptimisedBuild =
+#ifdef NDEBUG
+        true;
+#else
+        false;
+#endif
+
+    //! Fails if our direct emit falls a long way behind Qt 6's.
+    //!
+    //! We are currently **faster** than Qt here -- about 24 ns against 29 -- having been 2.3x slower
+    //! before the in-house Signal replaced boost. The bar is 2x Qt, which is where we were when that
+    //! was considered a problem worth a document entry.
+    TEST( PerformanceRegression, DirectEmitKeepsUpWithQt6 )
+{
+    if( !kOptimisedBuild )
+    {
+        GTEST_SKIP() << "timing guards need an optimised build; Qt 6 is always optimised";
+    }
+
+    const double qt = PerfHarness::bestOf( 3, qt6DirectEmitNs );
+    const double ours = PerfHarness::bestOf( 3, PerfHarness::Measure::qtLikeSignalDirectEmitNs );
+
+    ASSERT_GT( qt, 0.0 );
+    const double ratio = ours / qt;
+    EXPECT_LT( ratio, 2.0 )
+        << "a direct emit costs " << ratio << "x Qt 6's (" << ours << " ns against " << qt
+        << " ns). It was faster than Qt when this guard was written. Anything approaching 2x means "
+        "the emit path is allocating or locking again -- check the allocation guards first, they "
+        "say which.";
+}
+
+//! Fails if our same-thread auto emit falls a long way behind Qt 6's.
+//!
+//! The widest gap we still have, and the one with a known cause: resolving the receiver's affinity
+//! takes a mutex where Qt takes an atomic load, which is P2 and is accepted. About 47 ns against
+//! Qt's 28, so 1.7x; the bar is 3.5x.
+TEST( PerformanceRegression, SameThreadAutoEmitKeepsUpWithQt6 )
+{
+    if( !kOptimisedBuild )
+    {
+        GTEST_SKIP() << "timing guards need an optimised build; Qt 6 is always optimised";
+    }
+
+    const double qt = PerfHarness::bestOf( 3, qt6AutoEmitNs );
+    const double ours = PerfHarness::bestOf( 3, PerfHarness::Measure::qtLikeSignalAutoEmitNs );
+
+    ASSERT_GT( qt, 0.0 );
+    const double ratio = ours / qt;
+    EXPECT_LT( ratio, 3.5 )
+        << "a same-thread auto emit costs " << ratio << "x Qt 6's (" << ours << " ns against " << qt
+        << " ns), against 1.7x when this guard was written. The known part of that gap is the "
+        "affinity mutex (P2); a jump beyond it means something new was added to the path every "
+        "emit takes.";
+}
+
+//! Fails if establishing a connection falls a long way behind Qt 6's.
+//!
+//! The loosest bar in the file, because this row is the noisiest: Qt 6's own measurement moves
+//! between 76 and 142 ns depending on what ran before it. About 2.9x today, driven entirely by
+//! allocation count (P10); the bar is 6x, and the allocation guard next door is the sharper
+//! instrument for this path.
+TEST( PerformanceRegression, ConnectKeepsUpWithQt6 )
+{
+    if( !kOptimisedBuild )
+    {
+        GTEST_SKIP() << "timing guards need an optimised build; Qt 6 is always optimised";
+    }
+
+    const double qt = PerfHarness::bestOf( 3, qt6ConnectNs );
+    const double ours = PerfHarness::bestOf( 3, PerfHarness::Measure::qtLikeSignalConnectNs );
+
+    ASSERT_GT( qt, 0.0 );
+    const double ratio = ours / qt;
+    EXPECT_LT( ratio, 6.0 )
+        << "connect() costs " << ratio << "x Qt 6's (" << ours << " ns against " << qt
+        << " ns), against 2.9x when this guard was written. This row is noisy, so a failure here "
+        "means a large change; OneConnectionCostsAtMostFiveHeapBlocks will say what allocated.";
 }

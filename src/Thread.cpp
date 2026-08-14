@@ -248,13 +248,17 @@ namespace QtLikeSignal
         }
     }
 
-    //! Checks if the thread is currently running. Thread-safe.
+    //! Checks if the thread is currently running. Thread-safe, and stale on return: the thread may
+    //! start or finish before you act on the answer, so this reports an instant that has passed. To
+    //! synchronise with a thread's end, call wait(). Qt attaches the same warning to
+    //! QThread::isRunning(). See Global.h.
     bool Thread::isRunning() const
     {
         return mData->isThreadRunning();
     }
 
-    //! Checks if the thread has finished execution. Thread-safe.
+    //! Checks if the thread has finished execution. Thread-safe, and stale on return; see
+    //! isRunning() above and Global.h.
     bool Thread::isFinished() const
     {
         return mFinishing.load();
@@ -454,8 +458,10 @@ namespace QtLikeSignal
     //! its job is to nudge this thread's own native loop -- typically by sending it a private event
     //! -- so that the loop knows to call processEvents(). Pass nullptr to remove it.
     //!
-    //! Called with the dispatcher's internals locked, so it must not block or re-enter the
-    //! dispatcher; post to the native loop and return.
+    //! Runs on the posting thread with no dispatcher lock held, so it may call back into this
+    //! thread's dispatcher. It should still not block: it is on the critical path of every post,
+    //! and blocking there stalls the poster rather than this thread. Nudge the native loop and
+    //! return.
     void Thread::setWakeCallback
         (
         std::function<void()> aCallback  //!< Invoked on post; nullptr clears.
