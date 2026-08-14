@@ -483,6 +483,15 @@ namespace QtLikeSignal
             Args&&... aArgs
             );
 
+    protected:
+        //! Constructs an Object directly on stable thread data.
+        //!
+        //! For internal helpers that must stay safe if the public Thread object is destroyed
+        //! concurrently: the data outlives its Thread, the Thread pointer does not.
+        explicit Object
+            (
+            std::shared_ptr<ThreadData> aThreadData
+            );
     private:
         //! Key identifying a deduplicated deferred call.
         //!
@@ -795,6 +804,10 @@ namespace QtLikeSignal
         //! Grants Thread access to dispatchMetaCall(), which Thread::post() uses to queue an
         //! arbitrary task onto itself.
         friend class Thread;
+
+        //! Grants Timer access to the affinity plumbing its single-shot helper needs: it builds the
+        //! helper directly on the context's thread data rather than moving it there afterwards.
+        friend class Timer;
 
         std::shared_ptr<int> mLife;                          //!< Lifetime token; reset in ~Object() so weak references expire.
         const std::shared_ptr<Affinity> mAffinity;           //!< Thread affinity box; the box itself is never reassigned, only its contents (see moveToThread()).

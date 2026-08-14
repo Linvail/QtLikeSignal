@@ -1,8 +1,11 @@
 #ifndef QT_LIKE_SIGNAL_TIMER_H
 #define QT_LIKE_SIGNAL_TIMER_H
 
+#include "Event.h"
 #include "Object.h"
 #include "Signal.h"
+
+#include <utility>
 
 namespace QtLikeSignal
 {
@@ -69,8 +72,7 @@ namespace QtLikeSignal
 
         //! Fires a single-shot timer executing a functor in context object's thread. Functor is
         //! the callable slot type.
-        template <typename Functor>
-        static void singleShot
+        template <typename Functor> static void singleShot
             (
             int aMsec,
             const Object* aContext,
@@ -79,8 +81,7 @@ namespace QtLikeSignal
 
         //! Fires a single-shot timer executing a member function on receiver object. Receiver is
         //! the receiver object type and MemberFunc the member function pointer type.
-        template <typename Receiver, typename MemberFunc>
-        static void singleShot
+        template <typename Receiver, typename MemberFunc> static void singleShot
             (
             int aMsec,
             const Receiver* aReceiver,
@@ -127,12 +128,12 @@ namespace QtLikeSignal
     template <typename Functor> void Timer::singleShot
         (
         int aMsec,        //!< Delay in milliseconds.
-        Functor aFunctor  //!< Slot function to execute.
+        Functor aFunctor  //!< Callable to run.
         )
     {
         aMsec = checkInterval( "Timer::singleShot", aMsec );
 
-        //! Self-deleting helper that fires functor once when its timer expires.
+        //! Self-deleting helper that fires its functor once when its timer expires.
         class SingleShotHelper : public Object
         {
         public:
@@ -146,43 +147,53 @@ namespace QtLikeSignal
                 mId = startTimer( aMs );
             }
 
+            //! @return the timer id, or -1 if the timer could not be started.
+            int timerId() const
+            {
+                return mId;
+            }
+
         protected:
             virtual void timerEvent
                 (
                 TimerEvent* aEvent
                 ) override
             {
-                if( aEvent->timerId() == mId )
+                if( !aEvent || aEvent->timerId() != mId )
                 {
-                    mFn();
-                    deleteLater();
+                    return;
                 }
-            }
 
-        public:
-            int timerId() const
-            {
-                return mId;
+                // Kill before running the functor, so "single shot" holds even if the functor takes
+                // longer than the interval: deleteLater() only takes effect on the next pass of the
+                // loop, and until it does the timer is still registered and still due.
+                killTimer( mId );
+                mId = -1;
+
+                mFn();
+                deleteLater();
             }
 
         private:
             Functor mFn;
             int mId { -1 };
         };
+
         auto* helper = new SingleShotHelper( aMsec, aFunctor );
         if( helper->timerId() == -1 )
         {
+            // Nothing will ever fire it -- no event loop on this thread, most likely -- so reclaim
+            // the helper rather than leaking it.
             delete helper;
         }
     }
 
-    //! Fires a single-shot timer executing a functor in context object's thread.
-    template <typename Functor>
-    void Timer::singleShot
+    //! Run a functor once on a context object's thread after a delay.
+    template <typename Functor> void Timer::singleShot
         (
-        int aMsec,                  //!< Delay in milliseconds.
-        const Object* aContext,    //!< Target context Object.
-        Functor aFunctor            //!< Slot function to execute.
+        int aMsec,               //!< Delay in milliseconds.
+        const Object* aContext,  //!< Object whose thread will run the functor.
+        Functor aFunctor         //!< Callable to run.
         )
     {
         // Checked before the context is, as Qt does: the warning is about what the caller passed,
@@ -193,31 +204,40 @@ namespace QtLikeSignal
         {
             return;
         }
-        //! Self-deleting helper that arms itself on context's thread and fires functor once.
+
+        const std::shared_ptr<ThreadData> contextData = aContext->threadData();
+        const std::weak_ptr<int> contextLife = aContext->mLife;
+        if( !contextData || contextData->thread() == nullptr || contextLife.expired() )
+        {
+            // Detached object: no loop would ever deliver the timer, so there is nothing to arm.
+            return;
+        }
+
+        //! Self-deleting helper that arms itself on the context's thread and fires once.
         class SingleShotContextHelper : public Object
         {
         public:
             SingleShotContextHelper
                 (
+                std::shared_ptr<ThreadData> aOwnerData,
                 std::weak_ptr<int> aContextLife,
                 int aMs,
                 Functor aFn
                 )
-                : mContextLife( std::move( aContextLife ) )
+                : Object( std::move( aOwnerData ) )
+                , mContextLife( std::move( aContextLife ) )
                 , mFn( std::move( aFn ) )
                 , mInterval( aMs )
             {
             }
 
-            //! Registers the timer. Must run on this helper's own thread.
+            //! Register the timer. Must run on this helper's own thread.
             //!
-            //! Public only so callLater() can target it; it is not part of any API.
+            //! Public only so the posted task below can target it; it is not part of any API.
             void arm()
             {
                 if( mContextLife.expired() )
                 {
-                    // The context died between the call and this hop. Qt's QSingleShotTimer is
-                    // parented to the receiver and dies with it; this is the same guarantee.
                     delete this;
                     return;
                 }
@@ -240,8 +260,9 @@ namespace QtLikeSignal
                     return;
                 }
 
-                // Re-checked here and not only in arm(): the context may have been destroyed at any
-                // point during the delay, and the functor commonly captures it.
+                killTimer( mId );  // see SingleShotHelper::timerEvent() for why this is not deferred
+                mId = -1;
+
                 if( !mContextLife.expired() )
                 {
                     mFn();
@@ -256,30 +277,30 @@ namespace QtLikeSignal
             int mId { -1 };
         };
 
-        auto*    helper = new SingleShotContextHelper( aContext->objectLife(), aMsec, aFunctor );
-        Object* ctx    = const_cast<Object*>( aContext );
+        // The helper is born on the context's thread, so its startTimer() lands in the same mailbox
+        // that will deliver the result. Only the *call* to startTimer() still has to happen there,
+        // which is what the hop below is for -- Qt does the same in
+        // QSingleShotTimer::startTimerForReceiver(), arming directly when the receiver is on the
+        // current thread and posting to start it there otherwise.
+        auto* helper = new SingleShotContextHelper( contextData, contextLife, aMsec, aFunctor );
 
-        // startTimer() is thread-confined, so the timer has to be registered on the thread that will
-        // deliver its events -- not on whichever thread happens to call singleShot(). This mirrors
-        // Qt's QSingleShotTimer::startTimerForReceiver(), which arms directly when the receiver is on
-        // the current thread and otherwise moves itself to the receiver's thread and posts an event
-        // to start the timer there.
-        //
-        // The helper was constructed here, so its thread() is this thread.
-        if( helper->thread() == ctx->thread() )
+        if( Object::isCurrentThread( contextData ) )
         {
-            helper->arm(); // may delete itself; do not touch `helper` afterwards
+            helper->arm();  // may delete itself; do not touch `helper` afterwards
         }
-        else
+        else if( !Object::dispatchMetaCallTo( contextData, helper, [helper]()
+            {
+                helper->arm();
+            } ) )
         {
-            helper->moveToThread( ctx->thread() );
-            Object::callLater( helper, &SingleShotContextHelper::arm );
+            // The target thread has no dispatcher, so the call was refused rather than queued into
+            // something nothing will drain. Reclaim the helper here.
+            delete helper;
         }
     }
 
-    //! Fires a single-shot timer executing a member function on receiver object.
-    template <typename Receiver, typename MemberFunc>
-    void Timer::singleShot
+    //! Call a member function once on the receiver's thread after a delay.
+    template <typename Receiver, typename MemberFunc> void Timer::singleShot
         (
         int aMsec,                    //!< Delay in milliseconds.
         const Receiver* aReceiver,    //!< Target receiver object.

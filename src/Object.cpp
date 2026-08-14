@@ -100,13 +100,22 @@ namespace QtLikeSignal
         (
         Thread* aThread  //!< Thread this object lives in; null means the calling thread.
         )
+    // Store the thread's ThreadData, not the Thread itself: it outlives the Thread, so this
+    // object's affinity can never become a dangling pointer. Held in an Affinity box read at emit
+    // time, so a later moveToThread() redirects existing connections too.
+        : Object( aThread ? aThread->threadData()
+            : ( Thread::currentThread() ? Thread::currentThread()->threadData()
+            : std::shared_ptr<ThreadData>() ) )
+    {
+    }
+
+    //! Constructs an object directly on the given thread data. See the declaration.
+    Object::Object
+        (
+        std::shared_ptr<ThreadData> aThreadData  //!< Affinity to start with; may be null.
+        )
         : mLife( std::make_shared<int>( 0 ) )
-        // Store the thread's ThreadData, not the Thread itself: it outlives the Thread, so this
-        // object's affinity can never become a dangling pointer. Held in an Affinity box read at
-        // emit time, so a later moveToThread() redirects existing connections too.
-        , mAffinity( std::make_shared<Affinity>(
-            aThread ? aThread->threadData()
-            : ( Thread::currentThread() ? Thread::currentThread()->threadData() : nullptr ) ) )
+        , mAffinity( std::make_shared<Affinity>( std::move( aThreadData ) ) )
     {
     }
 

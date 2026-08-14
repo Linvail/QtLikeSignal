@@ -78,6 +78,10 @@ namespace QtMimic
             const Thread&
             ) = delete;
 
+        const std::string& name() const;
+
+        std::thread::id id() const;
+
         //! Scheduling priority of a thread, mirroring QThread::Priority.
         //!
         //! The numeric order is load-bearing, not cosmetic: the UNIX backend scales these values
@@ -103,6 +107,7 @@ namespace QtMimic
 
             InheritPriority
         };
+
         void start
             (
             Priority aPriority = InheritPriority
@@ -110,32 +115,11 @@ namespace QtMimic
 
         void startPlatformSpecific();
 
-        void setPriority
-            (
-            Priority aPriority
-            );
-
-        Priority priority() const;
-
-        bool post
-            (
-            std::function<void()> aTask
-            );
-
-        void processEvents();
-
-        void setWakeCallback
-            (
-            std::function<void()> aWake
-            );
-
-        std::shared_ptr<AbstractEventDispatcher> eventDispatcher() const;
-
         void quit();
 
         void exit
             (
-            int aCode = 0
+            int aReturnCode = 0
             );
 
         //! Blocks until the thread has finished, or @p aTime milliseconds have passed.
@@ -149,21 +133,38 @@ namespace QtMimic
             unsigned long aTime = ULONG_MAX
             );
 
-        bool isAdopted() const;
-
         bool isRunning() const;
 
         bool isFinished() const;
 
-        std::thread::id id() const;
+        void setPriority
+            (
+            Priority aPriority
+            );
 
-        const std::string& name() const;
+        Priority priority() const;
+
+        static Thread* currentThread();
+
+        void processEvents();
+
+        void setWakeCallback
+            (
+            std::function<void()> aCallback
+            );
+
+        bool isAdopted() const;
+
+        std::shared_ptr<AbstractEventDispatcher> eventDispatcher() const;
+
+        bool post
+            (
+            std::function<void()> aTask
+            );
 
         SignalView<>& getStarted() const;
 
         SignalView<>& getFinished() const;
-
-        static Thread* currentThread();
 
         //! Creates a Thread that will execute the specified function. Function is the callable
         //! type and Args its argument types. Thread-safe.
@@ -219,6 +220,15 @@ namespace QtMimic
             return mData.get();
         }
 
+        //! Platform half of start(): creates the OS thread (already at mPriority when it
+        //! executes its first instruction) and publishes its handle. Implemented in
+        //! ThreadWin.cpp / ThreadPosix.cpp so the platform code sits in one place per platform
+        //! instead of scattered through #if blocks. Called with mPriorityMutex held.
+        void applyPriority
+            (
+            Priority aPriority
+            );
+
         //! Everything the new thread must do whether or not run() is overridden.
         //!
         //! Kept separate from run() precisely so it cannot be overridden away: an override that
@@ -229,15 +239,6 @@ namespace QtMimic
         void adoptCallingThread();
 
         void bindAffinityToSelf();
-
-        //! Platform half of start(): creates the OS thread (already at mPriority when it
-        //! executes its first instruction) and publishes its handle. Implemented in
-        //! ThreadWin.cpp / ThreadPosix.cpp so the platform code sits in one place per platform
-        //! instead of scattered through #if blocks. Called with mPriorityMutex held.
-        void applyPriority
-            (
-            Priority aPriority
-            );
 
         #if defined( _WIN32 )
             static unsigned int __stdcall threadEntry
@@ -264,6 +265,7 @@ namespace QtMimic
             //! Closing the handle out from under one of them would be a use-after-close, so the
             //! last one out closes it. Guarded by mPriorityMutex.
             int mWaiters { 0 };
+
         #else
             //! The OS thread from pthread_create(). Meaningful only while mJoinable.
             pthread_t mThreadId {};
@@ -272,6 +274,7 @@ namespace QtMimic
             //! Joining twice is undefined, so this is what makes the join happen exactly once no
             //! matter how many callers reach wait(). Guarded by mPriorityMutex.
             bool mJoinable { false };
+
         #endif
 
         std::string mName;                        //!< Thread name
@@ -287,16 +290,6 @@ namespace QtMimic
         //! Thread.
         std::shared_ptr<ThreadData> mData;
 
-        //! True if this represents an already-running native thread rather than one start()
-        //! created. An adopted Thread has no OS thread of its own to start, join or prioritise: it
-        //! exists to give the native thread an identity and an event queue.
-        std::atomic<bool> mAdopted { false };
-
-        //! True from the moment the run body starts winding down, before finished() is emitted.
-        //! Mirrors Qt's threadState >= Finishing, and stays false forever for an adopted thread,
-        //! which Qt never moves out of Running. This is what isFinished() reports.
-        std::atomic<bool> mFinishing { false };
-
         //! True once the run body is completely done. This is what wait() waits for, and it is
         //! deliberately NOT what isFinished() reports -- see mFinishing.
         //!
@@ -308,14 +301,20 @@ namespace QtMimic
         //! Thread -- and the signal being emitted -- out from under it.
         std::atomic<bool> mHasFinished { false };
 
+        //! True from the moment the run body starts winding down, before finished() is emitted.
+        //! Mirrors Qt's threadState >= Finishing, and stays false forever for an adopted thread,
+        //! which Qt never moves out of Running. This is what isFinished() reports.
+        std::atomic<bool> mFinishing { false };
+
+        Signal<> mStarted;         //!< Emitted when loop starts
+
+        Signal<> mFinished;        //!< Emitted when loop exits
+
         std::atomic<bool> mExiting { false };  //!< Set by exit()/quit() to stop exec()'s loop.
 
         //! Value returned by exec(). Atomic because exit() may be called from any thread while
         //! the loop thread is about to read it -- ThreadSanitizer flags the plain int.
         std::atomic<int> mExitCode { 0 };
-
-        Signal<> mStarted;         //!< Emitted when loop starts
-        Signal<> mFinished;        //!< Emitted when loop exits
 
         //! Guards mWaitCv's predicate (mHasFinished).
         //!
@@ -339,6 +338,7 @@ namespace QtMimic
         //! setPriority()/priority() can never observe a handle published for a run whose
         //! priority is still being set up.
         mutable std::mutex mPriorityMutex;
+
         Priority mPriority { InheritPriority };  //!< Priority applied to the current/most recent run.
 
         //! Set when the new thread has to apply its own priority instead of being born with it.
@@ -348,6 +348,11 @@ namespace QtMimic
         //! it up itself. Guarded by mPriorityMutex, which is also what makes the fix-up wait for
         //! start() to publish the handle it needs.
         bool mPriorityNeedsReset { false };
+
+        //! True if this represents an already-running native thread rather than one start()
+        //! created. An adopted Thread has no OS thread of its own to start, join or prioritise: it
+        //! exists to give the native thread an identity and an event queue.
+        std::atomic<bool> mAdopted { false };
 
         static thread_local Thread* sCurrentThread;  //!< The Thread running on this OS thread, if any.
 
@@ -380,6 +385,7 @@ namespace QtMimic
         }
 
         friend class CoreApplication;
+
         //! Grants Object access to threadData() when adopting or releasing thread affinity.
         friend class Object;
     };

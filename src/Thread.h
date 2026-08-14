@@ -5,6 +5,7 @@
 #include "Signal.h"
 
 #include <atomic>
+#include <chrono>
 #include <climits>
 #include <condition_variable>
 #include <functional>
@@ -40,6 +41,16 @@ namespace QtLikeSignal
             );
 
         virtual ~Thread() override;
+
+        Thread
+            (
+            const Thread&
+            ) = delete;
+
+        Thread& operator=
+            (
+            const Thread&
+            ) = delete;
 
         const std::string& name() const;
 
@@ -270,7 +281,7 @@ namespace QtLikeSignal
         //!
         //! An adopted Thread has no OS thread of its own to start, join or prioritise: it exists to
         //! give the native thread an identity and an event queue.
-        bool mAdopted { false };
+        std::atomic<bool> mAdopted { false };
 
         static thread_local Thread* sCurrentThread;  //!< The Thread running on this OS thread, if any.
 

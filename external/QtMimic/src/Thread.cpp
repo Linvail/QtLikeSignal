@@ -273,13 +273,13 @@ namespace QtMimic
     }
 
     //! @brief Stop the loop and set the exec() return code. Thread-safe.
-    //! @param aCode The exit code to return from exec().
+    //! @param aReturnCode The exit code to return from exec().
     void Thread::exit
         (
-        int aCode
+        int aReturnCode
         )
     {
-        mExitCode.store( aCode );
+        mExitCode.store( aReturnCode );
         mExiting.store( true );
         if( auto dispatcher = mData->dispatcher() )
         {
@@ -346,12 +346,12 @@ namespace QtMimic
     //! dispatcher; post to the native loop and return.
     void Thread::setWakeCallback
         (
-        std::function<void()> aWake
+        std::function<void()> aCallback
         )
     {
         if( auto dispatcher = mData->dispatcher() )
         {
-            dispatcher->setWakeCallback( std::move( aWake ) );
+            dispatcher->setWakeCallback( std::move( aCallback ) );
         }
     }
 
