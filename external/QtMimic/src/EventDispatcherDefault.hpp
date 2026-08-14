@@ -78,6 +78,11 @@ namespace QtMimic
             Object* aReceiver
             ) override;
 
+        virtual std::vector<Event*> takeEventsForReceiver
+            (
+            Object* aReceiver
+            ) override;
+
         // The three hooks below are the whole platform seam. Everything else -- the event queue,
         // the timer list, the mutex that guards them, and the dispatch loop -- stays here and is
         // shared, so a platform dispatcher only has to answer three questions: how do we block,
@@ -156,7 +161,58 @@ namespace QtMimic
         //! released, so a killTimer() from inside one handler lands after the others' events already
         //! exist. This lets unregisterTimer() reach into that batch and cancel them. Guarded by
         //! mMutex, and every read of an entry takes mMutex too, so cancelling races nothing.
-        std::vector<EventPair>* mDispatchingTimerBatch { nullptr };
+        //! The batches one dispatch pass is working through, published so a cancellation arriving
+        //! mid-pass can reach them.
+        //!
+        //! A pass takes its work out of the shared containers before dispatching, so that no lock is
+        //! held while a handler runs. That also puts the work out of reach of unregisterTimer() and
+        //! removeEventsForReceiver(), which see only mEventQueue and mTimers -- so an entry for a
+        //! timer killed, or an object destroyed, by an earlier handler in the same pass would still
+        //! be delivered. In the destroyed case that is a call through a freed pointer.
+        struct DispatchFrame
+        {
+            std::deque<EventPair>*  mEvents { nullptr };   //!< Queued events taken from mEventQueue.
+            std::vector<EventPair>* mTimers { nullptr };   //!< Timers that expired in this pass.
+            std::vector<EventPair>* mDeletes { nullptr };  //!< Deferred deletes taken from mEventQueue.
+            DispatchFrame*          mOuter { nullptr };    //!< The pass this one is nested inside.
+        };
+
+        //! Every dispatch pass currently running on this dispatcher, innermost first.
+        //!
+        //! A chain rather than one frame because passes nest: a handler may run a nested
+        //! processEvents(), and a cancellation raised there must still reach the outer pass's
+        //! batches, which it will go on dispatching afterwards.
+        //!
+        //! Guarded by mMutex, as is every access to any entry, so ownership of each event passes to
+        //! exactly one party: whoever clears the slot first has it, and the other sees nullptr.
+        DispatchFrame* mDispatchFrames { nullptr };
+
+        //! Cancels every published entry targeting @p aReceiver. Callers must hold mMutex.
+        void cancelPublishedEntriesFor
+            (
+            Object* aReceiver
+            );
+
+        //! Cancels every published TimerEvent carrying @p aTimerId. Callers must hold mMutex.
+        void cancelPublishedTimerEvents
+            (
+            int aTimerId
+            );
+
+        //! Removes @p aFrame from mDispatchFrames. Callers must hold mMutex.
+        void unlinkDispatchFrame
+            (
+            DispatchFrame* aFrame
+            );
+
+        //! Removes a timer and every pending event for it. Callers must hold mMutex.
+        //!
+        //! Split out of unregisterTimer() so the wake, which runs user code, happens after the lock
+        //! is released.
+        bool takeTimerLocked
+            (
+            int aTimerId
+            );
 
         //! Nudges an adopted thread's own native loop when work is posted; empty if unused.
         std::function<void()> mWakeCallback;

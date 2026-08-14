@@ -20,7 +20,7 @@
 namespace QtMimic
 {
 
-    CoreApplication* CoreApplication::sInstance = nullptr;
+    std::atomic<CoreApplication*> CoreApplication::sInstance { nullptr };
 
     //! @brief Constructor - adopt the calling (main) thread, with no command-line arguments.
     CoreApplication::CoreApplication()
@@ -59,15 +59,14 @@ namespace QtMimic
         // Qt asserts here ("there should be only one application object"). Warn rather than abort:
         // a diagnostic is more useful than killing the process, and the first instance stays the
         // one instance() reports so the damage is contained and visible.
-        if( sInstance )
+        // One compare-exchange rather than a test and a store, so "the first one wins" holds even
+        // under the misuse this branch exists to report.
+        CoreApplication* noInstanceYet = nullptr;
+        if( !sInstance.compare_exchange_strong( noInstanceYet, this ) )
         {
             std::fprintf( stderr,
                 "CoreApplication: there should be only one application object; the existing one "
                 "is kept and this one will not be reachable through instance()\n" );
-        }
-        else
-        {
-            sInstance = this;
         }
 
         mMainThread = Thread::currentThread();
@@ -116,16 +115,15 @@ namespace QtMimic
         mDispatcher.reset();
         mMainThread = nullptr;
 
-        if( sInstance == this )
-        {
-            sInstance = nullptr;
-        }
+        // Clears the pointer only if it is still ours.
+        CoreApplication* self = this;
+        sInstance.compare_exchange_strong( self, nullptr );
     }
 
     //! @brief Get the single CoreApplication instance (or nullptr if none exists).
     CoreApplication* CoreApplication::instance()
     {
-        return sInstance;
+        return sInstance.load();
     }
 
     //! @brief Run the main event loop until quit() or exit() is called.
@@ -183,9 +181,10 @@ namespace QtMimic
         int aCode
         )
     {
-        if( sInstance && sInstance->mMainThread )
+        CoreApplication* app = sInstance.load();
+        if( app && app->mMainThread )
         {
-            sInstance->mMainThread->exit( aCode );
+            app->mMainThread->exit( aCode );
         }
     }
 
@@ -202,9 +201,10 @@ namespace QtMimic
         std::function<void()> aTask
         )
     {
-        if( sInstance && sInstance->mMainThread )
+        CoreApplication* app = sInstance.load();
+        if( app && app->mMainThread )
         {
-            sInstance->mMainThread->post( std::move( aTask ) );
+            app->mMainThread->post( std::move( aTask ) );
         }
     }
 

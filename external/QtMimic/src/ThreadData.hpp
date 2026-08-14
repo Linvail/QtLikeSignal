@@ -19,11 +19,14 @@
 #include "AbstractEventDispatcher.hpp"
 
 #include <atomic>
+#include <vector>
 #include <memory>
 #include <mutex>
 
 namespace QtMimic
 {
+    class Event;
+    class Object;
     class Thread;
 
     //----------------------------------------------------------------
@@ -59,6 +62,9 @@ namespace QtMimic
     public:
         ThreadData() = default;
 
+        //! Frees any events parked for a dispatcher that never arrived. See mParkedEvents.
+        ~ThreadData();
+
         ThreadData
             (
             const ThreadData&
@@ -91,6 +97,22 @@ namespace QtMimic
             std::shared_ptr<AbstractEventDispatcher> aDispatcher
             );
 
+        //! Hands back the dispatcher to post @p aEvent to, or parks the event and returns nullptr.
+        //!
+        //! One call rather than "ask, then decide", so the answer cannot change in between.
+        //! Ownership of @p aEvent passes to this ThreadData when it is parked.
+        std::shared_ptr<AbstractEventDispatcher> dispatcherOrPark
+            (
+            Object* aReceiver,
+            Event* aEvent
+            );
+
+        //! Drops any parked events for @p aReceiver, called by ~Object() before it dies.
+        void removeParkedEventsFor
+            (
+            Object* aReceiver
+            );
+
         std::atomic<Thread*> mThread { nullptr };  //!< Owning thread; nulled by ~Thread().
 
         //! True while the owning thread's body is executing.
@@ -104,6 +126,21 @@ namespace QtMimic
 
         mutable std::mutex mDispatcherMutex;                    //!< Guards mDispatcher.
         std::shared_ptr<AbstractEventDispatcher> mDispatcher;  //!< This thread's dispatcher, if any.
+
+        //! One event waiting for this thread to have a dispatcher at all.
+        struct ParkedEvent
+        {
+            Object* mReceiver;
+            Event*  mEvent;
+        };
+
+        //! Events moved here by Object::moveToThread() before this thread had a dispatcher.
+        //!
+        //! The canonical idiom builds a Thread, moves objects onto it, and only then calls start()
+        //! -- and a Thread has no dispatcher until its run body creates one. Dropping the events
+        //! loses work silently; leaving them behind runs them on the thread the object just left.
+        //! The dispatcher drains this the moment it is installed.
+        std::vector<ParkedEvent> mParkedEvents;
 
         friend class Object;
         friend class Thread;

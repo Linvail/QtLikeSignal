@@ -15,6 +15,8 @@
 #ifndef QT_MIMIC_GLOBAL_HPP
 #define QT_MIMIC_GLOBAL_HPP
 
+#include "Connection.hpp"
+
 #include <type_traits>
 
 namespace QtMimic

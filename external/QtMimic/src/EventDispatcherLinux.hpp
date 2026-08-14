@@ -43,7 +43,7 @@ namespace QtMimic
         virtual ~EventDispatcherLinux() override;
 
         //! Invoked when a registered descriptor is ready; receives the poll(2) revents bitmask.
-        using EventSourceCallback = std::function<void( short aEvents )>;
+        using EventSourceCallback = std::function<void ( short aEvents )>;
 
         bool registerEventSource
             (
@@ -72,8 +72,25 @@ namespace QtMimic
         {
             int mFd;                          //!< The descriptor to poll.
             short mEvents;                    //!< poll(2) event mask to wait for.
-            EventSourceCallback mCallback;    //!< Invoked with the revents when ready.
+            EventSourceCallback mCallback;
+
+            //! Distinguishes this registration from any later one reusing the same descriptor.
+            //!
+            //! A descriptor number is not an identity: unregister it, close it, and the next open()
+            //! may hand the same number back.
+            unsigned long long mGeneration;    //!< Invoked with the revents when ready.
         };
+
+        //! Copies the callback of the registration identified by @p aFd and @p aGeneration.
+        //!
+        //! Empty if that registration is gone. Looking it up again immediately before invoking is
+        //! what makes unregisterEventSource() take effect at once rather than one poll() round
+        //! later.
+        EventSourceCallback callbackIfStillRegistered
+            (
+            int aFd,
+            unsigned long long aGeneration
+            );
 
         void drainWakeFd();
 
@@ -89,6 +106,9 @@ namespace QtMimic
 
         //! Registered platform descriptors. Guarded by the inherited mMutex.
         std::vector<EventSource> mSources;
+
+        //! Stamped into each registration and never reused. Guarded by the inherited mMutex.
+        unsigned long long mNextGeneration { 1 };
     };
 }
 

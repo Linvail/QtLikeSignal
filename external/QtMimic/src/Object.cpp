@@ -193,7 +193,12 @@ namespace QtMimic
             }
         }
 
-        mAffinity->setData( aThread ? aThread->threadData() : std::shared_ptr<ThreadData>() );
+        const std::shared_ptr<ThreadData> oldAffinity = mAffinity->data();
+        const std::shared_ptr<ThreadData> newAffinity
+            = aThread ? aThread->threadData() : std::shared_ptr<ThreadData>();
+        mAffinity->setData( newAffinity );
+
+        migratePostedEvents( oldAffinity, newAffinity );
 
         if( !timersToMove.empty() )
         {
@@ -423,6 +428,7 @@ namespace QtMimic
                     // A refusal means the dispatcher is closing, so nothing would ever drain this
                     // event; postEvent() has already freed it. Fall through to the synchronous
                     // delete rather than leaking the object.
+                    mMayHaveQueuedWork.store( true, std::memory_order_release );
                     if( disp->postEvent( this, static_cast<Event*>( event ) ) )
                     {
                         return;
@@ -497,11 +503,22 @@ namespace QtMimic
         // token to check -- the dispatcher holds a raw Object* and calls timerEvent() on it
         // directly -- so this is the only thing standing between a still-running timer and a call
         // into freed memory. It cancels anything already collected for delivery, too.
-        if( const std::shared_ptr<ThreadData> data = threadData() )
+        //
+        // Skipped entirely for an object that never received queued work and owns no timer: the
+        // strip is O(queue + timers) under the dispatcher's lock, and most objects have nothing
+        // there. Qt guards the same call the same way, with `if (d->postedEvents)` in ~QObject().
+        if( mMayHaveQueuedWork.load( std::memory_order_acquire ) || !outstandingTimerIds.empty() )
         {
-            if( auto dispatcher = data->dispatcher() )
+            if( const std::shared_ptr<ThreadData> data = threadData() )
             {
-                dispatcher->removeEventsForReceiver( this );
+                if( auto dispatcher = data->dispatcher() )
+                {
+                    dispatcher->removeEventsForReceiver( this );
+                }
+
+                // Events moved here before this thread had a dispatcher are in no queue yet, so the
+                // strip above cannot see them. See ThreadData::mParkedEvents.
+                data->removeParkedEventsFor( this );
             }
         }
         for( const int timerId : outstandingTimerIds )
@@ -512,6 +529,10 @@ namespace QtMimic
         // Drop any callLater() invocations still pending for this object. Their closures check the
         // life token before running, so they were already inert; erasing the entries is what stops
         // the registry growing a dead key for every object that ever scheduled one.
+        // Only objects that have actually used callLater() can have entries to drop. The scan is
+        // O(every pending callLater in the process) and takes a lock shared by every thread, so
+        // running it for the majority that never touched the feature was pure cost.
+        if( mUsedCallLater.load( std::memory_order_acquire ) )
         {
             std::lock_guard<std::mutex> locker( CallLaterRegistry::sMutex );
             auto& pending = CallLaterRegistry::sPending;
@@ -603,6 +624,73 @@ namespace QtMimic
         return true;
     }
 
+    //! @brief Carry this object's already-posted events to the thread it has just moved to.
+    //!
+    //! Called by moveToThread() **after** the affinity has been swapped, which is what makes it safe
+    //! without holding both dispatcher mutexes at once: each queue is only ever touched alone, so
+    //! two moves in opposite directions cannot deadlock. Qt needs QOrderedMutexLocker precisely
+    //! because it moves the events and the affinity together.
+    //!
+    //! Safe for a reason specific to this function: moveToThread() runs on the object's own thread,
+    //! so the old thread is inside this call and cannot be dispatching the events being taken.
+    //!
+    //! Without this, a queued call posted just before the move runs on the thread the object has
+    //! left, silently -- nothing re-checks affinity once an event is queued. Qt migrates them in
+    //! QObjectPrivate::setThreadData_helper().
+    void Object::migratePostedEvents
+        (
+        const std::shared_ptr<ThreadData>& aOldData,  //!< Thread being left; may be null.
+        const std::shared_ptr<ThreadData>& aNewData   //!< Thread now lived on; may be null.
+        )
+    {
+        if( aOldData == aNewData )
+        {
+            return;
+        }
+
+        const std::shared_ptr<AbstractEventDispatcher> oldDispatcher
+            = aOldData ? aOldData->dispatcher() : nullptr;
+        if( !oldDispatcher )
+        {
+            return;
+        }
+
+        // Swept more than once: a thread that resolved this object's affinity before the swap can
+        // still be inside postEvent() on the old dispatcher. Every such poster is already in flight,
+        // so the set drains; the cap bounds a caller that never stops posting to a moving object.
+        constexpr int kMaxSweeps = 8;
+        for( int sweep = 0; sweep < kMaxSweeps; ++sweep )
+        {
+            std::vector<Event*> taken = oldDispatcher->takeEventsForReceiver( this );
+            if( taken.empty() )
+            {
+                break;
+            }
+
+            for( Event* event : taken )
+            {
+                if( !aNewData )
+                {
+                    // moveToThread(nullptr) means this object stops processing events, so there is
+                    // no later at which these could run.
+                    delete event;
+                    continue;
+                }
+
+                // Asked in one step, so the destination cannot gain or lose its dispatcher between
+                // the question and the answer. A null return means the event is parked and now
+                // belongs to the destination's ThreadData.
+                const std::shared_ptr<AbstractEventDispatcher> newDispatcher
+                    = aNewData->dispatcherOrPark( this, event );
+                if( newDispatcher )
+                {
+                    // postEvent() deletes the event itself when it refuses.
+                    newDispatcher->postEvent( this, event );
+                }
+            }
+        }
+    }
+
     //! @brief Dispatch a metacall to an explicitly named thread, ignoring the receiver's affinity.
     //!
     //! The entry point for a caller that knows which thread it means rather than inferring it from
@@ -632,6 +720,10 @@ namespace QtMimic
             // MetaCallEvent's constructor also takes by value and moves, so copying here would buy a
             // second heap allocation on every queued emit for nothing.
             auto* event = new MetaCallEvent( std::move( aSlot ) );
+            if( aReceiver )
+            {
+                aReceiver->mMayHaveQueuedWork.store( true, std::memory_order_release );
+            }
             return disp->postEvent( aReceiver, static_cast<Event*>( event ) );
         }
         return false;
@@ -649,6 +741,9 @@ namespace QtMimic
         {
             return;
         }
+
+        // Marked before the entry exists, so ~Object() can never see the entry without the flag.
+        aContext->mUsedCallLater.store( true, std::memory_order_release );
 
         std::shared_ptr<CallLaterNode> node;
         bool isNew = false;

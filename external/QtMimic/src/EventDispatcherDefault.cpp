@@ -49,6 +49,9 @@ namespace QtMimic
         // than copied out entry by entry.
         std::deque<EventPair>     eventsToProcess;
         std::vector<EventPair>    timerEventsToProcess;
+
+        // Declared out here so it outlives both batches it points at.
+        DispatchFrame frame;
         std::chrono::milliseconds maxWait { 100 };
 
         {
@@ -157,21 +160,27 @@ namespace QtMimic
             // Publish the batch so unregisterTimer() can cancel entries in it while the handlers
             // below run. Set before *any* dispatching, since a queued metacall can kill a timer just
             // as a timer handler can.
-            mDispatchingTimerBatch = &timerEventsToProcess;
+            // Published before any dispatching, and while still holding the lock, so there is no
+            // window in which a pass owns work that no canceller can see.
+            frame.mEvents   = &eventsToProcess;
+            frame.mTimers   = &timerEventsToProcess;
+            frame.mOuter    = mDispatchFrames;
+            mDispatchFrames = &frame;
         }
 
         // Retracts the published batch however this function leaves, so a pointer to a dead local
         // can never outlive the pass.
-        struct BatchRetractor
+        struct FrameRetractor
         {
-            ~BatchRetractor()
+            ~FrameRetractor()
             {
                 std::lock_guard<std::mutex> lock( mOwner->mMutex );
-                mOwner->mDispatchingTimerBatch = nullptr;
+                mOwner->unlinkDispatchFrame( mFrame );
             }
 
             EventDispatcherDefault* mOwner;
-        } batchRetractor { this };
+            DispatchFrame*          mFrame;
+        } frameRetractor { this, &frame };
 
         // Drain the OS's own event source, with mMutex released so platform code may re-enter this
         // dispatcher (a native handler is free to post an event or start a timer). Done before our
@@ -189,8 +198,19 @@ namespace QtMimic
         std::unordered_set<Object*> deletedReceivers;
 
         // Dispatch queued events
-        for( const auto& ep : eventsToProcess )
+        for( size_t i = 0; i < eventsToProcess.size(); ++i )
         {
+            // Taken under the lock, clearing our slot as we go, exactly as the timer loop below
+            // does: whoever clears an entry owns its event, and the other side sees nullptr and
+            // skips. That is what lets removeEventsForReceiver() cancel an entry belonging to an
+            // object destroyed by an earlier handler in this same batch.
+            EventPair ep { nullptr, nullptr };
+            {
+                std::lock_guard<std::mutex> lock( mMutex );
+                ep                        = eventsToProcess[i];
+                eventsToProcess[i].mEvent = nullptr;
+            }
+
             if( !ep.mReceiver || !ep.mEvent )
             {
                 delete ep.mEvent;
@@ -333,26 +353,34 @@ namespace QtMimic
             return;
         }
 
-        std::lock_guard<std::mutex> lock( mMutex );
-        auto now = std::chrono::steady_clock::now();
-        TimerData td;
-        td.mTimerId    = aTimerId;
-        td.mIntervalMs = aInterval;
-        td.mReceiver   = aObject;
-        td.mNextFire   = now + std::chrono::milliseconds( aInterval );
-
-        for( auto& t : mTimers )
         {
-            if( t.mTimerId == aTimerId )
+            std::lock_guard<std::mutex> lock( mMutex );
+            auto now = std::chrono::steady_clock::now();
+            TimerData td;
+            td.mTimerId    = aTimerId;
+            td.mIntervalMs = aInterval;
+            td.mReceiver   = aObject;
+            td.mNextFire   = now + std::chrono::milliseconds( aInterval );
+
+            bool replaced = false;
+            for( auto& t : mTimers )
             {
-                t             = td;
-                mTimersChanged = true;
-                wakeWaiter();
-                return;
+                if( t.mTimerId == aTimerId )
+                {
+                    t        = td;
+                    replaced = true;
+                    break;
+                }
             }
+            if( !replaced )
+            {
+                mTimers.push_back( td );
+            }
+            mTimersChanged = true;
         }
-        mTimers.push_back( td );
-        mTimersChanged = true;
+
+        // Woken with mMutex released, matching postEvent(): wakeWaiter() may run the thread's wake
+        // callback, which is user code and must be free to call back in.
         wakeWaiter();
     }
 
@@ -363,8 +391,26 @@ namespace QtMimic
         int aTimerId  //!< Unique timer identifier.
         )
     {
-        std::lock_guard<std::mutex> lock( mMutex );
+        bool removed = false;
+        {
+            std::lock_guard<std::mutex> lock( mMutex );
+            removed = takeTimerLocked( aTimerId );
+        }
 
+        if( removed )
+        {
+            // Woken with mMutex released, matching postEvent(). See wakeWaiter().
+            wakeWaiter();
+        }
+        return removed;
+    }
+
+    //! Removes timer @p aTimerId and every pending event for it. Callers must hold mMutex.
+    bool EventDispatcherDefault::takeTimerLocked
+        (
+        int aTimerId  //!< Unique timer identifier.
+        )
+    {
         // Drop any TimerEvent for this timer that has already been queued but not yet delivered.
         //
         // This became necessary when timer ids started being recycled. Previously a stale event was
@@ -383,7 +429,7 @@ namespace QtMimic
             [aTimerId]( const EventPair& aEp )
             {
                 if( aEp.mEvent && aEp.mEvent->type() == Event::Timer
-                    && static_cast<TimerEvent*>( aEp.mEvent )->timerId() == aTimerId )
+                && static_cast<TimerEvent*>( aEp.mEvent )->timerId() == aTimerId )
                 {
                     delete aEp.mEvent;
                     return true;
@@ -392,18 +438,7 @@ namespace QtMimic
             } );
         mEventQueue.erase( itQueue, mEventQueue.end() );
 
-        if( mDispatchingTimerBatch )
-        {
-            for( auto& ep : *mDispatchingTimerBatch )
-            {
-                if( ep.mEvent && ep.mEvent->type() == Event::Timer
-                    && static_cast<TimerEvent*>( ep.mEvent )->timerId() == aTimerId )
-                {
-                    delete ep.mEvent;
-                    ep.mEvent = nullptr;
-                }
-            }
-        }
+        cancelPublishedTimerEvents( aTimerId );
 
         auto it = std::remove_if( mTimers.begin(),
             mTimers.end(),
@@ -415,7 +450,6 @@ namespace QtMimic
         {
             mTimers.erase( it, mTimers.end() );
             mTimersChanged = true;
-            wakeWaiter();
             return true;
         }
         return false;
@@ -459,6 +493,159 @@ namespace QtMimic
         mAcceptingEvents = false;
     }
 
+    namespace
+    {
+        //! Cancels the entries of one published batch that @p aMatches selects.
+        template <typename Batch, typename Predicate>
+        void cancelBatchEntries
+            (
+            Batch* aBatch,             //!< The published batch, or nullptr.
+            const Predicate& aMatches  //!< True for an entry that should not be dispatched.
+            )
+        {
+            if( !aBatch )
+            {
+                return;
+            }
+            for( auto& ep : *aBatch )
+            {
+                if( ep.mEvent && aMatches( ep ) )
+                {
+                    delete ep.mEvent;
+                    ep.mEvent = nullptr;
+                }
+            }
+        }
+
+        //! Applies @p aMatches to every batch of every running pass.
+        template <typename Frame, typename Predicate>
+        void cancelInEveryFrame
+            (
+            Frame* aFrames,            //!< Innermost running pass, or nullptr.
+            const Predicate& aMatches  //!< True for an entry that should not be dispatched.
+            )
+        {
+            for( Frame* frame = aFrames; frame; frame = frame->mOuter )
+            {
+                cancelBatchEntries( frame->mEvents, aMatches );
+                cancelBatchEntries( frame->mTimers, aMatches );
+                cancelBatchEntries( frame->mDeletes, aMatches );
+            }
+        }
+
+        //! Moves the entries of one published batch that target @p aReceiver into @p aTaken.
+        //!
+        //! Hands the event over rather than deleting it, and clears the slot so the dispatch loop
+        //! skips it.
+        template <typename Batch>
+        void takeBatchEntries
+            (
+            Batch* aBatch,                 //!< The published batch, or nullptr.
+            Object* aReceiver,             //!< The receiver whose entries should be taken.
+            std::vector<Event*>& aTaken    //!< Collects the events taken.
+            )
+        {
+            if( !aBatch )
+            {
+                return;
+            }
+            for( auto& ep : *aBatch )
+            {
+                if( ep.mEvent && ep.mReceiver == aReceiver )
+                {
+                    aTaken.push_back( ep.mEvent );
+                    ep.mEvent = nullptr;
+                }
+            }
+        }
+    }
+
+    //! Cancels every published entry targeting @p aReceiver. Callers must hold mMutex.
+    void EventDispatcherDefault::cancelPublishedEntriesFor
+        (
+        Object* aReceiver  //!< The receiver whose entries should be cancelled.
+        )
+    {
+        cancelInEveryFrame( mDispatchFrames,
+            [aReceiver]( const EventPair& aEp )
+            {
+                return aEp.mReceiver == aReceiver;
+            } );
+    }
+
+    //! Cancels every published TimerEvent carrying @p aTimerId. Callers must hold mMutex.
+    void EventDispatcherDefault::cancelPublishedTimerEvents
+        (
+        int aTimerId  //!< The timer whose pending events should be cancelled.
+        )
+    {
+        cancelInEveryFrame( mDispatchFrames,
+            [aTimerId]( const EventPair& aEp )
+            {
+                return aEp.mEvent->type() == Event::Timer
+                       && static_cast<TimerEvent*>( aEp.mEvent )->timerId() == aTimerId;
+            } );
+    }
+
+    //! Removes @p aFrame from the chain of running passes. Callers must hold mMutex.
+    //!
+    //! Unlinks that specific frame rather than popping the head, so two threads driving the same
+    //! dispatcher cannot corrupt the chain.
+    void EventDispatcherDefault::unlinkDispatchFrame
+        (
+        DispatchFrame* aFrame  //!< The frame to remove.
+        )
+    {
+        for( DispatchFrame** link = &mDispatchFrames; *link; link = &( *link )->mOuter )
+        {
+            if( *link == aFrame )
+            {
+                *link = aFrame->mOuter;
+                return;
+            }
+        }
+    }
+
+    //! Removes the receiver's pending events and hands them over, still alive. Thread-safe.
+    //!
+    //! Reaches the running passes as well as the queue, so it also works when moveToThread() is
+    //! called from inside a handler.
+    std::vector<Event*> EventDispatcherDefault::takeEventsForReceiver
+        (
+        Object* aReceiver  //!< The receiver whose events should be taken.
+        )
+    {
+        std::vector<Event*> taken;
+        if( !aReceiver )
+        {
+            return taken;
+        }
+
+        std::lock_guard<std::mutex> lock( mMutex );
+
+        auto itQueue = std::remove_if( mEventQueue.begin(),
+            mEventQueue.end(),
+            [aReceiver, &taken]( const EventPair& aEp )
+            {
+                if( aEp.mReceiver == aReceiver && aEp.mEvent )
+                {
+                    taken.push_back( aEp.mEvent );
+                    return true;
+                }
+                return false;
+            } );
+        mEventQueue.erase( itQueue, mEventQueue.end() );
+
+        for( DispatchFrame* frame = mDispatchFrames; frame; frame = frame->mOuter )
+        {
+            takeBatchEntries( frame->mEvents, aReceiver, taken );
+            takeBatchEntries( frame->mTimers, aReceiver, taken );
+            takeBatchEntries( frame->mDeletes, aReceiver, taken );
+        }
+
+        return taken;
+    }
+
     //! Removes and deletes all pending events for the specified receiver. Thread-safe.
     void EventDispatcherDefault::removeEventsForReceiver
         (
@@ -485,6 +672,10 @@ namespace QtMimic
             } );
         mEventQueue.erase( itQueue, mEventQueue.end() );
 
+        // A pass in progress has already taken its work out of the containers above, so an object
+        // destroyed from inside a handler would leave its remaining entries in that pass.
+        cancelPublishedEntriesFor( aReceiver );
+
         auto itTimer
             = std::remove_if( mTimers.begin(),
             mTimers.end(),
@@ -509,24 +700,33 @@ namespace QtMimic
             return taken;
         }
 
-        std::lock_guard<std::mutex> lock( mMutex );
-
-        auto it = std::remove_if( mTimers.begin(),
-            mTimers.end(),
-            [aReceiver, &taken]( const TimerData& aTd )
-            {
-                if( aTd.mReceiver != aReceiver )
-                {
-                    return false;
-                }
-                taken.push_back( { aTd.mTimerId, aTd.mIntervalMs } );
-                return true;
-            } );
-        if( it != mTimers.end() )
+        bool removedAny = false;
         {
-            mTimers.erase( it, mTimers.end() );
-            // The wait deadline was computed from a timer list that no longer holds these entries.
-            mTimersChanged = true;
+            std::lock_guard<std::mutex> lock( mMutex );
+
+            auto it = std::remove_if( mTimers.begin(),
+                mTimers.end(),
+                [aReceiver, &taken]( const TimerData& aTd )
+                {
+                    if( aTd.mReceiver != aReceiver )
+                    {
+                        return false;
+                    }
+                    taken.push_back( { aTd.mTimerId, aTd.mIntervalMs } );
+                    return true;
+                } );
+            if( it != mTimers.end() )
+            {
+                mTimers.erase( it, mTimers.end() );
+                // The wait deadline was computed from a list that no longer holds these entries.
+                mTimersChanged = true;
+                removedAny     = true;
+            }
+        }
+
+        if( removedAny )
+        {
+            // Woken with mMutex released, matching postEvent(). See wakeWaiter().
             wakeWaiter();
         }
 
@@ -549,6 +749,7 @@ namespace QtMimic
         for(;;)
         {
             std::vector<EventPair> deferredDeletes;
+            DispatchFrame frame;
             {
                 std::lock_guard<std::mutex> lock( mMutex );
                 for( auto it = mEventQueue.begin(); it != mEventQueue.end();)
@@ -563,7 +764,27 @@ namespace QtMimic
                         ++it;
                     }
                 }
+
+                // Published for the same reason processEvents() publishes its batches: this is
+                // work that has left mEventQueue, and destroying one of these objects can destroy
+                // another that is also in this batch.
+                frame.mDeletes  = &deferredDeletes;
+                frame.mOuter    = mDispatchFrames;
+                mDispatchFrames = &frame;
             }
+
+            // Unlinks the frame however this iteration ends, including the break below.
+            struct FrameRetractor
+            {
+                ~FrameRetractor()
+                {
+                    std::lock_guard<std::mutex> lock( mOwner->mMutex );
+                    mOwner->unlinkDispatchFrame( mFrame );
+                }
+
+                EventDispatcherDefault* mOwner;
+                DispatchFrame*          mFrame;
+            } frameRetractor { this, &frame };
 
             if( deferredDeletes.empty() )
             {
@@ -572,9 +793,18 @@ namespace QtMimic
 
             // Dispatch with mMutex released: ~Object() calls removeEventsForReceiver(), which takes
             // the same non-recursive mutex and would otherwise deadlock.
-            for( const auto& ep : deferredDeletes )
+            for( size_t i = 0; i < deferredDeletes.size(); ++i )
             {
-                if( ep.mReceiver && deletedReceivers.insert( ep.mReceiver ).second )
+                // Taken under the lock, as in processEvents(): an object destroyed earlier in this
+                // batch cancels its own remaining entries, and whoever clears the slot owns it.
+                EventPair ep { nullptr, nullptr };
+                {
+                    std::lock_guard<std::mutex> lock( mMutex );
+                    ep                        = deferredDeletes[i];
+                    deferredDeletes[i].mEvent = nullptr;
+                }
+
+                if( ep.mReceiver && ep.mEvent && deletedReceivers.insert( ep.mReceiver ).second )
                 {
                     ep.mReceiver->event( ep.mEvent );
                 }

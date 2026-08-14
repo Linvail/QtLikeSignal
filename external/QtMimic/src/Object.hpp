@@ -680,8 +680,8 @@ namespace QtMimic
             // dispatchMetaCallTo() purely as the queue key that removeEventsForReceiver() later
             // matches on. ~Object() strips every event still queued for it before it goes away, so
             // the dispatcher never delivers to a dead receiver.
-            Connection handle = aSignal.connectReflective( [slot = std::forward<Callable>( aSlot ),
-                life, ctxAffinity, aType, cleanup, aContext]( const Connection&, auto&&... args )
+            Connection handle = aSignal.connect( [slot = std::forward<Callable>( aSlot ),
+                life, ctxAffinity, aType, cleanup, aContext]( auto&&... args )
                 {
                     if( aType == ConnectionType::Direct )
                     {
@@ -848,6 +848,13 @@ namespace QtMimic
 
         std::shared_ptr<ThreadData> threadData() const;
 
+        //! Carries this object's already-posted events across in moveToThread(). See the definition.
+        void migratePostedEvents
+            (
+            const std::shared_ptr<ThreadData>& aOldData,
+            const std::shared_ptr<ThreadData>& aNewData
+            );
+
         bool event
             (
             Event* aEvent
@@ -901,6 +908,18 @@ namespace QtMimic
         const std::shared_ptr<Affinity> mAffinity;     //!< Affinity holder; never reassigned after ctor
         std::shared_ptr<int> mLife;              //!< Liveness token for queued slots
         std::atomic<bool> mDeleteLaterPosted { false }; //!< true once deleteLater() has posted delete
+
+        //! True once this object has been the context of a callLater(), so ~Object() knows whether
+        //! the process-wide pending registry can possibly hold anything of ours.
+        std::atomic<bool> mUsedCallLater { false };
+
+        //! True once an event has been posted for this object, so ~Object() knows whether the
+        //! dispatcher's queue can possibly hold anything of ours.
+        //!
+        //! Both flags are set-once. They exist because both scans are O(backlog) and were run on
+        //! every destruction, including for the objects -- most of them -- that never used either
+        //! feature. Qt guards the same call the same way: `if (d->postedEvents)` in ~QObject().
+        std::atomic<bool> mMayHaveQueuedWork { false };
         mutable std::mutex mIncomingMutex;       //!< Protects mIncoming
         std::vector<Connection> mIncoming;       //!< Connections where this is the receiver
 

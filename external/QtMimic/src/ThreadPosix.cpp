@@ -8,7 +8,9 @@
 
 #include <cerrno>
 #include <cstdio>
+#include <pthread.h>
 #include <sched.h>
+#include <unistd.h>
 
 // Priority scheduling is an optional part of POSIX. Where it is absent there is no portable way
 // to ask for a priority at all, so setPriority() records the value and does nothing else, which

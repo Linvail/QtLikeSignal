@@ -6,13 +6,16 @@
 //! Copyright 2026 by Garmin Ltd. or its subsidiaries.
 
 #include "Object.hpp"
+#include "Signal.hpp"
 #include "Thread.hpp"
 
 #include "gtest/gtest.h"
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <memory>
 #include <thread>
+#include <vector>
 
 namespace
 {
@@ -520,6 +523,416 @@ namespace
 
         gPostRace = nullptr;
         SUCCEED(); // reaching here without an ASan report is the assertion.
+    }
+
+
+    //! Spins until @p aReady is true, or gives up. True if it became true.
+    template <typename Predicate>
+    bool waitForCondition
+        (
+        const Predicate& aReady,     //!< Condition to wait for.
+        int aTimeoutMs = 3000        //!< Give up after this long.
+        )
+    {
+        const auto deadline
+            = std::chrono::steady_clock::now() + std::chrono::milliseconds( aTimeoutMs );
+        while( std::chrono::steady_clock::now() < deadline )
+        {
+            if( aReady() )
+            {
+                return true;
+            }
+            std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+        }
+        return aReady();
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // An object destroyed during a dispatch pass must not receive the rest of that pass.
+    //
+    // processEvents() takes its work out of the shared containers before it dispatches -- the event
+    // queue is swapped into a local batch, expired timers are collected into another -- so that no lock
+    // is held while a handler runs. ~Object() -> removeEventsForReceiver() could only see the
+    // containers, never the batches, so an object deleted from inside any handler left its remaining
+    // entries in the pass and each one was dispatched through a freed pointer.
+    //
+    // The timer half crashed outright; the queued half did not, which made it the more dangerous of the
+    // two. Both batches are now published under the dispatcher's mutex, and removeEventsForReceiver()
+    // cancels the destroyed receiver's entries in them -- the same mechanism unregisterTimer() has used
+    // on the timer batch since R24, wired to the other canceller as well.
+    // ---------------------------------------------------------------------------------------------
+
+    //! Fires on a timer and deletes a nominated sibling from inside the handler.
+    class TimerHandlerSiblingKiller : public Object
+    {
+    public:
+        Object* mVictim { nullptr };        //!< Deleted on the first fire, then cleared.
+        int mFireCount { 0 };                //!< Fires delivered to this object.
+
+    protected:
+        virtual void timerEvent
+            (
+            TimerEvent* aEvent
+            ) override
+        {
+            ( void )aEvent;
+            ++mFireCount;
+            delete mVictim;
+            mVictim = nullptr;
+        }
+
+    };
+
+    //! Counts the timer events it is given, so a delivery to a destroyed object is visible as a count.
+    class TimerFireCounter : public Object
+    {
+    public:
+        int mFireCount { 0 }; //!< Fires delivered to this object.
+
+    protected:
+        virtual void timerEvent
+            (
+            TimerEvent* aEvent
+            ) override
+        {
+            ( void )aEvent;
+            ++mFireCount;
+        }
+
+    };
+
+    //! Verifies an object deleted from inside a sibling's timer handler is not then sent its own timer.
+    //!
+    //! Both timers use the same interval, so both TimerEvents are collected into one batch before
+    //! either handler runs. The first handler deletes the second object; its event is already in the
+    //! batch by then.
+    //!
+    //! Before the fix this **segfaulted** in a plain build -- Object::event() reading the vtable of a
+    //! freed object -- and AddressSanitizer reported a heap-use-after-free in
+    //! EventDispatcherDefault::processEvents(). A crash is the assertion here; the surviving-object
+    //! checks below are what keep the test honest if the crash ever becomes a silent corruption again.
+    TEST( EventDispatcherDefaultDefectTest, ObjectDeletedDuringTimerDispatchIsNotThenSentItsOwnTimer
+        )
+    {
+        // The current thread's own dispatcher, not a standalone one: the defect is in the interaction
+        // between ~Object() and the pass, and ~Object() cancels through the dispatcher its affinity
+        // names. A detached dispatcher would never be reached and the test would pass vacuously.
+        Thread* thread = Thread::currentThread();
+        ASSERT_NE( thread, nullptr );
+
+        auto* killer = new TimerHandlerSiblingKiller();
+        auto* victim = new TimerFireCounter();
+        killer->mVictim = victim;
+
+        constexpr int kIntervalMs = 10;
+        ASSERT_GT( killer->startTimer( kIntervalMs ), 0 );
+        ASSERT_GT( victim->startTimer( kIntervalMs ), 0 );
+
+        // Well past both deadlines, so the collection loop takes both into one batch.
+        std::this_thread::sleep_for( std::chrono::milliseconds( kIntervalMs * 4 ) );
+        thread->processEvents();
+
+        EXPECT_EQ( killer->mFireCount, 1 )
+            << "the surviving object's own timer should still have been delivered.";
+        EXPECT_EQ( killer->mVictim, nullptr ) <<
+            "the handler did not run the deletion it exists for.";
+
+        delete killer;
+    }
+
+    //! Destroys a nominated object from inside a *nested* dispatch pass run from its timer handler.
+    class NestedPassSiblingKiller : public Object
+    {
+    public:
+        Object* mVictim { nullptr }; //!< deleteLater()'d and then reaped by the nested pass.
+        int mFireCount { 0 };      //!< Fires delivered to this object.
+
+    protected:
+        virtual void timerEvent
+            (
+            TimerEvent* aEvent
+            ) override
+        {
+            ( void )aEvent;
+            ++mFireCount;
+            if( mVictim )
+            {
+                mVictim->deleteLater();
+                mVictim = nullptr;
+
+                // Nested pass. It drains the deferred delete just queued, so the victim is destroyed
+                // one dispatch pass *inside* the one that is still holding its TimerEvent.
+                Thread::currentThread()->processEvents();
+            }
+        }
+
+    };
+
+    //! Verifies a destruction inside a nested pass also cancels the outer pass's entries.
+    //!
+    //! Nested event processing is ordinary in Qt-shaped code -- a handler runs its own loop and returns
+    //! later. The outer pass is suspended, not finished: it still holds a batch it will go on
+    //! dispatching. So the cancellation raised by ~Object() inside the nested pass has to reach the
+    //! outer batch too, which is why running passes are published as a chain rather than as one frame.
+    //!
+    //! With a single published frame this test crashes exactly like the non-nested one, and for a
+    //! sharper reason: the nested pass would not merely hide the outer frame, it would clear the
+    //! publication on the way out and leave the rest of the outer pass unprotected.
+    TEST( EventDispatcherDefaultDefectTest, DeletionInANestedPassCancelsTheOuterPassEntriesToo )
+    {
+        Thread* thread = Thread::currentThread();
+        ASSERT_NE( thread, nullptr );
+
+        auto* killer = new NestedPassSiblingKiller();
+        auto* victim = new TimerFireCounter();
+        killer->mVictim = victim;
+
+        // Registration order is batch order, so the killer's timer is collected ahead of the victim's
+        // and the victim is destroyed while its own TimerEvent is still waiting in that batch.
+        constexpr int kIntervalMs = 10;
+        ASSERT_GT( killer->startTimer( kIntervalMs ), 0 );
+        ASSERT_GT( victim->startTimer( kIntervalMs ), 0 );
+
+        std::this_thread::sleep_for( std::chrono::milliseconds( kIntervalMs * 4 ) );
+        thread->processEvents();
+
+        EXPECT_EQ( killer->mFireCount, 1 );
+        EXPECT_EQ( killer->mVictim, nullptr ) <<
+            "the handler did not run the deletion it exists for.";
+
+        delete killer;
+    }
+
+    //! Deletes itself from inside a queued call, and reports that it ran to a counter the test owns.
+    class QueuedCallSelfDeleter : public Object
+    {
+    public:
+        int* mCallCount { nullptr }; //!< Points at the test's own stack, so it outlives this object.
+
+        void onCall
+            (
+            int aValue
+            )
+        {
+            ( void )aValue;
+            ++( *mCallCount );
+            delete this;
+        }
+
+    };
+
+    //! Verifies an object deleted in a queued call is not then sent a deferred delete from that batch.
+    //!
+    //! The queue holds a metacall and then a deferred delete for the same object, so both are taken
+    //! into one batch. The metacall destroys the object; the deferred delete is already in the batch by
+    //! then, and dispatching it runs `delete this` a second time. Before the fix this **segfaulted**.
+    //!
+    //! This ordering is the queued path's *observable* half, and it is the only one worth asserting on.
+    //! Its mirror image -- two ordinary metacalls, the first deleting the receiver -- is undefined
+    //! behaviour that today touches nothing: Object::event() is not virtual, and its MetaCall branch
+    //! reads only the event, never `this`, so the second entry calls a member function on a destroyed
+    //! object without dereferencing a single byte of it. Not even AddressSanitizer can see that, so
+    //! there is nothing a test could assert. The fix covers both; only this one can be pinned.
+    //!
+    //! Note also what does *not* cover this: the deletedReceivers guard in processEvents() records a
+    //! receiver only once a DeferredDeleteEvent has destroyed it. Here the object is destroyed by an
+    //! ordinary metacall, so the guard never learns about it.
+    TEST( ObjectDefectTest, DeferredDeleteInTheSameBatchDoesNotDeleteAnAlreadyDeletedObject )
+    {
+        Thread* thread = Thread::currentThread();
+        ASSERT_NE( thread, nullptr );
+
+        int callCount = 0;
+
+        Signal<int> signal;
+        auto* receiver = new QueuedCallSelfDeleter();
+        receiver->mCallCount = &callCount;
+
+        Object::connect( signal, receiver, &QueuedCallSelfDeleter::onCall, ConnectionType::Queued );
+
+        signal.emit( 1 );      // MetaCallEvent, dispatched first
+        receiver->deleteLater(); // DeferredDeleteEvent, same batch, dispatched second
+
+        thread->processEvents();
+
+        EXPECT_EQ( callCount, 1 )
+            << "the queued call should have run exactly once and destroyed the receiver.";
+    }
+
+
+    // ---------------------------------------------------------------------------------------------
+    // moveToThread() must carry already-posted events to the destination thread.
+    //
+    // Timers were carried across; nothing carried the events. So a queued call posted just before a
+    // move ran on the thread the object had *left* -- silently, because nothing re-checks affinity once
+    // an event is queued, and that is the one guarantee a queued connection exists to provide.
+    // deleteLater() was the sharper case: its DeferredDeleteEvent stranded the same way, so the
+    // destructor ran on the wrong thread and tripped ~Object()'s own cross-thread warning, whose advice
+    // is to use deleteLater().
+    //
+    // Qt does the same in QObjectPrivate::setThreadData_helper(): it walks the old thread's
+    // postEventList, re-adds every entry whose receiver is the moving object, and wakes the target.
+    // ---------------------------------------------------------------------------------------------
+
+    //! Records which thread ran it, through a pointer the test owns so it survives anything.
+    class ThreadRecordingReceiver : public Object
+    {
+    public:
+        Thread** mRanOn { nullptr }; //!< Points at the test's own storage.
+
+        void onCall
+            (
+            int aValue
+            )
+        {
+            ( void )aValue;
+            if( mRanOn )
+            {
+                *mRanOn = Thread::currentThread();
+            }
+        }
+
+    };
+
+    //! Verifies a queued call posted before a move runs on the thread the object moved *to*.
+    TEST( ObjectDefectTest, MoveToThreadCarriesAlreadyPostedEventsToTheNewThread )
+    {
+        Thread* mainThread = Thread::currentThread();
+        ASSERT_NE( mainThread, nullptr );
+
+        Thread worker( "r32-worker" );
+        worker.start();
+        // Waits for the dispatcher, not for isRunning(): start() sets the running flag before the run
+        // body creates the dispatcher, so the two are not the same moment. This test is about carrying
+        // events to a thread that can already take them; the parked-event path has its own test below.
+        ASSERT_TRUE( waitForCondition( [&worker]()
+            {
+                return worker.eventDispatcher() != nullptr;
+            } ) );
+
+        Thread* ranOn = nullptr;
+        Signal<int> signal;
+        ThreadRecordingReceiver receiver; // lives on this thread
+        receiver.mRanOn = &ranOn;
+        Object::connect( signal, &receiver, &ThreadRecordingReceiver::onCall,
+            ConnectionType::Queued );
+
+        signal.emit( 1 );                // lands in THIS thread's queue
+        ASSERT_TRUE( receiver.moveToThread( &worker ) );
+
+        ASSERT_TRUE( waitForCondition( [&ranOn]()
+            {
+                return ranOn != nullptr;
+            } ) )
+            << "the queued call never ran at all after the move.";
+
+        EXPECT_EQ( ranOn, &worker )
+            <<
+            "the call was posted while the receiver lived on this thread, and ran there even though "
+            "the receiver had moved. moveToThread() must carry already-posted events across, as Qt's "
+            "setThreadData_helper() does; a queued connection promises the slot runs on the receiver's "
+            "thread, and this is the one case where that promise was silently broken.";
+
+        // Hand it back so the stack object is destroyed on its own thread.
+        worker.post( [&receiver]()
+            {
+                receiver.moveToThread( nullptr );
+            } );
+        worker.quit();
+        worker.wait();
+    }
+
+    //! Verifies a deleteLater() issued before a move destroys the object on the thread it moved *to*.
+    //!
+    //! Separate from the test above because the event type is what matters: a stranded
+    //! DeferredDeleteEvent runs `delete this` on the wrong thread, which is the case ~Object()'s
+    //! cross-thread-destruction warning exists to catch -- reached, before this fix, by following that
+    //! warning's own advice.
+    TEST( ObjectDefectTest, MoveToThreadCarriesAPendingDeleteLaterToTheNewThread )
+    {
+        Thread worker( "r32-delete-worker" );
+        worker.start();
+        ASSERT_TRUE( waitForCondition( [&worker]()
+            {
+                return worker.eventDispatcher() != nullptr;
+            } ) );
+
+        std::atomic<Thread*> destroyedOn { nullptr };
+
+        class Victim : public Object
+        {
+        public:
+            std::atomic<Thread*>* mDestroyedOn { nullptr };
+            ~Victim() override
+            {
+                if( mDestroyedOn )
+                {
+                    mDestroyedOn->store( Thread::currentThread() );
+                }
+            }
+
+        };
+
+        auto* victim = new Victim();
+        victim->mDestroyedOn = &destroyedOn;
+
+        victim->deleteLater();                    // DeferredDeleteEvent into THIS thread's queue
+        ASSERT_TRUE( victim->moveToThread( &worker ) );
+
+        ASSERT_TRUE( waitForCondition( [&destroyedOn]()
+            {
+                return destroyedOn.load() != nullptr;
+            } ) )
+            << "the pending deleteLater() never ran, so the object leaked.";
+
+        EXPECT_EQ( destroyedOn.load(), &worker )
+            <<
+            "deleteLater() was called while the object lived on this thread, and the destructor ran "
+            "here even though the object had moved -- a cross-thread destruction reached by following "
+            "the advice in ~Object()'s own warning.";
+
+        worker.quit();
+        worker.wait();
+    }
+
+    //! Verifies the migration survives the canonical idiom: move first, start the thread afterwards.
+    //!
+    //! The destination has no dispatcher at all at that point -- a Thread creates one in its run body --
+    //! so there is nowhere to post. The events are parked on the destination's ThreadData and handed to
+    //! the dispatcher the moment it is installed. Qt has no equivalent problem because its queue lives
+    //! in QThreadData rather than in the dispatcher.
+    TEST( ObjectDefectTest, EventsMovedToAnUnstartedThreadAreDeliveredWhenItStarts )
+    {
+        Thread worker( "r32-unstarted-worker" );  // deliberately not started yet
+
+        Thread* ranOn = nullptr;
+        Signal<int> signal;
+        ThreadRecordingReceiver receiver;
+        receiver.mRanOn = &ranOn;
+        Object::connect( signal, &receiver, &ThreadRecordingReceiver::onCall,
+            ConnectionType::Queued );
+
+        signal.emit( 1 );
+        ASSERT_TRUE( receiver.moveToThread( &worker ) );
+        EXPECT_EQ( ranOn, nullptr ) << "nothing should have run before the thread exists";
+
+        worker.start();
+
+        ASSERT_TRUE( waitForCondition( [&ranOn]()
+            {
+                return ranOn != nullptr;
+            } ) )
+            <<
+            "the event was posted before the destination had a dispatcher, and was dropped instead "
+            "of being held until one existed.";
+        EXPECT_EQ( ranOn, &worker );
+
+        worker.post( [&receiver]()
+            {
+                receiver.moveToThread( nullptr );
+            } );
+        worker.quit();
+        worker.wait();
     }
 
 } // namespace

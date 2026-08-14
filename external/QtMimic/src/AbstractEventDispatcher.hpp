@@ -140,7 +140,20 @@ namespace QtMimic
             Object* aReceiver  //!< The receiver whose timers should be taken.
             ) = 0;
 
+        //! Removes the receiver's pending events and hands them over, still alive.
+        //!
+        //! The counterpart of removeEventsForReceiver() for a move rather than a destruction:
+        //! Object::moveToThread() uses it to carry queued work to the destination thread. Ownership
+        //! passes to the caller, which must post or delete every event returned. Thread-safe.
+        virtual std::vector<Event*> takeEventsForReceiver
+            (
+            Object* aReceiver  //!< The receiver whose events should be taken.
+            ) = 0;
+
         friend class Object;
+
+        //! Grants ThreadData the ability to hand over events parked before a dispatcher existed.
+        friend struct ThreadData;
     };
 }
 

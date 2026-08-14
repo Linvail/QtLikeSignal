@@ -209,6 +209,16 @@ namespace QtMimic
             return mData;
         }
 
+        //! The same data as a bare pointer, for callers that only want to *compare* it.
+        //!
+        //! Safe because it is not an ownership handle: mData is assigned once in the constructor and
+        //! never reassigned, and the only caller asks it of Thread::currentThread(). Anything that
+        //! needs the data to stay alive must use threadData() above.
+        ThreadData* threadDataPtr() const
+        {
+            return mData.get();
+        }
+
         //! Everything the new thread must do whether or not run() is overridden.
         //!
         //! Kept separate from run() precisely so it cannot be overridden away: an override that

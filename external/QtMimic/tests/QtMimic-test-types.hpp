@@ -23,7 +23,7 @@
 //! to each slot in turn. boost::signals2 copies them into its combiner state first, which is two
 //! more -- a combiner being a feature for signals whose slots return values, which none of ours
 //! do. The copy-counting tests assert an exact total, so they need the number rather than a range.
-#define LIB_SIGNAL_EMIT_EXTRA_COPIES       2  //!< still on boost::signals2
+#define LIB_SIGNAL_EMIT_EXTRA_COPIES       0  //!< own signal implementation
 
 
 #include "gtest/gtest.h"

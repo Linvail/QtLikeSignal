@@ -91,7 +91,12 @@ namespace QtMimic
     private:
         void adoptMainThread();
 
-        static CoreApplication* sInstance; //!< Single instance (Qt-style)
+        //! The process-wide application instance.
+        //!
+        //! Atomic because instance(), exit(), quit() and post() are all callable from any thread and
+        //! all read it, while the constructor and destructor write it from the main thread. Qt 6 has
+        //! the identical plain pointer and works around it internally; Qt 7 makes it atomic.
+        static std::atomic<CoreApplication*> sInstance;
         std::vector<std::string> mArgs; //!< Command-line arguments
 
         //! The adopted main thread. Non-owning: the Thread is owned by a thread_local inside
