@@ -12,6 +12,14 @@
 
 namespace QtMimic
 {
+    //! Frees any events parked for a dispatcher that never arrived.
+    ThreadData::~ThreadData()
+    {
+        for( const ParkedEvent& parked : mParkedEvents )
+        {
+            delete parked.mEvent;
+        }
+    }
     //! @return the Thread this data describes, or nullptr once that Thread has been destroyed.
     //! Safe to call at any time: the ThreadData itself is kept alive by whoever holds it.
     Thread* ThreadData::thread() const
@@ -52,7 +60,7 @@ namespace QtMimic
     //! Thread-safe.
     std::shared_ptr<AbstractEventDispatcher> ThreadData::dispatcher() const
     {
-        std::lock_guard<std::mutex> locker( mDispatcherMutex );
+        std::lock_guard<std::mutex> lock( mDispatcherMutex );
         return mDispatcher;
     }
 
@@ -83,14 +91,6 @@ namespace QtMimic
         }
     }
 
-    //! Frees any events parked for a dispatcher that never arrived.
-    ThreadData::~ThreadData()
-    {
-        for( const ParkedEvent& parked : mParkedEvents )
-        {
-            delete parked.mEvent;
-        }
-    }
 
     //! Hands back the dispatcher to post to, or takes ownership of @p aEvent until one exists.
     std::shared_ptr<AbstractEventDispatcher> ThreadData::dispatcherOrPark

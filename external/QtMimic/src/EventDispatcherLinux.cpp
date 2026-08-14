@@ -68,6 +68,7 @@ namespace QtMimic
             // registration cannot deliver to the new callback.
             const unsigned long long generation = mNextGeneration++;
 
+            bool replaced = false;
             for( auto& source : mSources )
             {
                 if( source.mFd == aFd )
@@ -77,11 +78,11 @@ namespace QtMimic
                     source.mGeneration = generation;
                     // Fall through to the wake below: a loop already blocked in poll() is waiting on
                     // the old mask and has to rebuild its descriptor set to honour the new one.
-                    aFd = -1;
+                    replaced = true;
                     break;
                 }
             }
-            if( aFd >= 0 )
+            if( !replaced )
             {
                 mSources.push_back( { aFd, aEvents, std::move( aCallback ), generation } );
             }

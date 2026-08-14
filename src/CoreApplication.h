@@ -54,6 +54,16 @@ namespace QtLikeSignal
 
         virtual ~CoreApplication() override;
 
+        CoreApplication
+            (
+            const CoreApplication&
+            ) = delete;
+
+        CoreApplication& operator=
+            (
+            const CoreApplication&
+            ) = delete;
+
         static CoreApplication* instance();
 
         //! Gets the command-line arguments, or an empty list if the default constructor was used.

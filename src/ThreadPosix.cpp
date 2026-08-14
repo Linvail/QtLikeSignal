@@ -2,6 +2,7 @@
 #include "Thread.h"
 
 #include <cerrno>
+#include <cstdio>
 #include <pthread.h>
 #include <sched.h>
 #include <unistd.h>
@@ -11,13 +12,13 @@
 // way to ask for a priority at all, so setPriority() records the value and does nothing else,
 // which is what Qt does behind its own QT_HAS_THREAD_PRIORITY_SCHEDULING guard.
 #if defined( _POSIX_THREAD_PRIORITY_SCHEDULING )
-    #define G_HAS_THREAD_PRIORITY_SCHEDULING
+    #define QT_LIKE_SIGNAL_HAS_THREAD_PRIORITY_SCHEDULING
 #endif
 
 namespace QtLikeSignal
 {
 
-    #if defined( G_HAS_THREAD_PRIORITY_SCHEDULING )
+    #if defined( QT_LIKE_SIGNAL_HAS_THREAD_PRIORITY_SCHEDULING )
 
         namespace
         {
@@ -84,7 +85,7 @@ namespace QtLikeSignal
         pthread_attr_t attr;
         pthread_attr_init( &attr );
 
-        #if defined( G_HAS_THREAD_PRIORITY_SCHEDULING )
+        #if defined( QT_LIKE_SIGNAL_HAS_THREAD_PRIORITY_SCHEDULING )
             if( mPriority != InheritPriority )
             {
                 int schedPolicy = 0;
@@ -124,8 +125,13 @@ namespace QtLikeSignal
             // Not permitted to select those scheduling parameters. Retry inheriting them
             // instead of failing the start outright, as Qt does; the thread runs, just not at
             // the requested priority.
-            #if defined( G_HAS_THREAD_PRIORITY_SCHEDULING )
+            #if defined( QT_LIKE_SIGNAL_HAS_THREAD_PRIORITY_SCHEDULING )
                 pthread_attr_setinheritsched( &attr, PTHREAD_INHERIT_SCHED );
+
+                // The thread now starts at the caller's priority, so it has to apply the requested
+                // one to itself as its first action. Without this the request is silently dropped
+                // for the whole run, which is what the comment above already promised not to do.
+                mPriorityNeedsReset = ( mPriority != InheritPriority );
             #endif
             code = pthread_create( &mThreadId, &attr, &threadEntry, this );
         }
@@ -165,7 +171,7 @@ namespace QtLikeSignal
                             //!< attributes instead and never comes here with it.
         )
     {
-        #if defined( G_HAS_THREAD_PRIORITY_SCHEDULING )
+        #if defined( QT_LIKE_SIGNAL_HAS_THREAD_PRIORITY_SCHEDULING )
             int schedPolicy = 0;
             sched_param param {};
             if( pthread_getschedparam( mThreadId, &schedPolicy, &param ) != 0 )
@@ -245,8 +251,7 @@ namespace QtLikeSignal
             {
                 mWaitCv.wait( lock, hasFinished );
             }
-            else if( !mWaitCv.wait_for( lock, std::chrono::milliseconds( aTime ), hasFinished )
-                   )
+            else if( !mWaitCv.wait_for( lock, std::chrono::milliseconds( aTime ), hasFinished ) )
             {
                 return false;
             }

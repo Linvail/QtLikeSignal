@@ -15,10 +15,11 @@
 //!
 //! Copyright 2026 by Garmin Ltd. or its subsidiaries.
 
-#ifndef QT_MIMIC_CORE_APPLICATION_HPP
-#define QT_MIMIC_CORE_APPLICATION_HPP
+#ifndef QT_MIMIC_COREAPPLICATION_HPPPP
+#define QT_MIMIC_COREAPPLICATION_HPPPP
 
 #include "Object.hpp"
+#include "Thread.hpp"
 
 #include <atomic>
 #include <functional>
@@ -28,6 +29,9 @@
 
 namespace QtMimic
 {
+    class AbstractEventDispatcher;
+    class Event;
+
 
     //----------------------------------------------------------------
     //! @class CoreApplication
@@ -48,7 +52,7 @@ namespace QtMimic
             char** aArgv
             );
 
-        ~CoreApplication();
+        virtual ~CoreApplication() override;
 
         CoreApplication
             (
@@ -61,12 +65,17 @@ namespace QtMimic
             ) = delete;
 
         static CoreApplication* instance();
+        //! @return parsed command-line arguments.
+        const std::vector<std::string>& arguments() const
+        {
+            return mArgs;
+        }
 
         int exec();
 
         static void exit
             (
-            int aCode = 0
+            int aReturnCode = 0
             );
 
         static void quit();
@@ -76,11 +85,6 @@ namespace QtMimic
             std::function<void()> aTask
             );
 
-        //! @return parsed command-line arguments.
-        const std::vector<std::string>& arguments() const
-        {
-            return mArgs;
-        }
 
         // CoreApplication must remain bound to the main thread.
         void moveToThread
@@ -97,7 +101,6 @@ namespace QtMimic
         //! all read it, while the constructor and destructor write it from the main thread. Qt 6 has
         //! the identical plain pointer and works around it internally; Qt 7 makes it atomic.
         static std::atomic<CoreApplication*> sInstance;
-        std::vector<std::string> mArgs; //!< Command-line arguments
 
         //! The adopted main thread. Non-owning: the Thread is owned by a thread_local inside
         //! Thread and released when the native thread exits, not by this application.
@@ -112,9 +115,10 @@ namespace QtMimic
         //! Atomic because the rejecting read happens on whichever thread called exec(), which is
         //! not necessarily the one that set it -- the off-thread call is rejected by the check
         //! above this one, but only after this flag has been read.
-        std::atomic<bool> mInExec { false };
+        std::vector<std::string>                 mArgs;
+        std::atomic<bool>                        mInExec { false };
     };
 
 } // namespace QtMimic
 
-#endif // QT_MIMIC_CORE_APPLICATION_HPP
+#endif // QT_MIMIC_COREAPPLICATION_HPPPP

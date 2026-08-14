@@ -19,9 +19,9 @@
 #include "AbstractEventDispatcher.hpp"
 
 #include <atomic>
-#include <vector>
 #include <memory>
 #include <mutex>
+#include <vector>
 
 namespace QtMimic
 {
@@ -57,7 +57,7 @@ namespace QtMimic
     //! running loop or drop a dispatcher still in use. Only the classes that legitimately manage a
     //! thread's lifecycle are granted access.
     //----------------------------------------------------------------
-    class ThreadData
+    struct ThreadData
     {
     public:
         ThreadData() = default;
@@ -75,9 +75,9 @@ namespace QtMimic
             const ThreadData&
             ) = delete;
 
+    private:
         Thread* thread() const;
 
-    private:
         void setThread
             (
             Thread* aThread
@@ -145,6 +145,9 @@ namespace QtMimic
         friend class Object;
         friend class Thread;
         friend class CoreApplication;
+
+        //! Timer::singleShot() validates a context's thread before arming against it.
+        friend class Timer;
     };
 
     //----------------------------------------------------------------

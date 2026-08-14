@@ -8,6 +8,7 @@
     #include "EventDispatcherLinux.h"
 #endif
 #include "Event.h"
+#include "Thread.h"
 
 #include <cstdio>
 
@@ -130,6 +131,12 @@ namespace QtLikeSignal
     //! same two ("Must be called from the main thread" / "The event loop is already running").
     int CoreApplication::exec()
     {
+        // No main thread means the application never adopted one, so there is no loop to run.
+        if( !mMainThread )
+        {
+            return 0;
+        }
+
         if( Thread::currentThread() != mMainThread )
         {
             std::fprintf( stderr, "CoreApplication::exec: must be called from the main thread\n" );

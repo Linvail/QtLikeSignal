@@ -126,6 +126,9 @@ namespace QtLikeSignal
         friend class Object;
         friend class Thread;
         friend class CoreApplication;
+
+        //! Timer::singleShot() validates a context's thread before arming against it.
+        friend class Timer;
     };
 
     //----------------------------------------------------------------

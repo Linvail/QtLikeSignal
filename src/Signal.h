@@ -219,10 +219,10 @@ namespace QtLikeSignal
             //! Constructs a slot, taking ownership of both members. Unlinked until connect() has
             //! put it in the list and recorded where.
             Slot
-            (
+                (
                 std::function<void( Args... )> aSlot,               //!< The callable.
                 std::shared_ptr<Private::ConnectionState> aState    //!< Its shared live flag.
-            )
+                )
                 : mSlot( std::move( aSlot ) )
                 , mState( std::move( aState ) )
             {

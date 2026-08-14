@@ -13,6 +13,7 @@
 #elif defined( __linux__ )
     #include "EventDispatcherLinux.hpp"
 #endif
+#include "Event.hpp"
 #include "Thread.hpp"
 
 #include <cstdio>
@@ -24,7 +25,7 @@ namespace QtMimic
 
     //! @brief Constructor - adopt the calling (main) thread, with no command-line arguments.
     CoreApplication::CoreApplication()
-        : Object( nullptr )
+        : Object()
     {
         adoptMainThread();
     }
@@ -36,13 +37,13 @@ namespace QtMimic
         int aArgc,
         char** aArgv
         )
-        : Object( nullptr )
+        : Object()
     {
 
-        mArgs.reserve( aArgc > 0 ? aArgc : 0 );
+        mArgs.reserve( aArgc > 0 ? static_cast<size_t>( aArgc ) : 0 );
         for( int i = 0; i < aArgc; ++i )
         {
-            mArgs.emplace_back( aArgv[i] ? aArgv[i] : "" );
+            mArgs.emplace_back( ( aArgv && aArgv[i] ) ? aArgv[i] : "" );
         }
 
         adoptMainThread();
@@ -141,8 +142,7 @@ namespace QtMimic
         //
         if( Thread::currentThread() != mMainThread )
         {
-            std::fprintf( stderr,
-                "CoreApplication::exec: must be called from the main thread\n" );
+            std::fprintf( stderr, "CoreApplication::exec: must be called from the main thread\n" );
             return -1;
         }
 
@@ -152,8 +152,7 @@ namespace QtMimic
         // it was told to. Refused rather than honoured, as Qt refuses it.
         if( mInExec.exchange( true ) )
         {
-            std::fprintf( stderr,
-                "CoreApplication::exec: the event loop is already running\n" );
+            std::fprintf( stderr, "CoreApplication::exec: the event loop is already running\n" );
             return -1;
         }
 
@@ -173,13 +172,13 @@ namespace QtMimic
     //! @param aCode The exit code to return from exec().
     void CoreApplication::exit
         (
-        int aCode
+        int aReturnCode
         )
     {
         CoreApplication* app = sInstance.load();
         if( app && app->mMainThread )
         {
-            app->mMainThread->exit( aCode );
+            app->mMainThread->exit( aReturnCode );
         }
     }
 
