@@ -11,8 +11,12 @@
 #
 # Zero everywhere is the goal. A pair that is not zero is either work in progress or a bug in one
 # of the two, since a behaviour that matters in one library matters in the other.
+# Strips /* */ blocks first -- one library still uses them for doxygen and the other does not, so
+# leaving them in counts a comment-style difference as a code difference -- then // and //! lines,
+# then the four legal differences, then blank lines.
 norm() {
-  sed -e 's|//!.*||' -e 's|//.*||' "$1" \
+  perl -0777 -pe 's{/\*.*?\*/}{}gs' "$1" \
+    | sed -e 's|//!.*||' -e 's|//.*||' \
     | sed -e 's/QtLikeSignal/LIB/g' -e 's/QtMimic/LIB/g' \
           -e 's/QT_LIKE_SIGNAL_/LIBGUARD_/g' -e 's/QT_MIMIC_/LIBGUARD_/g' \
           -e 's/\.hpp/.h/g' -e 's/_HPP/_H/g' -e 's/_HPP/_H/g' \

@@ -70,18 +70,6 @@ namespace QtMimic
     //! Return true if T is void type.
     template <typename T> constexpr bool is_void = std::is_same<void, T>::value;
 
-    //! Controls how a slot is invoked relative to the emitting thread.
-    enum class ConnectionType
-    {
-        //! Direct call if emitted on the receiver's thread, queued otherwise.
-        //! The decision is made at emit time, like Qt::AutoConnection.
-        Auto,
-        //! Always call the slot synchronously in the emitting thread.
-        Direct,
-        //! Always queue the slot into the receiver thread's event loop.
-        Queued,
-    };
-
     //----------------------------------------------------------------
     //! @class Object
     //!
@@ -191,7 +179,7 @@ namespace QtMimic
         //! @param aType The type of connection.
         //! @return A handle representing the connection. Thread-safe.
         template <typename Signal, typename Receiver, typename Slot>
-        static std::enable_if_t<is_obj<Receiver> && MemberFunctionTraits<Slot>::is_member,
+        static std::enable_if_t<is_obj<Receiver> && MemberFunctionTraits<Slot>::is_member_function,
             Connection>connect
             (
             Signal& aSignal,
@@ -202,7 +190,7 @@ namespace QtMimic
         {
             using SlotClass = typename MemberFunctionTraits<Slot>::class_type;
 
-            static_assert( MemberFunctionTraits<Slot>::is_member,
+            static_assert( MemberFunctionTraits<Slot>::is_member_function,
                 "Slot must be a member function pointer." );
             static_assert( obj_is_base_of<Receiver, SlotClass>,
                 "Slot must be a member function of Receiver or one of its base classes." );
@@ -503,7 +491,7 @@ namespace QtMimic
 
         //! CallLater Overload 1: schedules a non-overloaded member function slot to run deferred.
         template <typename Receiver, typename Slot, typename ... Args>
-        static std::enable_if_t<is_obj<Receiver> && MemberFunctionTraits<Slot>::is_member, void>
+        static std::enable_if_t<is_obj<Receiver> && MemberFunctionTraits<Slot>::is_member_function, void>
         callLater
             (
             Receiver* aReceiver,
@@ -602,7 +590,7 @@ namespace QtMimic
         //! CallLater Overload 12: fallback overload producing a compile-time error for unsupported
         //! targets (e.g. lambdas).
         template <typename Target, typename ... Args>
-        static std::enable_if_t<!MemberFunctionTraits<Target>::is_member &&
+        static std::enable_if_t<!MemberFunctionTraits<Target>::is_member_function &&
             !( std::is_pointer<Target>::value &&
             std::is_function<std::remove_pointer_t<Target> >::value ) &&
             !IsSignal<std::decay_t<Target> >::value,
@@ -960,7 +948,7 @@ namespace QtMimic
     //! Slot type.
     template <typename Receiver, typename Slot, typename ... Args>
     std::enable_if_t<is_obj<Receiver> &&
-        MemberFunctionTraits<Slot>::is_member,
+        MemberFunctionTraits<Slot>::is_member_function,
         void>Object::callLater
         (
         Receiver* aReceiver,  //!< Target object receiving the call.
@@ -972,7 +960,7 @@ namespace QtMimic
 
         static_assert(
             is_obj<Receiver>, "Receiver must be an instance of Object." );
-        static_assert( MemberFunctionTraits<Slot>::is_member,
+        static_assert( MemberFunctionTraits<Slot>::is_member_function,
             "Slot must be a member function pointer." );
         static_assert( std::is_base_of<SlotClass, Receiver>::value,
             "Slot must be a member function of Receiver or one of its base classes." );
@@ -1270,7 +1258,7 @@ namespace QtMimic
     //! deduplication. Lambdas cannot be reliably hashed, so this overload intentionally catches
     //! lambdas and general functors (Target) and triggers a static_assert.
     template <typename Target, typename ... Args>
-    std::enable_if_t<!MemberFunctionTraits<Target>::is_member &&
+    std::enable_if_t<!MemberFunctionTraits<Target>::is_member_function &&
         !( std::is_pointer<Target>::value &&
         std::is_function<std::remove_pointer_t<Target> >::value ) &&
         !IsSignal<std::decay_t<Target> >::value,

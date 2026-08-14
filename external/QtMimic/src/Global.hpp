@@ -21,18 +21,41 @@
 
 namespace QtMimic
 {
+    //! Specifies the type of a signal-slot connection.
+    //!
+    //! The enumerators are not suffixed with "Connection" the way Qt's are: this is a scoped enum,
+    //! so every use already reads ConnectionType::Direct and the suffix only repeated the type
+    //! name. Qt::DirectConnection predates scoped enums and had no such luxury.
+    enum class ConnectionType
+    {
+        //! Automatically determines the connection type based on thread affinity.
+        //!
+        //! If the receiver lives in the thread that emits the signal, Direct is used. Otherwise,
+        //! Queued is used.
+        Auto,
+
+        //! The slot is invoked immediately when the signal is emitted.
+        //!
+        //! The slot is executed in the signaling thread.
+        Direct,
+
+        //! The slot is invoked when control returns to the event loop of the receiver's thread.
+        //!
+        //! The slot is executed in the receiver's thread.
+        Queued
+    };
+
     template <typename ... Args>
     struct NonConstOverload
     {
         template <typename R, typename T>
         constexpr auto operator()
             (
-            R ( T::* ptr )( Args... )
-            ) const noexcept -> decltype( ptr )
+            R ( T::* aPtr )( Args... )
+            ) const noexcept -> decltype( aPtr )
         {
-            return ptr;
+            return aPtr;
         }
-
     };
 
     template <typename ... Args>
@@ -41,12 +64,11 @@ namespace QtMimic
         template <typename R, typename T>
         constexpr auto operator()
             (
-            R ( T::* ptr )( Args... ) const
-            ) const noexcept -> decltype( ptr )
+            R ( T::* aPtr )( Args... ) const
+            ) const noexcept -> decltype( aPtr )
         {
-            return ptr;
+            return aPtr;
         }
-
     };
 
     template <typename ... Args>
@@ -58,21 +80,11 @@ namespace QtMimic
         template <typename R>
         constexpr auto operator()
             (
-            R ( * ptr )( Args... )
-            ) const noexcept -> decltype( ptr )
+            R ( * aPtr )( Args... )
+            ) const noexcept -> decltype( aPtr )
         {
-            return ptr;
+            return aPtr;
         }
-
-        template <typename R>
-        static constexpr auto of
-            (
-            R ( * ptr )( Args... )
-            ) noexcept -> decltype( ptr )
-        {
-            return ptr;
-        }
-
     };
 
     template <typename ... Args> constexpr Overload<Args...> overload = {};
@@ -112,7 +124,7 @@ namespace QtMimic
     struct MemberFunctionTraits
     {
         /** @brief Flag indicating if T is a member function pointer. */
-        static constexpr bool is_member = false;
+        static constexpr bool is_member_function = false;
         /** @brief The class type of the member function pointer (void for non-member functions). */
         using class_type = void;
     };
@@ -130,7 +142,7 @@ namespace QtMimic
         )>
     {
         /** @brief Flag indicating T is a member function pointer. */
-        static constexpr bool is_member = true;
+        static constexpr bool is_member_function = true;
         /** @brief The class type containing the member function. */
         using class_type = C;
         /** @brief The return type of the member function. */
@@ -150,7 +162,7 @@ namespace QtMimic
         ) const>
     {
         /** @brief Flag indicating T is a member function pointer. */
-        static constexpr bool is_member = true;
+        static constexpr bool is_member_function = true;
         /** @brief The class type containing the member function. */
         using class_type = C;
         /** @brief The return type of the member function. */
@@ -170,7 +182,7 @@ namespace QtMimic
         ) volatile>
     {
         /** @brief Flag indicating T is a member function pointer. */
-        static constexpr bool is_member = true;
+        static constexpr bool is_member_function = true;
         /** @brief The class type containing the member function. */
         using class_type = C;
         /** @brief The return type of the member function. */
@@ -190,7 +202,7 @@ namespace QtMimic
         ) const volatile>
     {
         /** @brief Flag indicating T is a member function pointer. */
-        static constexpr bool is_member = true;
+        static constexpr bool is_member_function = true;
         /** @brief The class type containing the member function. */
         using class_type = C;
         /** @brief The return type of the member function. */
@@ -211,7 +223,7 @@ namespace QtMimic
             ) noexcept>
         {
             /** @brief Flag indicating T is a member function pointer. */
-            static constexpr bool is_member = true;
+            static constexpr bool is_member_function = true;
             /** @brief The class type containing the member function. */
             using class_type = C;
             /** @brief The return type of the member function. */
@@ -231,7 +243,7 @@ namespace QtMimic
             ) const noexcept>
         {
             /** @brief Flag indicating T is a member function pointer. */
-            static constexpr bool is_member = true;
+            static constexpr bool is_member_function = true;
             /** @brief The class type containing the member function. */
             using class_type = C;
             /** @brief The return type of the member function. */

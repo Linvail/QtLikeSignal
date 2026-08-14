@@ -227,7 +227,7 @@ namespace QtMimic
         // it returns. mFinishing above is what isFinished() reports; this is what wait() waits for.
         mHasFinished.store( true );
         {
-            std::lock_guard<std::mutex> locker( mWaitMutex );
+            std::lock_guard<std::mutex> lock( mWaitMutex );
             mWaitCv.notify_all();
         }
 
@@ -397,12 +397,15 @@ namespace QtMimic
         }
 
         std::lock_guard<std::mutex> lock( mPriorityMutex );
+
+        // Qt refuses the same way. There is no OS thread to act on yet, and quietly stashing the
+        // value for a future start() would promise a thread priority this class does not deliver.
         #if defined( _WIN32 )
             const bool haveThread = ( mHandle != nullptr );
         #else
             const bool haveThread = mJoinable;
         #endif
-        if( !haveThread )
+        if( !mData->isThreadRunning() || !haveThread )
         {
             std::fprintf( stderr,
                 "Thread::setPriority: cannot set priority, thread is not running\n" );
@@ -419,12 +422,7 @@ namespace QtMimic
     Thread::Priority Thread::priority() const
     {
         std::lock_guard<std::mutex> lock( mPriorityMutex );
-        #if defined( _WIN32 )
-            const bool haveThread = ( mHandle != nullptr );
-        #else
-            const bool haveThread = mJoinable;
-        #endif
-        if( !haveThread )
+        if( !mData->isThreadRunning() )
         {
             return InheritPriority;
         }

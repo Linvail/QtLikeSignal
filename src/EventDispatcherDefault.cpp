@@ -822,7 +822,7 @@ namespace QtLikeSignal
                 EventPair ep { nullptr, nullptr };
                 {
                     std::lock_guard<std::mutex> lock( mMutex );
-                    ep                         = deferredDeletes[i];
+                    ep                        = deferredDeletes[i];
                     deferredDeletes[i].mEvent = nullptr;
                 }
 
