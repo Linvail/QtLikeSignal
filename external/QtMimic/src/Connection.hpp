@@ -1,3 +1,16 @@
+//! @file
+//!
+//! Handle to a signal-slot connection, and the shared state behind it.
+//!
+//! Usage: keep the Connection returned by Object::connect() to end that one connection later, or
+//! discard it -- the connection is also ended when either the sender Signal or the receiver Object
+//! is destroyed.
+//!
+//! Limitations: disconnect() does not wait for a slot already running on another thread, and a
+//! handle carries no type information, so it cannot tell you what it was connected to.
+//!
+//! Copyright 2026 by Garmin Ltd. or its subsidiaries.
+
 #ifndef QT_MIMIC_CONNECTION_HPP
 #define QT_MIMIC_CONNECTION_HPP
 

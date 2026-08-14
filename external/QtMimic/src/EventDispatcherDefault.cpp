@@ -33,13 +33,10 @@ namespace QtMimic
     bool EventDispatcherDefault::processEvents()
     {
         // Consume the interrupt rather than merely testing it. interrupt() means "return from the
-        // pass that is running now", not "refuse to work ever again" -- but the flag used to latch
-        // true forever, since nothing anywhere cleared it. Every later call then returned instantly,
-        // so a loop driving this dispatcher (CoreApplication::exec() after a quit(), which reuses the
-        // same dispatcher instead of building a fresh one the way a restarted Thread does) spun at
-        // 100% CPU until something else stopped it. Qt consumes it in exactly the same place and for
-        // the same reason: `const bool wasInterrupted = d->interrupt.fetchAndStoreRelaxed(false);`
-        // at the top of QEventDispatcherWin32::processEvents().
+        // pass that is running now", not "refuse to work ever again". Leaving it set would make
+        // every later pass return instantly, so a loop reusing this dispatcher -- exec() after a
+        // quit() -- would spin at 100% CPU. Qt consumes it in the same place:
+        // `d->interrupt.fetchAndStoreRelaxed(false)` at the top of processEvents().
         if( mInterrupt.exchange( false ) )
         {
             return false;
@@ -818,8 +815,7 @@ namespace QtMimic
     {
         // The flag must be set under mMutex, not just notified. processEvents() waits on a
         // predicate, so a bare notify_all() is a no-op unless some state the predicate tests has
-        // changed -- previously wakeUp() only ever "worked" because the wait was capped at 100ms and
-        // would have returned on its own anyway.
+        // changed, so a bare notify_all() would be a no-op against a predicate-based wait.
         {
             std::lock_guard<std::mutex> lock( mMutex );
             mWakeUpRequested = true;

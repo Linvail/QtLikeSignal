@@ -43,9 +43,9 @@ namespace QtMimic
     //! until that caller is done.
     //!
     //! Also outlives its Thread: mThread is set once by Thread's constructor and nulled by
-    //! ~Thread(). Capturing a raw Thread* instead -- for an auto-adopted Thread destroyed at native
-    //! thread exit, or an explicit user-owned Thread destroyed whenever the user likes -- produced a
-    //! real, AddressSanitizer-confirmed heap-use-after-free.
+    //! ~Thread(), so anything holding only this data sees thread() == nullptr rather than a dangling
+    //! Thread*. Capturing a raw Thread* instead is not safe: an adopted Thread is destroyed at
+    //! native thread exit, and a user-owned one whenever its owner likes.
     //!
     //! Lifetime is managed with shared_ptr rather than Qt's intrusive refcount. Note this class
     //! deliberately does NOT own its Thread: Qt's QThreadData does own the adopted QThread and
@@ -155,7 +155,7 @@ namespace QtMimic
     //!
     //! Why this exists, in one sentence: a queued connection has to resolve the receiver's affinity
     //! at EMIT time (that is what makes moveToThread() affect connections made before it), but the
-    //! receiver may be destroyed concurrently, and boost::signals2 does not make disconnect() wait
+    //! receiver may be destroyed concurrently, and disconnect() does not wait
     //! for an in-flight emit -- so reading thread()/threadData() straight off the receiver Object is
     //! a use-after-free. The connect() wrapper's weak_ptr<int> life-token check narrows that window
     //! but does not close it: a successful lock() only proves ~Object() had not yet reached

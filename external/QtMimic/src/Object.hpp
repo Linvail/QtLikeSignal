@@ -1,8 +1,7 @@
 //! @file
 //!
-//! Qt-like object model providing signal/slot connections with thread
-//! affinity on top of boost::signals2 (signals) and the C++17 standard threading
-//! library (std::thread).
+//! Qt-like object model: signal/slot connections with thread affinity, built on Signal and the
+//! C++17 threading library.
 //!
 //! Two building blocks are provided:
 //!   * QtMimic::Thread - an event-loop thread. Every object "lives" in one
@@ -148,7 +147,7 @@ namespace QtMimic
         //! Disconnects a signal connection using a connection handle. Thread-safe.
         //!
         //! A named spelling of handle.disconnect(), so a call site reads as the counterpart of
-        //! Object::connect() rather than reaching into the boost handle directly.
+        //! Object::connect() rather than reaching into the Signal directly.
         static void disconnect
             (
             const Connection& aHandle  //!< The handle to disconnect.
@@ -659,21 +658,14 @@ namespace QtMimic
             // they run. (Only used on the queued path, which requires a context.)
             std::weak_ptr<int> life = aContext->mLife;
 
-            // Capture the context's ThreadData, NOT a raw Thread*. Holding the data keeps it alive
-            // for as long as this connection exists, and its thread() is resolved at emit time --
-            // reporting nullptr, never a dangling pointer, if that Thread has since been destroyed.
-            // Capturing the Thread* here instead was a real, ASan-confirmed use-after-free, for
-            // both auto-adopted dummy Threads (destroyed at native thread exit) and explicit
-            // user-owned Threads (destroyed whenever the user likes).
-            // Capture the receiver's Affinity holder, NOT a snapshot of its ThreadData. The holder
-            // is resolved at emit time (below), so moveToThread() redirects even this connection.
-            // Held by shared_ptr so it stays readable after the Object is destroyed.
+            // Capture the receiver's Affinity box, not a Thread* and not a snapshot of its
+            // ThreadData. The box is resolved at emit time, so moveToThread() redirects even a
+            // connection made before it, and it stays readable after the Object is destroyed.
             std::shared_ptr<Affinity> ctxAffinity = aContext->mAffinity;
 
-            // Cleanup token captured by the slot: when the connection ends (manual
-            // disconnect or signal teardown), boost destroys the slot, running this
-            // destructor and pruning the handle from the receiver immediately. The
-            // weak life token avoids touching a receiver that is already gone.
+            // Cleanup token captured by the slot: when the connection ends, the Signal destroys
+            // the slot, which prunes the handle from the receiver immediately. The weak life token
+            // stops it touching a receiver that is already gone.
             std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aContext, life );
 
             // aContext is captured as a raw pointer, but never dereferenced here: it is handed to

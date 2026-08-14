@@ -3,7 +3,7 @@ def build(bld):
     Build the QtMimic library and its test program.
     """
     kw = {}
-    kw["use"] = ["boost"]
+    kw["use"] = []
     kw["features"] = ["cxx"]
     kw["source"] = bld.path.ant_glob(
         "src/*.cpp",

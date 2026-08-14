@@ -553,8 +553,8 @@ namespace QtMimic
         // references this (soon to be destroyed) object.
         //
         // Swap the handles out and disconnect them with mIncomingMutex released. Holding it across
-        // disconnect() would nest our mutex inside boost's signal mutex, the reverse of the order
-        // ~Cleanup takes them in (boost destroys slots with its signal mutex held), and there is no
+        // disconnect() would nest our mutex inside the Signal's, the reverse of the order
+        // ~Cleanup takes them in (a slot is destroyed with the Signal's mutex held), and there is no
         // reason to invite that inversion when a swap avoids it entirely.
         std::vector<Connection> incoming;
         {

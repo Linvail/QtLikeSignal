@@ -68,7 +68,7 @@ namespace QtMimic
 
         //! Stops the dispatcher accepting further events, before its final drain.
         //!
-        //! Closes the shutdown race: a thread finishing used to drain its deferred deletes and only
+        //! Closes the shutdown race: a thread finishing drains its deferred deletes and only
         //! then release the dispatcher, so a deleteLater() landing between those two steps was
         //! accepted by a queue nothing would drain again. The event was freed with the dispatcher
         //! and its receiver never deleted -- neither run nor deleted, i.e. leaked. Refusing posts

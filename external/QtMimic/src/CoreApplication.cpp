@@ -139,11 +139,6 @@ namespace QtMimic
         // would drain the main thread's queue on a foreign thread -- see Thread::processEvents(),
         // which refuses the same thing for the same reason.
         //
-        // Compared against currentThread() rather than the old isCurrent(). That accessor existed
-        // because loop() used to clear the per-thread registration on its way out, so a legitimate
-        // second exec() after a quit() would have been compared against a freshly-adopted dummy and
-        // rejected. threadBody() no longer clears it for an adopted thread, so the comparison is
-        // sound and isCurrent() is gone.
         if( Thread::currentThread() != mMainThread )
         {
             std::fprintf( stderr,
