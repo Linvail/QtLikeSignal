@@ -84,6 +84,12 @@ namespace QtMimic
     class Object
     {
     public:
+        //! Constructs an object living in @p aThread.
+        //!
+        //! Null -- the default -- means the thread that is constructing it, which is what a
+        //! parent-less QObject gets. Passing the thread explicitly is equivalent to constructing
+        //! and then calling moveToThread(), but is available to an object being built *on* another
+        //! thread, where moveToThread() would be refused as a pull.
         explicit Object
             (
             Thread* aThread = nullptr
@@ -91,6 +97,14 @@ namespace QtMimic
 
         virtual ~Object();
 
+        //! Object is neither copyable nor movable.
+        //!
+        //! These are already deleted implicitly, because the class holds std::mutex members -- but
+        //! only by accident. Stating it makes the guarantee survive refactoring: mLife is a
+        //! shared_ptr, so a copy would raise its use count and ~Object()'s mLife.reset() would no
+        //! longer expire the token. Every connect()/callLater() wrapper's weakLife.lock() would keep
+        //! succeeding and invoke slots on a destroyed object -- a use-after-free reintroduced silently
+        //! by an unrelated change.
         Object
             (
             const Object&
@@ -118,6 +132,9 @@ namespace QtMimic
             Thread* aThread
             );
 
+        //! **Not thread-safe: both must be called from this object's own thread.** Stated here as
+        //! well as on the definitions, because the member these two touch is documented as
+        //! unguarded further down this file and the two comments have to agree.
         std::string objectName() const;
 
         void setObjectName
@@ -548,8 +565,10 @@ namespace QtMimic
             );
 
     protected:
-        //! Construct an Object directly on stable thread data. Used by internal helpers that must
-        //! remain safe if the public Thread object is destroyed concurrently.
+        //! Constructs an Object directly on stable thread data.
+        //!
+        //! For internal helpers that must stay safe if the public Thread object is destroyed
+        //! concurrently: the data outlives its Thread, the Thread pointer does not.
         explicit Object
             (
             std::shared_ptr<ThreadData> aThreadData
@@ -610,6 +629,7 @@ namespace QtMimic
         //! deduplication key, pack the arguments into a tuple the invoker owns, and hand both to
         //! scheduleCallLater().
         //!
+        //! @tparam KeyType The type hashed into the key. Deliberately separate from Target: the
         //!         inherited-slot overloads hash the *declared* member-pointer signature rather
         //!         than a deduced type, so that naming one slot through a base class and through
         //!         the receiver yields the same key and therefore deduplicates against itself.
@@ -681,12 +701,12 @@ namespace QtMimic
 
         //! Dispatches a metacall to an explicitly named thread, ignoring the receiver's affinity.
         //!
-        //! The entry point for a caller that knows which thread it means rather than inferring it
-        //! from an Object. Thread::post() needs exactly that: it targets the thread's *own* queue,
-        //! which is not the same as the queue the Thread object happens to live in -- a Thread is
-        //! constructed on one thread and then runs on another, so routing post() through its Object
-        //! affinity would deliver to whoever created it until its loop started and re-pointed the
-        //! affinity at itself.
+        //! The shared core of the two overloads above, and the entry point for a caller that knows
+        //! which thread it means rather than inferring it from an Object. Thread::post() needs
+        //! exactly that: it targets the thread's *own* queue, which is not the same as the queue the
+        //! Thread object happens to live in -- a Thread is constructed on one thread and then runs on
+        //! another, so routing post() through its Object affinity would deliver to whoever created it
+        //! until its loop started and re-pointed the affinity at itself.
         static bool
         dispatchMetaCallTo
             (
@@ -695,9 +715,13 @@ namespace QtMimic
             std::function<void()> aSlot
             );
 
-        //! Removes its connection from the receiver's mIncoming when destroyed,
-        //! i.e. the moment the connection is disconnected. Lives only as long as the
-        //! connection (captured by the slot).
+        //! Prunes one connection from its receiver's mIncoming when that connection ends.
+        //!
+        //! Held by shared_ptr inside the connection's own slot closure, so it is destroyed exactly
+        //! when the Signal destroys the slot -- whether that is a manual disconnect(), the sender
+        //! Signal being destroyed, or ~Object() below. Without it mIncoming would only ever grow: an
+        //! object that outlives a connection it received would keep a handle to a connection that
+        //! no longer exists, and eventually disconnect() a recycled one.
         struct Cleanup
         {
             Cleanup
@@ -724,11 +748,32 @@ namespace QtMimic
 
             Object* mOwner;
             std::weak_ptr<int> mLife;
+            //! The entry to prune; set by connectImpl() once the handle exists.
+            //!
+            //! Unguarded, and does not need to be. connectImpl() holds its own shared_ptr to this
+            //! token across the whole of its body, so ~Cleanup() cannot start until connectImpl()
+            //! has finished writing this and registering it -- a disconnect racing that window drops
+            //! the *slot's* reference, which is not the last one. See connectImpl().
             Connection mHandle;
         };
 
-        //! Internal implementation of the connect() overloads. Handles thread affinity,
-        //! queued/direct invocation, and lifetime management.
+        //! The one body shared by all ten connect() overloads.
+        //!
+        //! The overloads above differ only in what the compiler needs in order to *name* the slot:
+        //! whether it is overloaded, inherited, const, or returns a value. None of them differs in
+        //! what the resulting connection does. So each one binds the receiver and the slot into a
+        //! small adapter and hands it here, exactly as QtMimic's overloads hand theirs to its
+        //! connectImpl(); everything that is actually a connection -- the life token, the affinity
+        //! box, the cleanup token, the emit-time wrapper and the incoming-connection bookkeeping --
+        //! is written once, here.
+        //!
+        //! @p aSlot is a template parameter rather than a std::function on purpose. The adapter
+        //! captures only a receiver pointer and a member-function pointer, and keeping its concrete
+        //! type all the way into the wrapper below is what lets the direct and same-thread branches
+        //! call the slot without type erasure and without a heap allocation. Type-erasing it here
+        //! would put back the per-emit allocation removed on 2026-08-09.
+        //!
+        //! Thread-safe. Returns a default-constructed handle if @p aContext is null.
         template <typename SignalType, typename Callable>
         static Connection connectImpl
             (
@@ -848,10 +893,12 @@ namespace QtMimic
         //! name the private CallLaterKey/CallLaterKeyHash types its map is keyed on.
         friend struct CallLaterRegistry;
 
-        //! Grants Thread access to threadData() and mAffinity, which it needs to adopt a thread's
-        //! affinity, and to dispatchMetaCallTo(), which Thread::post() queues through.
+        //! Grants Thread access to dispatchMetaCall(), which Thread::post() uses to queue an
+        //! arbitrary task onto itself.
         friend class Thread;
 
+        //! Grants Timer access to the affinity plumbing its single-shot helper needs: it builds the
+        //! helper directly on the context's thread data rather than moving it there afterwards.
         friend class Timer;
 
         std::shared_ptr<int> mLife;              //!< Liveness token; reset in ~Object() so weak references expire.
@@ -878,16 +925,23 @@ namespace QtMimic
         //! there. Use the object from the thread it lives in.
         std::string mObjectName;
 
+        //! Connections where this object is the receiver, disconnected by ~Object().
+        //!
+        //! Without this a destroyed receiver's slot stays in the sender's slot list forever. The
+        //! wrapper's life-token check makes it inert, but inert is not gone: it retains its
+        //! captured state and is still walked on every emit, so one long-lived signal feeding
+        //! many short-lived receivers grows without bound in both memory and emit cost. Qt does
+        //! the equivalent by walking cd->senders in ~QObject().
         std::vector<Connection> mIncoming;       //!< Connections where this is the receiver
         mutable std::mutex mIncomingMutex;       //!< Guards mIncoming.
 
 
-        //! Ids of timers started on this object and not yet killed.
+        //! Timer ids started on this object and not yet killed.
         //!
-        //! Exists so ~Object() can hand them back to the shared pool: a destroyed object with a
-        //! running timer would otherwise strand its id forever and the pool would climb without
-        //! bound. Qt keeps the same list in QObjectPrivate::extraData->runningTimers for the same
-        //! reason.
+        //! Exists so ~Object() can return them to the shared pool. Without it a destroyed object
+        //! with a running timer would strand its id forever, and the pool would climb exactly as
+        //! the old monotonic counter did. Qt keeps the same list in
+        //! QObjectPrivate::extraData->runningTimers for the same reason.
         std::vector<int> mRunningTimerIds;
 
         //! Guards mRunningTimerIds.

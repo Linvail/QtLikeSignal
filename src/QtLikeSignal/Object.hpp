@@ -139,6 +139,12 @@ namespace QtLikeSignal
 
         void deleteLater();
 
+        //! Called when one of this object's timers comes due. Override to react to it; the default
+        //! does nothing. Delivered by the event loop of the thread the object lives in, so an
+        //! override runs there and needs no locking of its own.
+        //!
+        //! An object may run several timers, so an override that cares which one fired must check
+        //! aEvent->timerId() -- see Timer::timerEvent().
         virtual void timerEvent
             (
             TimerEvent* aEvent
@@ -184,7 +190,11 @@ namespace QtLikeSignal
             return mLife;
         }
 
-        //! Connect Overload 1: connects a signal to a non-overloaded member function slot.
+        //! Connect Overload 1: Connects a signal to a non-overloaded member function slot.
+        //!
+        //! This is the primary overload for standard member functions. Because the target
+        //! slot is not overloaded, the compiler can directly deduce the `Slot` type without needing
+        //! explicit template resolution.
         template <typename Signal, typename Receiver, typename Slot>
         static std::enable_if_t<MemberFunctionTraits<Slot>::is_member_function,
             Connection>
@@ -213,8 +223,13 @@ namespace QtLikeSignal
         }
 
 
-        //! Connect Overload 2: connects an overloaded void member function slot inherited from a
-        //! base class.
+        //! Connect Overload 2: Connects an overloaded void member function slot inherited from
+        //! a base class.
+        //!
+        //! If the target slot is overloaded, the compiler cannot deduce `Slot` in
+        //! Overload 1. When the overloaded slot is defined in a base class of the receiver, type
+        //! deduction fails. This overload explicitly resolves the base class pointer so you can connect
+        //! inherited overloaded methods seamlessly.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename SlotClass>
         static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, Connection>
@@ -235,8 +250,11 @@ namespace QtLikeSignal
         }
 
 
-        //! Connect Overload 3: connects an overloaded const void member function slot inherited
+        //! Connect Overload 3: Connects an overloaded const void member function slot inherited
         //! from a base class.
+        //!
+        //! Similar to Overload 2, but specifically for const member functions. C++
+        //! requires separate template matching for const qualifiers on member function pointers.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename SlotClass>
         static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, Connection>
@@ -257,8 +275,12 @@ namespace QtLikeSignal
         }
 
 
-        //! Connect Overload 4: connects an overloaded non-void returning member function slot
+        //! Connect Overload 4: Connects an overloaded non-void returning member function slot
         //! inherited from a base class.
+        //!
+        //! If an overloaded inherited slot returns a value (e.g. `bool`), it won't match
+        //! the void-returning Overloads 2 and 3. This overload explicitly catches non-void slots from
+        //! base classes (the return value is safely discarded during emission).
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename SlotClass, typename Ret>
         static std::enable_if_t<obj_is_child_of<Receiver, SlotClass> && !is_void<Ret>, Connection>
@@ -279,8 +301,10 @@ namespace QtLikeSignal
         }
 
 
-        //! Connect Overload 5: connects an overloaded non-void returning const member function
+        //! Connect Overload 5: Connects an overloaded non-void returning const member function
         //! slot inherited from a base class.
+        //!
+        //! Similar to Overload 4, but specifically for const member functions.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename SlotClass, typename Ret>
         static std::enable_if_t<obj_is_child_of<Receiver, SlotClass> && !is_void<Ret>, Connection>
@@ -301,8 +325,14 @@ namespace QtLikeSignal
         }
 
 
-        //! Connect Overload 6: connects an overloaded void member function slot defined directly
-        //! on the receiver.
+        //! Connect Overload 6: Connects an overloaded void member function slot defined
+        //! directly on the receiver.
+        //!
+        //! If the target slot is overloaded (e.g. `onEvent()` and `onEvent(int)`), the
+        //! compiler cannot deduce `Slot` in Overload 1. By using `NonDeduced<Receiver>`, this
+        //! overload forces the compiler to use `SignalArgs` from the signal to perfectly select the
+        //! right overload pointer.
+        //! signature.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver>
         static std::enable_if_t<is_obj<Receiver>, Connection>
@@ -323,8 +353,11 @@ namespace QtLikeSignal
         }
 
 
-        //! Connect Overload 7: connects an overloaded const void member function slot defined
+        //! Connect Overload 7: Connects an overloaded const void member function slot defined
         //! directly on the receiver.
+        //!
+        //! Similar to Overload 6, but specifically matches const member functions.
+        //! signature.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver>
         static std::enable_if_t<is_obj<Receiver>, Connection>
@@ -345,8 +378,13 @@ namespace QtLikeSignal
         }
 
 
-        //! Connect Overload 8: connects an overloaded non-void returning member function slot
+        //! Connect Overload 8: Connects an overloaded non-void returning member function slot
         //! defined directly on the receiver.
+        //!
+        //! If an overloaded slot returns a value (e.g. `bool`), it won't match the
+        //! void-returning Overload 6. This overload ensures connecting an overloaded method that returns
+        //! `Ret` compiles successfully.
+        //! signature.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename Ret>
         static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, Connection>
@@ -367,8 +405,11 @@ namespace QtLikeSignal
         }
 
 
-        //! Connect Overload 9: connects an overloaded non-void returning const member function
+        //! Connect Overload 9: Connects an overloaded non-void returning const member function
         //! slot defined directly on the receiver.
+        //!
+        //! Similar to Overload 8, but specifically for const member functions.
+        //! signature.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename Ret>
         static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, Connection>
@@ -388,19 +429,11 @@ namespace QtLikeSignal
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-        //! Connect Overload 10: connects a signal to a free function, lambda, or general functor
-        //! slot.
-        //!
-        //! The functor reaches connectImpl() by forwarding rather than through an adapter lambda.
-        //! Taking it by value and then capturing it copied every functor twice on a path where one
-        //! move is enough, and the adapter added a second layer of indirection to every call
-        //! through it for nothing: it forwarded the arguments unchanged and discarded a return
-        //! value connectImpl() discards anyway.
-        //!
-        //! Binding the signal as SignalSource<Args...> rather than a bare type is what makes the
-        //! argument list nameable, and so makes the static_assert below possible. Without it a
-        //! lambda whose parameters do not match the signal fails somewhere inside std::function
-        //! with an error that names none of the three things involved.
+        //! Connect Overload 10: Connects a signal to an arbitrary callable (e.g. lambda, functor,
+        //! std::function) with a context object for thread affinity and lifetime management
+        //! (like Qt's context-object connect).
+        //!        lifetime management.
+        //! @note The callable must be invocable with the signal's arguments.
         template <template <typename ...> class SignalSource, typename Func, typename ... Args,
             typename = std::enable_if_t<!std::is_member_function_pointer<std::decay_t<Func> >::
             value> >
@@ -421,6 +454,10 @@ namespace QtLikeSignal
         }
 
 
+        //! Disconnects a signal connection using a connection handle. Thread-safe.
+        //!
+        //! A named spelling of handle.disconnect(), so a call site reads as the counterpart of
+        //! Object::connect() rather than reaching into the Signal directly.
         static void disconnect
             (
             const Connection& aHandle
@@ -692,8 +729,8 @@ namespace QtLikeSignal
         //! Prunes one connection from its receiver's mIncoming when that connection ends.
         //!
         //! Held by shared_ptr inside the connection's own slot closure, so it is destroyed exactly
-        //! when boost destroys the slot -- whether that is a manual disconnect(), the sender Signal
-        //! being destroyed, or ~Object() below. Without it mIncoming would only ever grow: an
+        //! when the Signal destroys the slot -- whether that is a manual disconnect(), the sender
+        //! Signal being destroyed, or ~Object() below. Without it mIncoming would only ever grow: an
         //! object that outlives a connection it received would keep a handle to a connection that
         //! no longer exists, and eventually disconnect() a recycled one.
         struct Cleanup
@@ -870,23 +907,21 @@ namespace QtLikeSignal
         std::atomic<bool> mDeleteLaterPosted { false };       //!< True once deleteLater() has posted a DeferredDeleteEvent; de-bounces repeat calls, matching QObject::deleteLaterCalled.
 
         //! True once this object has been the context of a callLater(), so ~Object() knows whether
-        //! the process-wide pending registry can possibly hold anything of ours. See ~Object().
-        //!
-        //! Atomic because callLater() is callable from any thread while the destructor reads it,
-        //! and set with release / read with acquire so that seeing it true also means seeing the
-        //! registry entry it stands for.
+        //! the process-wide pending registry can possibly hold anything of ours.
+        // Atomic because callLater() is callable from any thread while the destructor reads it, and
+        // set with release / read with acquire so that seeing it true also means seeing the registry
+        // entry it stands for.
         std::atomic<bool> mUsedCallLater { false };
 
         //! True once an event has been posted for this object, so ~Object() knows whether the
         //! dispatcher's queue can possibly hold anything of ours.
         //!
-        //! Same shape and same reason as mUsedCallLater above, for the other O(backlog) scan the
-        //! destructor used to run unconditionally. Qt guards the identical call the identical way:
-        //! `if (d->postedEvents) QCoreApplication::removePostedEvents(this, 0);` in ~QObject().
-        //!
-        //! Set before the post, never cleared. An object that has received one queued call keeps
-        //! paying the scan; Qt keeps an exact count instead, which needs the dispatch side to
-        //! decrement and is more machinery than the difference is worth here.
+        //! Both flags are set-once. They exist because both scans are O(backlog) and were run on
+        //! every destruction, including for the objects -- most of them -- that never used either
+        //! feature. Qt guards the same call the same way: `if (d->postedEvents)` in ~QObject().
+        // Set before the post, never cleared. An object that has received one queued call keeps paying
+        // the scan; Qt keeps an exact count instead, which needs the dispatch side to decrement and is
+        // more machinery than the difference is worth here.
         std::atomic<bool> mMayHaveQueuedWork { false };
         //! This object's descriptive name.
         //!
@@ -918,8 +953,8 @@ namespace QtLikeSignal
         //! Guards mRunningTimerIds.
         //!
         //! startTimer()/killTimer() are thread-confined so they only ever touch it from this
-        //! object's own thread, but ~Object() may run elsewhere (it warns, but it still runs), so
-        //! the list is not single-threaded in practice.
+        //! object's own thread, but ~Object() and moveToThread() need it too and neither is bound
+        //! quite that tightly, so the list is not single-threaded in practice.
         mutable std::mutex mRunningTimerIdsMutex;
     };
 
