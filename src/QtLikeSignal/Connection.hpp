@@ -22,52 +22,44 @@ namespace QtLikeSignal
 {
     namespace Private
     {
-        //! The shared "is this connection still live" flag.
+        //! Shared "is this connection still live" flag, and the connection's identity.
         //!
-        //! Separate from the slot itself, and untemplated, so a Connection can answer connected()
-        //! and compare equal without knowing the signal's argument types. Its address is also the
-        //! connection's identity: two Connection copies refer to the same connection exactly when
+        //! Untemplated so a Connection can answer connected() and compare equal without knowing the
+        //! signal's argument types. Two Connection copies refer to the same connection exactly when
         //! they point at the same state.
         struct ConnectionState
         {
             std::atomic<bool> mConnected { true };
 
-            //! The slot this state belongs to, type-erased, so disconnect() can reach it.
+            //! The slot this state belongs to, type-erased, so disconnect() can find it in O(1).
             //!
-            //! Weak, because the slot owns this state and not the other way round. Type-erased,
-            //! because this struct cannot name Signal<Args...>::Slot; the Signal that created it
-            //! static_pointer_casts it back, which is well-defined because only that Signal ever
-            //! writes it.
+            //! Weak, because the slot owns this state and not the other way round. Type-erased
+            //! because this struct cannot name Signal<Args...>::Slot; the owning Signal casts it
+            //! back, which is well defined because only that Signal ever writes it.
+            // Without it the only way to find the slot was to scan the signal's whole list, which
+            // made tearing down N receivers of one signal O(N^2) -- see PERFORMANCE-20260813.md (P7).
             //!
-            //! It exists so removing one connection is O(1). Without it the only way to find the
-            //! slot was to scan the signal's whole list, which made tearing down N receivers of one
-            //! signal O(N^2) -- see PERFORMANCE-20260813.md (P7).
-            //!
-            //! Written once, by connect(), before the handle reaches any caller. Never written
-            //! again, so concurrent readers need no lock.
+            //! Written once by connect(), before the handle reaches any caller, so readers need no
+            //! lock.
             std::weak_ptr<void> mSlot;
         };
 
         //! The part of a Signal a Connection can reach without knowing its argument types.
         //!
-        //! A Connection outlives its Signal routinely -- Object::mIncoming holds handles to signals
-        //! that have already been destroyed -- so it holds a weak reference to this, not to the
-        //! Signal. Once the Signal is gone the weak reference expires and disconnect() has nothing
-        //! to do, which is correct: every connection died with the signal.
+        //! A Connection may outlive its Signal, so it holds a weak reference to this rather than to
+        //! the Signal. Once the Signal is gone the reference expires and disconnect() has nothing to
+        //! do, which is correct: every connection died with the signal.
+        // It happens routinely: Object::mIncoming holds handles to signals already destroyed.
         class SignalImplBase
         {
         public:
             virtual ~SignalImplBase() = default;
 
-            //! Drops the one slot @p aState belongs to.
+            //! Drops the one slot @p aState belongs to. O(1) in the number of connections.
             //!
-            //! Called after a Connection clears its own flag. Removing the slot is what destroys
-            //! it, which is what the rest of the library depends on: the slot owns the Cleanup
-            //! token that prunes Object::mIncoming, so a disconnect has to be visible there
-            //! immediately rather than at some later sweep.
-            //!
-            //! Takes the state rather than sweeping for dead slots, so the cost is O(1) in the
-            //! number of connections rather than O(all of them).
+            //! Removing the slot destroys it, and the slot owns the Cleanup token that prunes
+            //! Object::mIncoming -- so a disconnect is visible there immediately rather than at
+            //! some later sweep.
             virtual void removeConnection
                 (
                 const std::shared_ptr<ConnectionState>& aState
@@ -75,13 +67,12 @@ namespace QtLikeSignal
         };
     }
 
-    //! A handle to a single signal-slot connection.
+    //! Handle to a single signal-slot connection.
     //!
-    //! Copyable, and copies are equal: Object::mIncoming stores one copy while the slot's Cleanup
-    //! token holds another, and ~Cleanup finds its entry by comparing them.
-    //!
-    //! Thread-safe. Default-constructed handles are valid and simply report themselves
-    //! disconnected, which is what connect() returns when it is given no context to attach to.
+    //! Copyable, and copies compare equal. Thread-safe. A default-constructed handle is valid and
+    //! reports itself disconnected, which is what connect() returns when given no context.
+    // Copies must compare equal: Object::mIncoming stores one while the slot's Cleanup token
+    // holds another, and ~Cleanup finds its entry by comparing them.
     class Connection
     {
     public:
@@ -101,14 +92,11 @@ namespace QtLikeSignal
 
         //! Ends this connection, so its slot is no longer called. Thread-safe.
         //!
-        //! Does **not** wait for an invocation already in progress on another thread. That is
-        //! deliberate and load-bearing: ~Object() disconnects its incoming connections and must not
-        //! block on a slot that is mid-call, which is precisely why a queued connection captures an
-        //! Affinity box and a weak life token rather than reaching through the receiver. See the
-        //! Affinity comment in ThreadData.hpp.
+        //! **Does not wait** for an invocation already in progress on another thread; ~Object()
+        //! relies on that, which is why a queued connection captures an Affinity box and a weak life
+        //! token rather than reaching through the receiver.
         //!
-        //! The slot itself is destroyed once nothing is still calling it -- immediately when idle,
-        //! or when the last in-flight call returns.
+        //! The slot is destroyed once nothing is still calling it.
         void disconnect() const
         {
             if( !mState )
