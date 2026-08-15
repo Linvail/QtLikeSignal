@@ -154,19 +154,19 @@ namespace QtMimic
             // is left empty, which is exactly what the drain loop left behind too.
             eventsToProcess.swap( mEventQueue );
 
-            // Publish the batch so unregisterTimer() can cancel entries in it while the handlers
-            // below run. Set before *any* dispatching, since a queued metacall can kill a timer just
-            // as a timer handler can.
-            // Published before any dispatching, and while still holding the lock, so there is no
-            // window in which a pass owns work that no canceller can see.
+            // Publish both batches so unregisterTimer() and removeEventsForReceiver() can cancel
+            // entries in them while the handlers below run. Linked in before *any* dispatching,
+            // since a queued metacall can kill a timer or destroy an object just as a timer handler
+            // can, and while still holding the lock, so there is no window in which a pass owns work
+            // that no canceller can see.
             frame.mEvents   = &eventsToProcess;
             frame.mTimers   = &timerEventsToProcess;
             frame.mOuter    = mDispatchFrames;
             mDispatchFrames = &frame;
         }
 
-        // Retracts the published batch however this function leaves, so a pointer to a dead local
-        // can never outlive the pass.
+        // Unlinks the frame however this function leaves, so a pointer to a dead local can never
+        // outlive the pass.
         struct FrameRetractor
         {
             ~FrameRetractor()
@@ -188,10 +188,14 @@ namespace QtMimic
         bool processedAny = false;
 
         // Tracks receivers that were deleted via a DeferredDeleteEvent processed earlier in this
-        // same batch. Both eventsToProcess and timerEventsToProcess are snapshots drained/collected
-        // before dispatch begins, so removeEventsForReceiver() (called from ~Object()) cannot strip
-        // a receiver's remaining entries out of these local vectors -- without this guard, a later
-        // entry for the same (now-deleted) receiver would be a use-after-free.
+        // same batch.
+        //
+        // Both batches are published above, so ~Object() -> removeEventsForReceiver() normally
+        // cancels a destroyed receiver's remaining entries and this set has nothing to add. It stays
+        // because that path is affinity-dependent: ~Object() cancels through the dispatcher its
+        // *current* affinity names, so an object whose affinity changed after these events were
+        // posted cancels somewhere else and leaves ours behind. This set covers the deferred-delete
+        // case of that regardless of where the object thinks it lives, and it is one hash lookup.
         std::unordered_set<Object*> deletedReceivers;
 
         // Dispatch queued events
@@ -201,6 +205,10 @@ namespace QtMimic
             // does: whoever clears an entry owns its event, and the other side sees nullptr and
             // skips. That is what lets removeEventsForReceiver() cancel an entry belonging to an
             // object destroyed by an earlier handler in this same batch.
+            //
+            // The extra lock per event is deliberate and cheap -- an uncontended acquire against the
+            // several hundred nanoseconds a queued metacall already costs. Reading an entry unguarded
+            // would race the very cancellation the publication exists to allow.
             EventPair ep { nullptr, nullptr };
             {
                 std::lock_guard<std::mutex> lock( mMutex );
@@ -303,9 +311,8 @@ namespace QtMimic
             return;
         }
 
-        // Copy under its own lock, then invoke released: this is reached both with and without
-        // mMutex held, and the callback is user code that must not be run while holding a lock we
-        // might not even own.
+        // Copy under its own lock, then invoke released. Every caller has already dropped mMutex, so
+        // the callback is free to post, start a timer, or otherwise call straight back in.
         std::function<void()> callback;
         {
             std::lock_guard<std::mutex> lock( mWakeCallbackMutex );
@@ -509,6 +516,8 @@ namespace QtMimic
             {
                 if( ep.mEvent && aMatches( ep ) )
                 {
+                    // Freed here rather than left for the dispatch loop: clearing the slot is what
+                    // tells that loop to skip the entry, so nobody will look at the event again.
                     delete ep.mEvent;
                     ep.mEvent = nullptr;
                 }
