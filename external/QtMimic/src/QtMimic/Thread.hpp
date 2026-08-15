@@ -181,7 +181,11 @@ namespace QtMimic
         //! started itself can never be given one without a race. Qt's QThread::create() leaves the
         //! thread unstarted for exactly these reasons.
         template <typename Function, typename ... Args>
-        [[nodiscard]] static Thread* create( Function&& aF, Args&&... aArgs );
+        [[nodiscard]] static Thread* create
+            (
+            Function&& aF,
+            Args&&... aArgs
+            );
 
     protected:
         //! The body the new thread executes. Override to do something other than run an event

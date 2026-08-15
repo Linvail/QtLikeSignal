@@ -269,9 +269,9 @@ namespace QtMimic
             //! declared them, so a value emitted as something merely convertible still converts
             //! here and a slot that asks for a mutable reference still gets one.
             virtual void invoke
-            (
+                (
                 Args... aArgs
-            ) = 0;
+                ) = 0;
 
             //! The connection this slot belongs to. Strong, and the only strong reference from a
             //! slot to a node, so the node outlives the slot without either owning the other twice.
