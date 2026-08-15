@@ -51,15 +51,14 @@ namespace QtLikeSignal
         //! Process-wide pool of timer ids, handing out reusable ids rather than an ever-rising count.
         //!
         //! Qt does the same with a lock-free QFreeList capped at 2^24 simultaneous timers; a mutex and a
-        //! deque is the proportionate equivalent here, since allocation happens once per startTimer()
-        //! rather than on any hot path.
+        //! deque is the proportionate equivalent here, since an id is taken once per startTimer() rather
+        //! than on any hot path.
         //!
         //! Reuse is **FIFO, deliberately**. A freed id going straight back out (LIFO) would make the
         //! narrowest recycling hazard trivially reachable: a handler that kills one timer and starts
         //! another would get the same id back immediately, and any TimerEvent for the old timer still
         //! in flight would then match the new one. Taking the oldest free id instead means an id is only
-        //! reused after every other freed id has been, which is what makes that window practically
-        //! unreachable rather than merely unlikely.
+        //! reused after every other freed id has been.
         struct TimerIdPool
         {
             //! Takes an id, reusing the oldest freed one if there is any.
@@ -133,7 +132,8 @@ namespace QtLikeSignal
     {
     }
 
-    //! Destroys the object and triggers all registered cleanup callbacks.
+    //! Destroys the object, disconnecting its incoming connections and invalidating its life
+    //! token, so a queued slot invocation that has not yet run does not run afterwards.
     Object::~Object()
     {
         // Qt does not guarantee this is safe either: deleting a QObject directly from a thread
@@ -275,27 +275,35 @@ namespace QtLikeSignal
         }
     }
 
-    //! Gets the thread affinity of this object. Thread-safe. Never returns a dangling pointer: the
-    //! affinity is stored as a ThreadData (which outlives its Thread), so this reports nullptr once
-    //! the Thread it lived in has been destroyed rather than a stale Thread*.
+    //! Gets the thread this object currently lives in, or nullptr if it has none -- or if the
+    //! Thread it lived in has since been destroyed. Thread-safe.
+    //!
+    //! Never returns a dangling pointer: the affinity is stored as a ThreadData (which outlives its
+    //! Thread), exactly as Qt stores a refcounted QThreadData rather than a QThread*. Re-read it
+    //! rather than caching it.
     Thread* Object::thread() const
     {
         const std::shared_ptr<ThreadData> data = mAffinity->data();
         return data ? data->thread() : nullptr;
     }
 
-    //! Changes the thread affinity of this object.
+    //! Changes the thread affinity of this object, following Qt's QObject::moveToThread rules.
     //!
-    //! **Not thread-safe: must be called from this object's own thread**, matching Qt's
-    //! QObject::moveToThread() ("Current thread is not the object's thread. Cannot move to target
-    //! thread"). Only the thread that currently owns an object may hand it to another; letting any
-    //! thread re-home an object at will would race the owner's own use of it.
+    //! **Not thread-safe: must be called from this object's own thread.** The move is push-only:
+    //! only the thread that currently owns an object may hand it to another, so an object can be
+    //! pushed to another thread but never pulled from an arbitrary one. Qt refuses the same call
+    //! the same way ("Current thread is not the object's thread. Cannot move to target thread").
     //!
-    //! Qt's one exception is reproduced: an object with *no* thread affinity yet may be adopted by
-    //! the calling thread. That is what lets a freshly constructed object be moved onto a worker,
-    //! and what lets Thread adopt itself when its run loop starts. Returns true if the object now
-    //! lives in the requested thread (including when it already did); false if the move was
-    //! refused, in which case the affinity is unchanged.
+    //! Qt's one exception is reproduced: an object with *no* affinity yet may be pulled to the
+    //! calling thread. That is what lets a freshly constructed object be moved onto a worker, and
+    //! what lets Thread adopt itself when its run loop starts.
+    //!
+    //! Affinity is resolved at emit time, so events posted after a successful move -- including
+    //! through connections made BEFORE it -- are delivered to @p aThread. Passing nullptr
+    //! dissociates the object, after which thread() returns nullptr.
+    //!
+    //! Returns true if the object now lives in the requested thread (including when it already
+    //! did); false if the move was refused, in which case the affinity is unchanged.
     bool Object::moveToThread
         (
         Thread* aThread  //!< The new thread this object will live in; nullptr clears the affinity.
@@ -394,18 +402,18 @@ namespace QtLikeSignal
         return true;
     }
 
-    //! Gets the object's descriptive name.
+    //! Gets the object's descriptive name, empty unless one was set.
     //!
     //! **Not thread-safe: must be called from this object's own thread.** The name is a plain
-    //! std::string with no lock, so a concurrent setObjectName() is a data race. This said
-    //! "Thread-safe" until 2026-08-13 and was never true -- see mObjectName for why the member is
-    //! deliberately unguarded, which is the same reason QObject::objectName() has no locking either.
+    //! std::string with no lock, so a concurrent setObjectName() is a data race -- exactly as
+    //! QObject::objectName() has no locking either. See mObjectName for why it is unguarded.
+    // This said "Thread-safe" until 2026-08-13 and was never true; see R15.
     std::string Object::objectName() const
     {
         return mObjectName;
     }
 
-    //! Sets the object's descriptive name.
+    //! Gives this object a descriptive name, for logs and diagnostics. Nothing keys off it.
     //!
     //! **Not thread-safe: must be called from this object's own thread**, for the same reason as
     //! objectName() above.
@@ -418,6 +426,10 @@ namespace QtLikeSignal
     }
 
     //! Schedules this object for deletion in the event loop. Thread-safe.
+    //!
+    //! Qt-like QObject::deleteLater(). If the object has no thread, or its thread has stopped or
+    //! gone (post() refuses), deletion happens immediately: a thread-affinity violation is
+    //! preferable to a deferred delete that would never run and would leak the object.
     void Object::deleteLater()
     {
         // De-bounce repeated calls: only the first ever posts a DeferredDeleteEvent, matching Qt's
@@ -466,7 +478,7 @@ namespace QtLikeSignal
         delete this;
     }
 
-    //! Handles timer events sent to this object.
+    //! Called when one of this object's timers comes due. Does nothing by default.
     void Object::timerEvent
         (
         TimerEvent* aEvent  //!< The timer event containing the timer ID.
@@ -475,15 +487,18 @@ namespace QtLikeSignal
         ( void )aEvent;
     }
 
-    //! Starts a timer for this object with the specified interval.
+    //! Starts a repeating timer delivering timerEvent() to this object every @p aIntervalMs.
+    //! Returns the new timer's id, or -1 if it could not be started.
     //!
     //! **Not thread-safe: must be called from this object's own thread.** Timers are owned by the
     //! dispatcher of the thread the object lives in, and only that thread's event loop can deliver
-    //! the resulting timerEvent(). Calling from any other thread is rejected with a warning on
-    //! stderr and returns -1, matching Qt, whose QObject::startTimer() likewise refuses
-    //! ("Timers cannot be started from another thread"). To start a timer for an object living in
-    //! another thread, get onto that thread first -- for example with callLater(). Returns the
-    //! unique timer ID, or -1 if the timer could not be started.
+    //! the resulting timerEvent(), so registering from elsewhere would install a timer whose events
+    //! the caller is not positioned to receive. Rejected with a warning on stderr instead, matching
+    //! Qt, whose QObject::startTimer() likewise refuses ("Timers cannot be started from another
+    //! thread"). To start a timer for an object living in another thread, get onto that thread
+    //! first -- for example with callLater().
+    //!
+    //! An interval of 0 means "fire on every pass of the event loop", as in Qt.
     int Object::startTimer
         (
         int aIntervalMs  //!< Interval in milliseconds.
@@ -575,10 +590,11 @@ namespace QtLikeSignal
         }
     }
 
-    //! Kills the timer with the specified ID.
+    //! Stops the timer with id @p aTimerId.
     //!
     //! **Not thread-safe: must be called from this object's own thread**, for the same reason as
-    //! startTimer(). Calls from another thread are rejected with a warning and do nothing.
+    //! startTimer(). Calls from another thread are rejected with a warning and do nothing. An id
+    //! this object does not own is ignored.
     //! Drops @p aTimerId from this object's record of running timers. Returns whether it was there.
     //!
     //! The id is *not* returned to the pool here. Both callers have to unregister the timer with
@@ -599,7 +615,7 @@ namespace QtLikeSignal
         return true;
     }
 
-    //! Internal helper to schedule or update a callLater deferred invocation.
+    //! Schedules or updates a callLater deferred invocation.
     void Object::scheduleCallLater
         (
         Object* aContext,               //!< Target context object.
@@ -680,8 +696,10 @@ namespace QtLikeSignal
         }
     }
 
-    //! Return true if the specified aData belongs to the calling thread.
-    //! We need this helper function because we cannot include Thread.hpp in Object.hpp.
+    //! Returns true if @p aData belongs to the calling thread.
+    //!
+    //! Exists because Object.hpp cannot include Thread.hpp -- Thread derives from Object -- yet the
+    //! inline connect machinery there has to make exactly this test at emit time.
     bool Object::isCurrentThread
         (
         const std::shared_ptr<ThreadData>& aData
@@ -708,19 +726,19 @@ namespace QtLikeSignal
     //! Carries this object's already-posted events from @p aOldData's dispatcher to @p aNewData's.
     //!
     //! Called by moveToThread() **after** the affinity has been swapped, which is what makes it
-    //! safe without holding both dispatcher mutexes at once. Qt needs `QOrderedMutexLocker` over
-    //! the two post-event lists precisely because it moves the events and the affinity together;
-    //! doing the affinity first means each queue is only ever touched alone, so two moves in
-    //! opposite directions cannot deadlock against each other.
+    //! safe without holding both dispatcher mutexes at once: each queue is only ever touched alone,
+    //! so two moves in opposite directions cannot deadlock. Qt needs `QOrderedMutexLocker` over the
+    //! two post-event lists precisely because it moves the events and the affinity together.
     //!
-    //! The ordering that buys is fine because **moveToThread() runs on the object's own thread**:
-    //! the old thread is inside this call and therefore cannot be dispatching the events being
+    //! Safe for a reason specific to this function: **moveToThread() runs on the object's own
+    //! thread**, so the old thread is inside this call and cannot be dispatching the events being
     //! taken. The only other writer is a foreign thread that read the affinity before the swap and
     //! is still on its way into the old queue, which is what the re-sweep below is for.
     //!
     //! Without this, a queued call posted just before the move runs on the thread the object has
-    //! left -- silently, since nothing checks affinity again once an event is queued. That is the
-    //! one guarantee a queued connection exists to provide. See OPEN-RISKS-20260813.md (R32).
+    //! left, silently -- nothing re-checks affinity once an event is queued. That is the one
+    //! guarantee a queued connection exists to provide. Qt migrates them in
+    //! QObjectPrivate::setThreadData_helper().
     void Object::migratePostedEvents
         (
         const std::shared_ptr<ThreadData>& aOldData,  //!< Thread the object is leaving; may be null.
@@ -779,12 +797,11 @@ namespace QtLikeSignal
         }
     }
 
-    //! Internal event dispatch plumbing; routes an event to its handler.
+    //! Routes an event to its handler. Returns true if the event was recognised and handled.
     //!
-    //! Deliberately private and non-virtual: this is not an extension point. The event queue is
-    //! the sole caller (see the friend declaration in the header), and the set of event types is
-    //! closed. Override timerEvent() instead to react to timers. Returns true if the event was
-    //! recognized and handled.
+    //! Deliberately private and non-virtual: this is not an extension point. The event queue is the
+    //! sole caller (see the friend declaration in the header), and the set of event types is closed.
+    //! Override timerEvent() instead to react to timers.
     bool Object::event
         (
         Event* aEvent  //!< The event to handle.
@@ -817,11 +834,11 @@ namespace QtLikeSignal
         }
     }
 
-    //! Dispatches a metacall callback to the target object's event loop based on connection type.
-    //! Thread-safe. Returns true if the slot ran (direct) or was queued successfully; false if it
-    //! could not be delivered at all, which happens when the target has no thread affinity or its
-    //! thread has no event dispatcher yet. Callers that track pending state must undo it when this
-    //! returns false.
+    //! Dispatches a metacall to the target object's event loop, honouring @p aType. Thread-safe.
+    //!
+    //! Returns true if the slot ran (direct) or was queued successfully; false if it could not be
+    //! delivered at all, which happens when the target has no thread affinity or its thread has no
+    //! event dispatcher yet. Callers that track pending state must undo it when this returns false.
     bool Object::dispatchMetaCall
         (
         Object* aTarget,               //!< Target Object.
@@ -856,22 +873,26 @@ namespace QtLikeSignal
 
     //! Dispatches a metacall to an explicitly named thread, ignoring the receiver's affinity.
     //!
-    //! Thread-safe. @p aReceiver is not dereferenced *by this function*: it is handed to
-    //! postEvent() purely as the key that removeEventsForReceiver() later matches on. It is
-    //! dereferenced afterwards, though -- when the dispatcher drains the queue it calls
-    //! aReceiver->event() (EventDispatcherDefault::processEvents()), so the receiver has to still
-    //! be alive at that point. Nothing here establishes that; what does is ~Object(), which calls
-    //! removeEventsForReceiver() and deletes every event still queued for the object before it
-    //! goes away.
+    //! The entry point for a caller that knows which thread it means rather than inferring it from
+    //! an Object. Thread::post() needs exactly that: it targets the thread's *own* queue, which is
+    //! not the same as the queue the Thread object happens to live in -- a Thread is constructed on
+    //! one thread and then runs on another, so routing post() through its Object affinity would
+    //! deliver to whoever created it until its loop started and re-pointed the affinity at itself.
+    //!
+    //! Thread-safe. @p aReceiver is not dereferenced *by this function*: it is handed to postEvent()
+    //! purely as the key that removeEventsForReceiver() later matches on. It is dereferenced
+    //! afterwards, when the dispatcher drains the queue and calls aReceiver->event(), so the
+    //! receiver has to still be alive at that point. What guarantees that is ~Object(), which calls
+    //! removeEventsForReceiver() and deletes every event still queued for the object before it goes
+    //! away.
     //!
     //! Returns true if the call was queued; false if @p aData is null or its thread has no
     //! dispatcher, in which case the call is dropped.
-    //!
-    //! @TODO Consideing moving this function to ThreadData.
+    // TODO: consider moving this function to ThreadData.
     bool Object::dispatchMetaCallTo
         (
         const std::shared_ptr<ThreadData>& aData,  //!< Thread to deliver on; null means nowhere.
-        Object* aReceiver,                           //!< Receiver; the queue key here, dereferenced later by the dispatcher.
+        Object* aReceiver,                          //!< Receiver; the queue key here.
         std::function<void()> aSlot                 //!< Callback function.
         )
     {

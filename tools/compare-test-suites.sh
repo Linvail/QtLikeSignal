@@ -50,14 +50,17 @@ defect-regressions:2
 # true once the libraries were made functionally identical: a defect in one is a defect in both, and
 # both suites now carry the union. It is compared like everything else, at a tight budget.
 
-# Collapses the differences that are legal by design, so what remains is real drift.
+# Collapses the differences that are legal by design, so what remains is real drift. The SPDX
+# header goes too: src/ carries one and external/QtMimic does not, which is deliberate.
 normalise()
 {
-    sed -e 's/QtLikeSignal/LIB/g' \
+    sed -e '/SPDX-/d' \
+        -e 's/QtLikeSignal/LIB/g' \
         -e 's/QtMimic/LIB/g' \
         -e 's/LIB-test-types\.hpp/LIB-test-types.h/' \
         -e 's/\.hpp"/.h"/' \
-        "$1"
+        "$1" \
+        | sed -e '/./,$!d'
 }
 
 TMP=$( mktemp -d )

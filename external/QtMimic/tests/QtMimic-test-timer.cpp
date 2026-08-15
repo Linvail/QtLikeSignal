@@ -1,17 +1,18 @@
 //! @file
 //!
-//! GoogleTest suite for QtMimic::Timer and the Object/ThreadData timer plumbing behind it
-//! (Object::startTimer()/killTimer()/timerEvent(), the timer list in ThreadData, and the event
-//! loop's timer-aware wait).
+//! GoogleTest suite for QtMimic::Timer and the Object/dispatcher timer plumbing behind it
+//! (Object::startTimer()/killTimer()/timerEvent(), the timer list in EventDispatcherDefault, and
+//! the event loop's timer-aware wait).
 //!
 //! Copyright 2026 by Garmin Ltd. or its subsidiaries.
 
 #include "QtMimic-test-types.hpp"
 
+#include "QtMimic/Event.hpp"
 #include "QtMimic/Object.hpp"
+#include "QtMimic/Signal.hpp"
 #include "QtMimic/Thread.hpp"
 #include "QtMimic/Timer.hpp"
-#include "QtMimic/Event.hpp"
 
 #include "gtest/gtest.h"
 #include <atomic>
