@@ -9,7 +9,7 @@ The current set of public functions of `Signal<>` is enough.
 
 ## PLAN (written 2026-08-12, no implementation done yet)
 
-This doc is for AI. Read it before touching `Signal.h` / `Signal.hpp`.
+This doc is for AI. Read it before touching `Signal.hpp` / `Signal.hpp`.
 
 ### 0. Why this is smaller than it looks, and where the danger actually is
 
@@ -21,9 +21,9 @@ The surface we use from boost is tiny. The whole dependency is:
 | `boost::signals2::connection` | `disconnect()`, `connected()`, `operator==`, default-construct, copy |
 | `connect_extended()` | QtMimic's `connectReflective()`: the slot also receives its own connection |
 
-That is it. Six functions and one handle type, in exactly two files — `src/Signal.h` and
-`external/QtMimic/src/Signal.hpp` — plus the `using Connection = boost::signals2::connection` in
-`src/Global.h` and QtMimic's `Signal.hpp`.
+That is it. Six functions and one handle type, in exactly two files — `src/QtLikeSignal/Signal.hpp` and
+`external/QtMimic/src/QtMimic/Signal.hpp` — plus the `using Connection = boost::signals2::connection` in
+`src/QtLikeSignal/Global.hpp` and QtMimic's `Signal.hpp`.
 
 So the typing is not the problem. The problem is that boost is currently supplying four
 *guarantees* that the rest of both libraries quietly lean on, and three of them are not obvious
@@ -37,7 +37,7 @@ same names and semantics:
 
 ```
 Signal<Args...>
-    connect( std::function<void(Args...)> )   -> Connection
+    connect( callable )                       -> Connection   template, not std::function -- see 1c
     connectReflective( callable )             -> Connection   (QtMimic only, see below)
     emit( args... )                           perfect-forwarding, NOT by value -- see 1a
     operator()( args... )
@@ -52,8 +52,9 @@ SignalView<Args...>                           subscription-only window onto a Si
 
 Connection
     disconnect(), connected(), operator==, default-construct, copy.
-    Copies must refer to the same connection: Object::mIncoming stores copies and later
-    std::remove()s by value against the handle held inside the slot's Cleanup token.
+    Copies must refer to the same connection, and a handle is one pointer: the node it
+    names carries both the live flag and the Signal, and is itself the receiver's
+    list element. See 1d.
 ```
 
 **1a.** `emit()` must forward, never take `Args...` by value. Taking by value cost one copy of every
@@ -65,16 +66,37 @@ whether it is still needed before reimplementing it — QtLikeSignal does the sa
 it is not needed, delete it and let the two Signal implementations converge, which is worth more
 than the feature.
 
+**1c.** `connect()` takes the callable as a template parameter, not as a
+`std::function<void(Args...)>`. Keeping its concrete type lets the slot hold it by value inside its
+own allocation, which is one heap block rather than two — the emit-time wrapper `Object::connect()`
+builds is far past any small-object buffer. If you type-erase at this boundary you put that block
+back. See P10 in `history/PERFORMANCE-20260813.md`.
+
+**1d.** A `Connection` is a single `shared_ptr` to the connection node, and the node carries the
+`weak_ptr` to the Signal rather than the handle carrying it. That is not tidiness: the receiver's
+list of incoming connections is threaded through the nodes themselves, so `~Object()` walks nodes,
+not handles, and has to reach each one's Signal from the node. Two connections cost two heap blocks
+in total — one node and one slot each — with nothing allocated for the receiver's list. A design
+that keeps the receiver's side in a container instead pays a third block per connection and makes
+ending K connections into one receiver O(K²).
+
 ### 2. The four guarantees boost is silently providing
 
 These are the reason to be careful. Each one has a comment in the tree explaining it; go and read
 the comment before deciding your implementation satisfies it.
 
 **2a. A slot stays alive for the whole of its invocation, even if it is disconnected mid-call.**
-boost does this with `connection_body`'s `m_slot_refcount`. We depend on it twice over: the slot
-owns the `Cleanup` token whose destructor prunes `Object::mIncoming`, and it owns the captured
+boost does this with `connection_body`'s `m_slot_refcount`. We do it by holding the emit snapshot's
+`shared_ptr` to the slot across the call. It matters because the slot owns the captured
 `shared_ptr<Affinity>` that the queued path dereferences on every emit.
 Test: `ObjectTest.KamikazeSlot_DisconnectsItselfDuringEmissionWithoutCrashing`.
+
+**This is why the slot cannot live in the same allocation as the connection node.** The node is what
+a `Connection` handle holds, so it outlives the slot; the slot must be released the moment the
+connection ends, or a caller keeping a handle in order to disconnect later pins everything the slot
+captured. Two lifetimes, two allocations — Qt splits them the same way, into
+`QObjectPrivate::Connection` and `QSlotObjectBase`.
+Test: `SignalTest.SlotSurvivesDisconnectingItselfMidCall`.
 
 **2b. Emission does NOT hold the signal's lock while calling slots.**
 boost copies the connection list and releases the signal mutex before invoking anything.
@@ -139,7 +161,7 @@ files are near-identical and the second one takes an hour once the first is prov
    not yet wired in.
 2. Unit-test it directly against section 2's four guarantees, before any integration. These are the
    tests that will actually find the bugs; the existing suite exercises them only indirectly.
-3. Swap `src/Signal.h` and `src/Global.h` over. Build. Expect the failures to be concentrated in the
+3. Swap `src/QtLikeSignal/Signal.hpp` and `src/QtLikeSignal/Global.hpp` over. Build. Expect the failures to be concentrated in the
    stress suite.
 4. Fix. Then run the whole suite under BOTH sanitizers — `./waf configure
    --enable-thread-sanitizer-on-Linux` and the default AddressSanitizer build. A signal

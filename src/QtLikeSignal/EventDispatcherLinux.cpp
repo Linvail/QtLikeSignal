@@ -1,4 +1,11 @@
-#include "EventDispatcherLinux.h"
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
+//! @file
+//!
+//! Linux event dispatcher implementation.
+
+#include "QtLikeSignal/EventDispatcherLinux.hpp"
 
 #include <cerrno>
 #include <cstdint>
@@ -146,10 +153,10 @@ namespace QtLikeSignal
             return;
         }
 
-        // Snapshot the descriptor set while we still hold the lock. Only the identity of each
-        // source is taken, not its callback: the callback is looked up again, under the lock, at
-        // the moment it is about to be invoked. Copying them out here instead would pin a callback
-        // that unregisterEventSource() has since removed, and deliver to it anyway.
+        // Snapshot the descriptor set while we still hold the lock. Only each source's identity is
+        // taken, not its callback: the callback is looked up again, under the lock, at the moment it is
+        // about to be invoked. Copying them out here would pin a callback unregisterEventSource() has
+        // since removed, and deliver to it anyway.
         std::vector<pollfd> pollSet;
         std::vector<unsigned long long> generations;
         pollSet.reserve( mSources.size() + 1 );
@@ -179,11 +186,10 @@ namespace QtLikeSignal
 
             // Invoke platform callbacks unlocked, before re-acquiring. Index 0 is the wakeup FD and
             // is deliberately skipped -- it is ours, not a user source.
-            //
-            // Each callback is resolved immediately before it is called, so a source unregistered
-            // by an earlier callback in this same round is not then called itself. That is the
-            // whole of what makes unregisterEventSource() synchronous on this thread, and it is the
-            // same rule the dispatch batches follow: re-check under the lock, act outside it.
+            // Resolved immediately before it is called, so a source unregistered by an earlier callback in
+            // this same round is not then called itself. That is what makes unregisterEventSource()
+            // synchronous on this thread, and it is the rule the dispatch batches follow too: re-check
+            // under the lock, act outside it.
             for( size_t i = 1; i < pollSet.size(); ++i )
             {
                 if( pollSet[i].revents == 0 )

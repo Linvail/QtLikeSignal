@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! Dispatch-overhead benchmarks for QtLikeSignal, measured against Qt 6 where it is
@@ -24,13 +27,13 @@
 //! to fixed per-emit overhead. Treat the ratios as meaningful and the absolute nanoseconds as
 //! indicative. See history/PERFORMANCE-20260808.md for where the overhead goes.
 
-#include "PerfHarness.h"
+#include "PerfHarness.hpp"
 
 #include <gtest/gtest.h>
 
-#include "Object.h"
-#include "Signal.h"
-#include "Thread.h"
+#include "QtLikeSignal/Object.hpp"
+#include "QtLikeSignal/Signal.hpp"
+#include "QtLikeSignal/Thread.hpp"
 
 #include <atomic>
 #include <chrono>

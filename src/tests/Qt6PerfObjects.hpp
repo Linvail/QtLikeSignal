@@ -1,5 +1,8 @@
-#ifndef QT_LIKE_SIGNAL_QT6_PERF_OBJECTS_H
-#define QT_LIKE_SIGNAL_QT6_PERF_OBJECTS_H
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
+#ifndef QT_LIKE_SIGNAL_QT6_PERF_OBJECTS_HPP
+#define QT_LIKE_SIGNAL_QT6_PERF_OBJECTS_HPP
 
 //! @file
 //!
@@ -66,4 +69,4 @@ public:
     }
 };
 
-#endif // QT_LIKE_SIGNAL_QT6_PERF_OBJECTS_H
+#endif // QT_LIKE_SIGNAL_QT6_PERF_OBJECTS_HPP

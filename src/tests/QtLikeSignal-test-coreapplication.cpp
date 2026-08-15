@@ -1,12 +1,15 @@
-#include "QtLikeSignal-test-types.h"
-#include "TestCpuTime.h"
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
+#include "QtLikeSignal-test-types.hpp"
+#include "TestCpuTime.hpp"
 
 #include "gtest/gtest.h"
-#include "CoreApplication.h"
-#include "Object.h"
-#include "Signal.h"
-#include "Thread.h"
-#include "Timer.h"
+#include "QtLikeSignal/CoreApplication.hpp"
+#include "QtLikeSignal/Object.hpp"
+#include "QtLikeSignal/Signal.hpp"
+#include "QtLikeSignal/Thread.hpp"
+#include "QtLikeSignal/Timer.hpp"
 #include <atomic>
 #include <memory>
 #include <chrono>

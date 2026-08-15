@@ -56,7 +56,7 @@ Direct emit, measured on one machine, `-O2`, no sanitizer, same harness shape:
 
 The remaining gap is one heap allocation per emit, measured at exactly 1.000 allocations/emit
 against Qt's 0.000. That is the snapshot vector in `Signal::Impl::emit()`. Removing it is an
-afternoon of ordinary work on `Signal.h` — see section 3 — and a code generator would not remove it,
+afternoon of ordinary work on `Signal.hpp` — see section 3 — and a code generator would not remove it,
 because the allocation has nothing to do with type erasure or with how signals are declared.
 
 Where we ARE slow is somewhere moc does not help either:
@@ -182,9 +182,13 @@ then compares against the current thread. It is item P2/R25 in `history/PERFORMA
 it has been open a while. An atomic load in place of the mutex is the obvious move; the reason it
 has not been done is that `moveToThread()` has to publish safely against it.
 
-**3c. `connect()` at ~343 ns against Qt's ~109.** Three heap allocations per connect (`Slot`,
-`ConnectionState`, and the vector growth), plus `Object::connectImpl` building a `Cleanup` token and
-taking `mIncomingMutex`. Worth a look only after 3a and 3b; connect is not a hot path.
+**3c. `connect()` at ~160 ns against Qt's ~120.** Two heap allocations per connect: the slot with
+the emit-time wrapper closure stored inside it, and the connection node. That is Qt's own number and
+a floor, not a target — the two have different lifetimes and cannot be fused. It was five
+allocations and ~343 ns until 2026-08-15; see P10 in `history/PERFORMANCE-20260813.md`. Removing
+three of the five bought only about a tenth of the time, so **most of what is left in `connect()` is
+not allocation** and nobody has yet found what it is. That, rather than the allocations, is where a
+look would pay; connect is not a hot path either way.
 
 ### 4. If the generator is built anyway, build it for these reasons
 

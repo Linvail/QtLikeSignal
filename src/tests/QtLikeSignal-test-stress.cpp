@@ -1,9 +1,12 @@
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! GoogleTest stress suite for the QtLikeSignal framework: connection lifetime under concurrent
 //! connect/disconnect/emit, fan-in from many threads, and argument copying on the queued path.
 
-#include "QtLikeSignal-test-types.h"
+#include "QtLikeSignal-test-types.hpp"
 
 #include "gtest/gtest.h"
 

@@ -1,12 +1,15 @@
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! GoogleTest suite for QtLikeSignal::Thread's scheduling-priority setter/getter, start(Priority),
 //! and the native-OS-thread creation that backs them.
 
-#include "QtLikeSignal-test-types.h"
+#include "QtLikeSignal-test-types.hpp"
 
-#include "Thread.h"
-#include "Object.h"
+#include "QtLikeSignal/Thread.hpp"
+#include "QtLikeSignal/Object.hpp"
 
 #include "gtest/gtest.h"
 #include <atomic>

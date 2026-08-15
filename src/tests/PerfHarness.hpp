@@ -1,5 +1,8 @@
-#ifndef QT_LIKE_SIGNAL_PERF_HARNESS_H
-#define QT_LIKE_SIGNAL_PERF_HARNESS_H
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
+#ifndef QT_LIKE_SIGNAL_PERF_HARNESS_HPP
+#define QT_LIKE_SIGNAL_PERF_HARNESS_HPP
 
 //! @file
 //!
@@ -282,4 +285,4 @@ namespace PerfHarness
     }
 }
 
-#endif // QT_LIKE_SIGNAL_PERF_HARNESS_H
+#endif // QT_LIKE_SIGNAL_PERF_HARNESS_HPP

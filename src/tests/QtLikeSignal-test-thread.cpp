@@ -1,13 +1,16 @@
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! GoogleTest suite for QtLikeSignal::Thread -- lifecycle, exit codes, post() and the subclassing
 //! idiom.
 
-#include "QtLikeSignal-test-types.h"
+#include "QtLikeSignal-test-types.hpp"
 
 #include "gtest/gtest.h"
-#include "Thread.h"
-#include "Signal.h"
+#include "QtLikeSignal/Thread.hpp"
+#include "QtLikeSignal/Signal.hpp"
 #include <chrono>
 #include <future>
 #include <thread>

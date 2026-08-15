@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! Global operator new/delete replacements that count allocations for the benchmarks.
@@ -9,7 +12,7 @@
 //! Counting is off unless a test turns it on, and it is per-thread, so an unrelated worker
 //! allocating in the background cannot inflate a measurement.
 
-#include "PerfHarness.h"
+#include "PerfHarness.hpp"
 
 #include <cstdlib>
 #include <new>

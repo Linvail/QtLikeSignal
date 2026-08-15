@@ -1,17 +1,20 @@
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! GoogleTest suite for QtLikeSignal::Object -- connections, thread affinity, lifetime and the
 //! callLater() family.
 
-#include "QtLikeSignal-test-types.h"
+#include "QtLikeSignal-test-types.hpp"
 
 #include "gtest/gtest.h"
-#include "Object.h"
-#include "Signal.h"
-#include "Event.h"
-#include "CoreApplication.h"
-#include "Thread.h"
-#include "Timer.h"
+#include "QtLikeSignal/Object.hpp"
+#include "QtLikeSignal/Signal.hpp"
+#include "QtLikeSignal/Event.hpp"
+#include "QtLikeSignal/CoreApplication.hpp"
+#include "QtLikeSignal/Thread.hpp"
+#include "QtLikeSignal/Timer.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <mutex>

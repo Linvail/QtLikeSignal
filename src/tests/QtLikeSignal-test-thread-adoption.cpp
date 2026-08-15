@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! GoogleTest suite for thread auto-adoption and the API it enables: every native thread that
@@ -5,12 +8,12 @@
 //! thread running its own native loop can drain our queue with processEvents() /
 //! setWakeCallback().
 
-#include "QtLikeSignal-test-types.h"
+#include "QtLikeSignal-test-types.hpp"
 
 #include "gtest/gtest.h"
-#include "Object.h"
-#include "Signal.h"
-#include "Thread.h"
+#include "QtLikeSignal/Object.hpp"
+#include "QtLikeSignal/Signal.hpp"
+#include "QtLikeSignal/Thread.hpp"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>

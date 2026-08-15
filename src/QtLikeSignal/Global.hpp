@@ -1,12 +1,18 @@
-#ifndef QT_LIKE_SIGNAL_GLOBAL_H
-#define QT_LIKE_SIGNAL_GLOBAL_H
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
 
-#include "Connection.h"
+#ifndef QT_LIKE_SIGNAL_GLOBAL_HPP
+#define QT_LIKE_SIGNAL_GLOBAL_HPP
 
-#include <memory>
+#include "QtLikeSignal/Connection.hpp"
+
 #include <type_traits>
 
 //! @file
+//!
+//! Type trait helpers and template utilities: the Overload<> family for resolving overloaded
+//! member function pointers, NonDeduced<> for suppressing template argument deduction, and
+//! MemberFunctionTraits for inspecting a member function pointer's qualifiers.
 //!
 //! @section thread_safety What "Thread-safe" means in this library
 //!
@@ -26,8 +32,10 @@
 //! **"Not thread-safe" means the opposite is documented, not merely absent**, and it always names
 //! the thread that may call: "must be called from this object's own thread". Calling it from
 //! elsewhere is misuse. This library does not treat the consequences of misuse as defects, which is
-//! precisely why the claim has to be accurate -- a false "Thread-safe" moves the fault to us. Two
-//! were found and corrected on 2026-08-13; see history/OPEN-RISKS-20260813.md (R15).
+//! precisely why the claim has to be accurate -- a false "Thread-safe" moves the fault to us.
+//
+// Two false claims were found and corrected on 2026-08-13; see history/OPEN-RISKS-20260813.md
+// (R15).
 //!
 //! Neither claim says anything about *reentrancy* -- calling back into the same object from a slot
 //! it invoked. Where that matters it is documented at the function.
@@ -126,7 +134,7 @@ namespace QtLikeSignal
     using NonDeduced = typename Identity<T>::type;
 
     //! Type trait detecting Signal instances. False for every T except a Signal<Args...>
-    //! specialization, which the Signal.h header specializes to true.
+    //! specialization, which the Signal.hpp header specializes to true.
     template<typename T>
     struct IsSignal : std::false_type
     {
@@ -240,4 +248,4 @@ namespace QtLikeSignal
     #endif
 }
 
-#endif // QT_LIKE_SIGNAL_GLOBAL_H
+#endif // QT_LIKE_SIGNAL_GLOBAL_HPP

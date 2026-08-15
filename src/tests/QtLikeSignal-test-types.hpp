@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 
 #ifndef QT_LIKE_SIGNAL_QTLIKESIGNAL_TEST_TYPES
 #define QT_LIKE_SIGNAL_QTLIKESIGNAL_TEST_TYPES
@@ -6,9 +9,9 @@
 //!
 //! Shared test fixtures for the QtLikeSignal suite.
 
-#include "Object.h"
-#include "Signal.h"
-#include "Thread.h"
+#include "QtLikeSignal/Object.hpp"
+#include "QtLikeSignal/Signal.hpp"
+#include "QtLikeSignal/Thread.hpp"
 
 //! Extra argument copies each emit() makes before the slots are reached, on top of the one copy
 //! per receiver that a by-value slot parameter costs.

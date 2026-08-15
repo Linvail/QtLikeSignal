@@ -1,7 +1,14 @@
-#ifndef QT_LIKE_SIGNAL_EVENTDISPATCHERLINUX_H
-#define QT_LIKE_SIGNAL_EVENTDISPATCHERLINUX_H
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
 
-#include "EventDispatcherDefault.h"
+//! @file
+//!
+//! Linux event dispatcher: blocks in poll() on an eventfd.
+
+#ifndef QT_LIKE_SIGNAL_EVENTDISPATCHERLINUX_HPP
+#define QT_LIKE_SIGNAL_EVENTDISPATCHERLINUX_HPP
+
+#include "QtLikeSignal/EventDispatcherDefault.hpp"
 
 #include <atomic>
 #include <functional>
@@ -71,8 +78,9 @@ namespace QtLikeSignal
             //! Distinguishes this registration from any later one reusing the same descriptor.
             //!
             //! A descriptor number is not an identity: unregister it, close it, and the next open()
-            //! may hand the same number straight back. Without this, a poll() round that began
-            //! before all that could deliver its stale readiness to whatever now owns the number.
+            //! may hand the same number back.
+            // Without the generation, a poll() round that began before all that could deliver its
+            // stale readiness to whatever now owns the number.
             unsigned long long mGeneration;
         };
 
@@ -106,4 +114,4 @@ namespace QtLikeSignal
     };
 }
 
-#endif // QT_LIKE_SIGNAL_EVENTDISPATCHERLINUX_H
+#endif // QT_LIKE_SIGNAL_EVENTDISPATCHERLINUX_HPP

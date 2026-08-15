@@ -1,31 +1,35 @@
 def build(bld):
     kw = {}
+    # The library lives in src/QtLikeSignal/, and it is src/ that goes on the include path, so
+    # every include of a QtLikeSignal header is written "QtLikeSignal/Object.hpp". The prefix is
+    # what stops a header name as ordinary as Object.hpp resolving by include-path order in a
+    # project that has one of its own.
     kw["includes"] = ["."]
     kw["export_includes"] = ["."]
     # No boost. QtLikeSignal used to get its signal from boost::signals2; it has its own now
-    # (src/Signal.h, src/Connection.h).
+    # (src/QtLikeSignal/Signal.hpp, src/QtLikeSignal/Connection.hpp).
     kw["use"] = []
     kw["features"] = ["cxx", "debug-info"]
 
     kw["source"] = [
-        "AbstractEventDispatcher.cpp",
-        "CoreApplication.cpp",
-        "EventDispatcherDefault.cpp",
-        "Object.cpp",
-        "Thread.cpp",
-        "ThreadData.cpp",
-        "Timer.cpp",
+        "QtLikeSignal/AbstractEventDispatcher.cpp",
+        "QtLikeSignal/CoreApplication.cpp",
+        "QtLikeSignal/EventDispatcherDefault.cpp",
+        "QtLikeSignal/Object.cpp",
+        "QtLikeSignal/Thread.cpp",
+        "QtLikeSignal/ThreadData.cpp",
+        "QtLikeSignal/Timer.cpp",
     ]
 
     if bld.env.DEST_OS == "win32":
         kw["source"] += [
-            "EventDispatcherWin32.cpp",
-            "ThreadWin.cpp",
+            "QtLikeSignal/EventDispatcherWin32.cpp",
+            "QtLikeSignal/ThreadWin.cpp",
         ]
     elif bld.env.DEST_OS == "linux":
         kw["source"] += [
-            "EventDispatcherLinux.cpp",
-            "ThreadPosix.cpp",
+            "QtLikeSignal/EventDispatcherLinux.cpp",
+            "QtLikeSignal/ThreadPosix.cpp",
         ]
 
     bld(target="QtLikeSignal", **kw)

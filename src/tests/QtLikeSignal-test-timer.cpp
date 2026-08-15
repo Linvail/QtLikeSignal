@@ -1,18 +1,20 @@
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! GoogleTest suite for QtLikeSignal::Timer and the Object/dispatcher timer plumbing behind it
 //! (Object::startTimer()/killTimer()/timerEvent(), the timer list in EventDispatcherDefault, and
 //! the event loop's timer-aware wait).
 //!
-//! Copyright 2026 by Garmin Ltd. or its subsidiaries.
 
-#include "QtLikeSignal-test-types.h"
+#include "QtLikeSignal-test-types.hpp"
 
-#include "Event.h"
-#include "Object.h"
-#include "Signal.h"
-#include "Thread.h"
-#include "Timer.h"
+#include "QtLikeSignal/Event.hpp"
+#include "QtLikeSignal/Object.hpp"
+#include "QtLikeSignal/Signal.hpp"
+#include "QtLikeSignal/Thread.hpp"
+#include "QtLikeSignal/Timer.hpp"
 
 #include "gtest/gtest.h"
 #include <atomic>

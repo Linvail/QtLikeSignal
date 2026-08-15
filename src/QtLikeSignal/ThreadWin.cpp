@@ -1,5 +1,13 @@
-#include "Thread.h"
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! Windows-specific half of QtLikeSignal::Thread: native OS thread creation, priority, and join.
+
+#include "QtLikeSignal/Thread.hpp"
+
+#include <cstdio>
 #include <windows.h>
 // _beginthreadex() rather than CreateThread(): it is the same OS thread either way, but it
 // also initialises and, on return, releases the CRT's per-thread state. Qt reaches for it
@@ -10,13 +18,15 @@
 
 namespace QtLikeSignal
 {
+    //! Creates the OS thread, already at mPriority when it executes its first instruction.
+    //!
+    //! Created suspended, given its priority, then resumed. A new thread otherwise starts at
+    //! normal priority, so a low-priority thread that starts another low-priority thread would
+    //! be preempted by its own child for the window between creation and the priority landing.
+    //! Called by start() with mPriorityMutex held.
     void Thread::startPlatformSpecific()
     {
-        // Created suspended, given its priority, then resumed. Qt does this and explains why:
-        // a new thread starts at normal priority, so a low-priority thread that starts
-        // another low-priority thread would otherwise be preempted by its own child for the
-        // window between creation and the priority landing. The zero is the stack size,
-        // meaning the default the image was linked with.
+        // The zero is the stack size, meaning the default the image was linked with.
         const unsigned int flags = CREATE_SUSPENDED;
         const auto handle = _beginthreadex( nullptr, 0, &threadEntry, this, flags, nullptr );
         if( handle == 0 )
@@ -28,9 +38,9 @@ namespace QtLikeSignal
 
         mHandle = reinterpret_cast<void*>( handle );
 
-        // Unconditional, InheritPriority included: the OS hands out NormalPriority regardless
-        // of what the creating thread is running at, so inheriting is something that has to
-        // be done rather than something that happens.
+        // Unconditional, InheritPriority included: the OS hands out NormalPriority regardless of
+        // what the creating thread is running at, so inheriting is something that has to be done
+        // rather than something that happens.
         applyPriority( mPriority );
 
         if( ResumeThread( static_cast<HANDLE>( mHandle ) ) == static_cast<DWORD>( -1 ) )
@@ -39,8 +49,8 @@ namespace QtLikeSignal
         }
     }
 
-    //! Entry point handed to _beginthreadex(). Returns 0 always; the thread's own exit code
-    //! is not used.
+    //! Entry point handed to _beginthreadex(). Returns 0 always; nothing reads a per-thread
+    //! exit code back through wait().
     unsigned int __stdcall Thread::threadEntry
         (
         void* aArg      //!< The Thread that is starting, as a void*.
@@ -53,7 +63,7 @@ namespace QtLikeSignal
     //! Pushes a priority down to the OS thread.
     //!
     //! Split out so the platform code sits in one place. The caller must hold mPriorityMutex and
-    //! must already have established that the native handle is valid, because this uses it.
+    //! must already have established that mHandle is valid, because this uses it.
     void Thread::applyPriority
         (
         Priority aPriority  //!< The priority to apply. InheritPriority is meaningful only on Windows
@@ -95,8 +105,8 @@ namespace QtLikeSignal
 
         case InheritPriority:
         default:
-            // Only reachable from start(), where the calling thread is the creating thread,
-            // so this really is the priority being inherited. Qt resolves it the same way.
+            // Only reachable from start(), where the calling thread is the creating thread, so
+            // this really is the priority being inherited. Qt resolves it the same way.
             prio = GetThreadPriority( GetCurrentThread() );
             break;
         }
@@ -107,11 +117,21 @@ namespace QtLikeSignal
         }
     }
 
-    //! Blocks until the thread has finished executing or timeout expires. Thread-safe. Returns
-    //! true if thread finished, false if timeout occurred.
+    //! Blocks until the event loop has exited and the OS thread has been reaped, or @p aTime
+    //! milliseconds have passed. Returns true if the thread finished (or there was nothing to
+    //! wait for); false on timeout.
+    //!
+    //! Thread-safe: WaitForSingleObject() supports any number of concurrent waiters on the same
+    //! handle, so this only needs to track who closes it, via mWaiters.
+    //!
+    //! Deliberately does NOT hold mPriorityMutex across the actual wait: run()'s priority
+    //! fix-up (relevant only on the UNIX side, but the code path is shared) needs that same
+    //! mutex to get past its very first step, and this thread cannot finish -- and so signal the
+    //! handle -- until it does. Holding the mutex across the wait would be a self-inflicted
+    //! deadlock against a thread that has barely started.
     bool Thread::wait
         (
-        unsigned long aTime  //!< Maximum time to wait in milliseconds.
+        unsigned long aTime  //!< Maximum time to wait in milliseconds; ULONG_MAX blocks indefinitely.
         )
     {
         HANDLE handle = nullptr;
@@ -123,7 +143,7 @@ namespace QtLikeSignal
                 // Never started, or already reaped by an earlier wait().
                 return true;
             }
-            // Registered before the lock is dropped so no other waiter can close the handle
+            // Registered before the lock is dropped so no other caller can close the handle
             // while this call is inside WaitForSingleObject() on it.
             ++mWaiters;
         }
@@ -142,6 +162,8 @@ namespace QtLikeSignal
         {
             std::lock_guard<std::mutex> lock( mPriorityMutex );
             --mWaiters;
+            // Only once the thread has actually ended: a timed-out waiter must leave the handle
+            // for the run that is still using it.
             if( completed && mWaiters == 0 )
             {
                 CloseHandle( handle );

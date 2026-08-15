@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! How many times a signal's arguments get copied on the way to a slot.
@@ -8,9 +11,9 @@
 
 
 #include <gtest/gtest.h>
-#include "Object.h"
-#include "Signal.h"
-#include "Thread.h"
+#include "QtLikeSignal/Object.hpp"
+#include "QtLikeSignal/Signal.hpp"
+#include "QtLikeSignal/Thread.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -58,8 +61,16 @@ namespace
             sMoves.fetch_add( 1, std::memory_order_relaxed );
         }
 
-        CopyCountingPayload& operator=( const CopyCountingPayload& ) = delete;
-        CopyCountingPayload& operator=( CopyCountingPayload&& ) = delete;
+        CopyCountingPayload& operator=
+            (
+            const CopyCountingPayload&
+            ) = delete;
+
+        CopyCountingPayload& operator=
+            (
+            CopyCountingPayload&&
+            ) = delete;
+
     };
 
     std::atomic<int> CopyCountingPayload::sCopies { 0 };

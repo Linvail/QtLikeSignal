@@ -1,10 +1,13 @@
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! Dispatch-overhead benchmarks for Qt 6 itself, run alongside the QtLikeSignal ones so
 //! all three appear in a single comparison table.
 //!
 //! Qt is the thing this project is imitating, so it is the reference the other two should be read
-//! against. The scenarios, iteration counts and timing code are shared through PerfHarness.h, and
+//! against. The scenarios, iteration counts and timing code are shared through PerfHarness.hpp, and
 //! the slot bodies do the same trivial work, so the only difference between rows is the dispatch
 //! machinery.
 //!
@@ -12,8 +15,8 @@
 //! because Qt defines `emit` as an empty macro, which would turn every `sig.emit( 1 )` in the other
 //! benchmarks into a syntax error if the headers met.
 
-#include "PerfHarness.h"
-#include "Qt6PerfObjects.h"
+#include "PerfHarness.hpp"
+#include "Qt6PerfObjects.hpp"
 
 #include <gtest/gtest.h>
 
@@ -342,5 +345,5 @@ TEST( PerformanceRegression, ConnectKeepsUpWithQt6 )
     EXPECT_LT( ratio, 6.0 )
         << "connect() costs " << ratio << "x Qt 6's (" << ours << " ns against " << qt
         << " ns), against 2.9x when this guard was written. This row is noisy, so a failure here "
-        "means a large change; OneConnectionCostsAtMostFiveHeapBlocks will say what allocated.";
+        "means a large change; OneConnectionCostsAtMostTwoHeapBlocks will say what allocated.";
 }

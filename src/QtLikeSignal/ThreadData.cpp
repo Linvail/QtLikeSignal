@@ -1,6 +1,13 @@
-#include "ThreadData.hpp"
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
 
-#include "Event.h"
+//! @file
+//!
+//! Out-of-line members of QtLikeSignal::ThreadData.
+
+#include "QtLikeSignal/ThreadData.hpp"
+
+#include "QtLikeSignal/Event.hpp"
 
 #include <algorithm>
 
@@ -15,7 +22,7 @@ namespace QtLikeSignal
         }
     }
 
-    //! @return the Thread this data describes, or nullptr once that Thread has been destroyed.
+    //! Gets the Thread this data describes, or nullptr once that Thread has been destroyed.
     //! Safe to call at any time: the ThreadData itself is kept alive by whoever holds it.
     Thread* ThreadData::thread() const
     {
@@ -31,7 +38,7 @@ namespace QtLikeSignal
         mThread.store( aThread, std::memory_order_release );
     }
 
-    //! @return true while the owning thread's body is executing.
+    //! Reports whether the owning thread's body is executing.
     //!
     //! Safe to call from any thread at any time, including once that Thread has been destroyed --
     //! it reports false, because the run body clears this before the Thread can be torn down.
@@ -78,12 +85,11 @@ namespace QtLikeSignal
             }
         }
 
-        // Posted with mDispatcherMutex released. postEvent() ends in wakeWaiter(), which may run
-        // the thread's wake callback -- user code, which is free to call back in here.
+        // Posted with mDispatcherMutex released: postEvent() ends in wakeWaiter(), which may run the
+        // thread's wake callback -- user code, free to call back in here. postEvent() deletes an event
+        // it refuses, so nothing leaks either way.
         for( const ParkedEvent& event : parked )
         {
-            // postEvent() deletes the event itself when it refuses, so a dispatcher that is already
-            // closing loses nothing and leaks nothing.
             installed->postEvent( event.mReceiver, event.mEvent );
         }
     }

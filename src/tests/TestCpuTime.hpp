@@ -1,5 +1,8 @@
-#ifndef QT_LIKE_SIGNAL_TEST_CPU_TIME_H
-#define QT_LIKE_SIGNAL_TEST_CPU_TIME_H
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
+#ifndef QT_LIKE_SIGNAL_TEST_CPU_TIME_HPP
+#define QT_LIKE_SIGNAL_TEST_CPU_TIME_HPP
 
 //! @file
 //!
@@ -73,4 +76,4 @@ namespace TestSupport
     }
 }
 
-#endif // QT_LIKE_SIGNAL_TEST_CPU_TIME_H
+#endif // QT_LIKE_SIGNAL_TEST_CPU_TIME_HPP

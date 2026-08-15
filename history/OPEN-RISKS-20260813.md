@@ -269,6 +269,14 @@ assignment stating the invariant, because the code does look racy at a glance �
 there ("publish the handle before registering it, so the destructor has something to match on")
 described an ordering that does not matter and did not mention the one that does.
 
+**Superseded 2026-08-15.** P10 stage 1 removed the `Cleanup` token, so none of the code quoted above
+still exists. The same hazard does, in a different shape: `connectImpl()` still returns from
+`connect()` before it registers the handle, so a concurrent `disconnectAll()` can prune a receiver
+entry that has not been pushed yet. It is closed explicitly now rather than by a refcount argument —
+`ConnectionNode::pruneReceiver()` sets `mPruned` under the receiver's `mIncomingMutex`, and
+`registerWithReceiver()` takes the same mutex and does not push when it finds the flag set. The two
+orders both give a receiver with no entry for a connection that has ended.
+
 ## R30 — `unregisterEventSource()` does not stop a callback already in flight *(Fixed)*
 
 **Severity: Low-Medium. Inspection.**

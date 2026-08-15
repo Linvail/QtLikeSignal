@@ -1,6 +1,13 @@
-#include "EventDispatcherDefault.h"
-#include "Event.h"
-#include "Object.h"
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
+//! @file
+//!
+//! Cross-platform event dispatcher implementation.
+
+#include "QtLikeSignal/EventDispatcherDefault.hpp"
+#include "QtLikeSignal/Event.hpp"
+#include "QtLikeSignal/Object.hpp"
 #include <algorithm>
 #include <unordered_set>
 
@@ -27,13 +34,10 @@ namespace QtLikeSignal
     bool EventDispatcherDefault::processEvents()
     {
         // Consume the interrupt rather than merely testing it. interrupt() means "return from the
-        // pass that is running now", not "refuse to work ever again" -- but the flag used to latch
-        // true forever, since nothing anywhere cleared it. Every later call then returned instantly,
-        // so a loop driving this dispatcher (CoreApplication::exec() after a quit(), which reuses the
-        // same dispatcher instead of building a fresh one the way a restarted Thread does) spun at
-        // 100% CPU until something else stopped it. Qt consumes it in exactly the same place and for
-        // the same reason: `const bool wasInterrupted = d->interrupt.fetchAndStoreRelaxed(false);`
-        // at the top of QEventDispatcherWin32::processEvents().
+        // pass that is running now", not "refuse to work ever again". Leaving it set would make
+        // every later pass return instantly, so a loop reusing this dispatcher -- exec() after a
+        // quit() -- would spin at 100% CPU. Qt consumes it in the same place:
+        // `d->interrupt.fetchAndStoreRelaxed(false)` at the top of processEvents().
         if( mInterrupt.exchange( false ) )
         {
             return false;
@@ -45,8 +49,7 @@ namespace QtLikeSignal
         std::vector<EventPair>    timerEventsToProcess;
         std::chrono::milliseconds maxWait { 100 };
 
-        // Declared out here so it outlives both batches it will point at, and so the retractor
-        // below can name it.
+        // Declared out here so it outlives both batches it points at.
         DispatchFrame frame;
 
         {
@@ -199,16 +202,14 @@ namespace QtLikeSignal
         // Dispatch queued events
         for( size_t i = 0; i < eventsToProcess.size(); ++i )
         {
-            // Take the entry out of the batch under the lock, clearing our slot as we go, exactly as
-            // the timer loop below does. That hands ownership over in one atomic step: either
-            // removeEventsForReceiver() got here first and we see nullptr, or we did and it sees
-            // nullptr. Neither can free the event twice, and an event whose receiver was destroyed
-            // by an earlier handler in this same batch is simply skipped.
+            // Taken under the lock, clearing our slot as we go, exactly as the timer loop below
+            // does: whoever clears an entry owns its event, and the other side sees nullptr and
+            // skips. That is what lets removeEventsForReceiver() cancel an entry belonging to an
+            // object destroyed by an earlier handler in this same batch.
             //
             // The extra lock per event is deliberate and cheap -- an uncontended acquire against the
-            // several hundred nanoseconds a queued metacall already costs. It is what makes the
-            // published batch above worth anything: reading an entry unguarded would race the very
-            // cancellation the publication exists to allow.
+            // several hundred nanoseconds a queued metacall already costs. Reading an entry unguarded
+            // would race the very cancellation the publication exists to allow.
             EventPair ep { nullptr, nullptr };
             {
                 std::lock_guard<std::mutex> lock( mMutex );
@@ -383,7 +384,8 @@ namespace QtLikeSignal
             mTimersChanged = true;
         }
 
-        // Woken with mMutex released, matching postEvent(). See wakeWaiter().
+        // Woken with mMutex released, matching postEvent(): wakeWaiter() may run the thread's wake
+        // callback, which is user code and must be free to call back in.
         wakeWaiter();
     }
 
@@ -500,10 +502,9 @@ namespace QtLikeSignal
     namespace
     {
         //! Cancels the entries of one published batch that @p aMatches selects.
-        //!
-        //! A template only because the queued-event batch is a deque and the other two are vectors;
-        //! there is one behaviour here, not three. A null batch means the pass does not have that
-        //! kind of work, which is normal.
+        // A template only because the queued-event batch is a deque and the other two are vectors;
+        // there is one behaviour here, not three. A null batch means the pass does not have that
+        // kind of work, which is normal.
         template <typename Batch, typename Predicate>
         void cancelBatchEntries
             (
@@ -530,9 +531,9 @@ namespace QtLikeSignal
 
         //! Moves the entries of one published batch that target @p aReceiver into @p aTaken.
         //!
-        //! The event is handed over rather than deleted, and the slot is cleared so the dispatch
-        //! loop skips it -- the same ownership handover cancelBatchEntries() performs, minus the
-        //! delete.
+        //! Hands the event over rather than deleting it, and clears the slot so the dispatch loop
+        //! skips it.
+        // The same ownership handover cancelBatchEntries() performs, minus the delete.
         template <typename Batch>
         void takeBatchEntries
             (
@@ -573,8 +574,8 @@ namespace QtLikeSignal
         }
     }
 
-    //! Cancels every published entry targeting @p aReceiver. Callers must hold mMutex; see
-    //! mDispatchFrames in the header for why that is what makes this safe.
+    //! Cancels every published entry targeting @p aReceiver. Callers must hold mMutex.
+    // See mDispatchFrames in the header for why holding mMutex is what makes this safe.
     void EventDispatcherDefault::cancelPublishedEntriesFor
         (
         Object* aReceiver  //!< The receiver whose entries should be cancelled.
@@ -603,9 +604,10 @@ namespace QtLikeSignal
 
     //! Removes @p aFrame from the chain of running passes. Callers must hold mMutex.
     //!
-    //! Unlinks that specific frame rather than popping the head. Passes on one thread nest strictly,
-    //! but two threads driving the same dispatcher would not, and searching costs nothing at these
-    //! depths.
+    //! Unlinks that specific frame rather than popping the head, so two threads driving the same
+    //! dispatcher cannot corrupt the chain.
+    // Passes on one thread nest strictly, but two threads driving the same dispatcher would not,
+    // and searching costs nothing at these depths.
     void EventDispatcherDefault::unlinkDispatchFrame
         (
         DispatchFrame* aFrame  //!< The frame to remove.
@@ -647,11 +649,8 @@ namespace QtLikeSignal
             } );
         mEventQueue.erase( itQueue, mEventQueue.end() );
 
-        // The queue is not the only place this receiver's events can be waiting. A dispatch pass in
-        // progress on this thread has already taken its work out of the containers above, so an
-        // object destroyed from inside a handler -- the common case, since that is where user code
-        // runs -- would leave its remaining entries in that pass and be called again after it was
-        // freed. Cancel them where they actually are.
+        // A pass in progress has already taken its work out of the containers above, so an object
+        // destroyed from inside a handler would leave its remaining entries in that pass.
         cancelPublishedEntriesFor( aReceiver );
 
         auto itTimer
@@ -666,10 +665,10 @@ namespace QtLikeSignal
 
     //! Removes the receiver's pending events and hands them over, still alive. Thread-safe.
     //!
-    //! Reaches the running passes as well as the queue, using the same publication R28 added: an
-    //! entry taken out of a batch is cleared rather than deleted, and the dispatch loop skips a
-    //! cleared slot. That is what makes this work when moveToThread() is called from inside a
-    //! handler, which is where the object's own thread usually is when it moves itself.
+    //! Reaches the running passes as well as the queue, so it also works when moveToThread() is
+    //! called from inside a handler.
+    // Uses the same publication R28 added: an entry taken out of a batch is cleared rather than
+    // deleted, and the dispatch loop skips a cleared slot.
     std::vector<Event*> EventDispatcherDefault::takeEventsForReceiver
         (
         Object* aReceiver  //!< The receiver whose events should be taken.
@@ -738,8 +737,7 @@ namespace QtLikeSignal
             if( it != mTimers.end() )
             {
                 mTimers.erase( it, mTimers.end() );
-                // The wait deadline was computed from a timer list that no longer holds these
-                // entries.
+                // The wait deadline was computed from a list that no longer holds these entries.
                 mTimersChanged = true;
                 removedAny     = true;
             }
@@ -786,7 +784,7 @@ namespace QtLikeSignal
                     }
                 }
 
-                // Published for the same reason processEvents() publishes its two batches: this is
+                // Published for the same reason processEvents() publishes its batches: this is
                 // work that has left mEventQueue, and destroying one of these objects can destroy
                 // another that is also in this batch.
                 frame.mDeletes  = &deferredDeletes;
@@ -817,12 +815,11 @@ namespace QtLikeSignal
             for( size_t i = 0; i < deferredDeletes.size(); ++i )
             {
                 // Taken under the lock, as in processEvents(): an object destroyed earlier in this
-                // batch cancels its own remaining entries through removeEventsForReceiver(), and
-                // whoever clears the slot first owns the event.
+                // batch cancels its own remaining entries, and whoever clears the slot owns it.
                 EventPair ep { nullptr, nullptr };
                 {
                     std::lock_guard<std::mutex> lock( mMutex );
-                    ep                         = deferredDeletes[i];
+                    ep                        = deferredDeletes[i];
                     deferredDeletes[i].mEvent = nullptr;
                 }
 
@@ -840,8 +837,7 @@ namespace QtLikeSignal
     {
         // The flag must be set under mMutex, not just notified. processEvents() waits on a
         // predicate, so a bare notify_all() is a no-op unless some state the predicate tests has
-        // changed -- previously wakeUp() only ever "worked" because the wait was capped at 100ms and
-        // would have returned on its own anyway.
+        // changed, so a bare notify_all() would be a no-op against a predicate-based wait.
         {
             std::lock_guard<std::mutex> lock( mMutex );
             mWakeUpRequested = true;

@@ -1,8 +1,18 @@
-#ifndef QT_LIKE_SIGNAL_COREAPPLICATION_H
-#define QT_LIKE_SIGNAL_COREAPPLICATION_H
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
 
-#include "Object.h"
-#include "Thread.h"
+//! @file
+//!
+//! QtLikeSignal::CoreApplication -- mimics Qt's QCoreApplication. It adopts the program's main thread as a
+//! Thread so Objects created on it gain thread affinity, and runs an event loop (exec()) that
+//! dispatches both queued Object slot invocations and external events through a pluggable
+//! dispatcher. The class documentation below carries the usage example.
+
+#ifndef QT_LIKE_SIGNAL_COREAPPLICATION_HPP
+#define QT_LIKE_SIGNAL_COREAPPLICATION_HPP
+
+#include "QtLikeSignal/Object.hpp"
+#include "QtLikeSignal/Thread.hpp"
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -44,6 +54,8 @@ namespace QtLikeSignal
     class CoreApplication : public Object
     {
     public:
+        //! Constructs an application with no command-line arguments, for code that has none to
+        //! pass on -- a test, or a program embedding the loop. arguments() is then empty.
         CoreApplication();
 
         CoreApplication
@@ -53,6 +65,16 @@ namespace QtLikeSignal
             );
 
         virtual ~CoreApplication() override;
+
+        CoreApplication
+            (
+            const CoreApplication&
+            ) = delete;
+
+        CoreApplication& operator=
+            (
+            const CoreApplication&
+            ) = delete;
 
         static CoreApplication* instance();
 
@@ -102,22 +124,33 @@ namespace QtLikeSignal
         //! and all read it, while the constructor and destructor write it from the main thread. A
         //! plain pointer made every one of those a data race, which is what the "Thread-safe" on
         //! each of them promised it was not.
-        //!
-        //! Qt 6 has the identical plain pointer and works around it: QCoreApplication keeps a
-        //! second, atomic g_self for its own use, and documents instanceExists() as "a Qt 6
-        //! thread-safe (no data races) version of instance() != nullptr". Qt 7 makes the pointer
-        //! itself atomic, behind a #warning to audit the call sites. This is that change.
+        // Qt 6 has the identical plain pointer and works around it: QCoreApplication keeps a
+        // second, atomic g_self for its own use, and documents instanceExists() as "a Qt 6
+        // thread-safe (no data races) version of instance() != nullptr". Qt 7 makes the pointer
+        // itself atomic, behind a #warning to audit the call sites. This is that change.
         static std::atomic<CoreApplication*> sInstance;
 
         //! The adopted main thread. Non-owning: the thread_local inside Thread owns it, and
         //! releases it when the native thread exits.
         Thread* mMainThread { nullptr };
-        // shared_ptr rather than unique_ptr: ThreadData hands out strong references, so a dispatcher
-        // cannot be destroyed while another thread is part-way through a call into it.
-        std::shared_ptr<AbstractEventDispatcher> mDispatcher;  //!< The main thread's event dispatcher.
-        std::vector<std::string>                 mArgs;        //!< Command-line arguments, if supplied.
-        std::atomic<bool>                        mInExec { false };  //!< True while exec() is running, to reject nesting.
+
+        //! The platform dispatcher this application installed on the main thread, kept so the
+        //! destructor can drain it and hand the thread back a plain one.
+        //
+        // shared_ptr rather than unique_ptr: ThreadData hands out strong references, so a
+        // dispatcher cannot be destroyed while another thread is part-way through a call into it.
+        std::shared_ptr<AbstractEventDispatcher> mDispatcher;
+
+        //! Command-line arguments, if supplied.
+        std::vector<std::string> mArgs;
+
+        //! True while exec() is running its loop, so a re-entrant call can be refused.
+        //!
+        //! Atomic because the rejecting read happens on whichever thread called exec(), which is
+        //! not necessarily the one that set it -- the off-thread call is rejected by the check
+        //! above this one, but only after this flag has been read.
+        std::atomic<bool> mInExec { false };
     };
 }
 
-#endif // QT_LIKE_SIGNAL_COREAPPLICATION_H
+#endif // QT_LIKE_SIGNAL_COREAPPLICATION_HPP
