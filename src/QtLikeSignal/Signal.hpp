@@ -33,15 +33,14 @@ namespace QtLikeSignal
 
     //! Subscription-only view of a Signal.
     //!
-    //! A view can be handed to Object::connect() but cannot emit the signal it refers to, nor
-    //! disconnect its other subscribers. That is what makes it the right thing for a class to
-    //! expose: emitting Timer::timeout or Thread::finished is the owner's job, and a caller able
-    //! to emit them directly would be announcing something that never happened. Qt gets the same
-    //! protection from moc, which makes signals callable only by the declaring class; without moc
-    //! the view is how a plain C++ signal member says the same thing.
+    //! Can be handed to Object::connect(), but cannot emit the signal or disconnect its other
+    //! subscribers. Expose one of these so callers may subscribe to Timer::timeout or
+    //! Thread::finished without being able to announce something that never happened; Qt gets the
+    //! same protection from moc.
+    // Without moc, the view is how a plain C++ signal member says the same thing.
     //!
-    //! Holds a reference, not a copy: the view is a window onto the owner's Signal and is only
-    //! valid while that owner lives, exactly like the reference an accessor returns.
+    //! **Limitation:** holds a reference, not a copy, so it is valid only while the owning Signal
+    //! lives.
     template<typename ... Args>
     class SignalView
     {
@@ -78,25 +77,22 @@ namespace QtLikeSignal
 
     //! Thread-safe signal. Args are the argument types passed when emitting.
     //!
-    //! Emission takes a snapshot of the connection list under the lock, releases the lock, and
-    //! then invokes. Three properties the rest of the library depends on fall out of that, and
-    //! none of them is optional:
+    //! Usage: declare one as a member, hand out view() for subscribers, and call emit() to fire.
+    //! Object::connect() is what adds thread affinity and lifetime tracking on top.
     //!
-    //!   - **No lock is held while a slot runs.** A slot may connect, disconnect, emit this same
-    //!     signal again, post to another thread or destroy an object, and every one of those
-    //!     reaches back into this signal or into Object's own mutexes. Holding the lock across the
-    //!     call would deadlock on the first of them.
+    //! Emission snapshots the connection list under the lock, releases the lock, then invokes.
+    //! Four guarantees follow, and callers may rely on all of them:
+    //!
+    //!   - **No lock is held while a slot runs**, so a slot may connect, disconnect, emit this
+    //!     signal again, post to another thread, or destroy an object.
     //!   - **A slot stays alive for the whole of its invocation**, even if it disconnects itself
-    //!     mid-call. The snapshot holds a shared_ptr to each slot, so disconnecting merely drops
-    //!     the list's reference; the slot is destroyed when the last call into it returns. The
-    //!     library leans on this twice over -- the slot owns the Cleanup token that prunes
-    //!     Object::mIncoming, and the captured Affinity the queued path reads on every emit.
-    //!   - **A connection made during an emission does not run in that emission**, because it is
-    //!     not in the snapshot; and one *disconnected* during an emission does not run either,
-    //!     because each entry is re-checked immediately before it is called.
+    //!     mid-call.
+    //!   - **A connection made during an emission does not run in that emission**, and one
+    //!     disconnected during an emission does not run either.
+    //!   - **Slots run in connection order.**
     //!
-    //! What emission deliberately does not do is wait. disconnect() returns immediately even if
-    //! the slot is mid-call on another thread; see Connection::disconnect().
+    //! **Limitation:** emission does not wait. disconnect() returns immediately even if the slot is
+    //! mid-call on another thread.
     template<typename ... Args>
     class Signal
     {
@@ -108,11 +104,8 @@ namespace QtLikeSignal
         {
         }
 
-        //! A Signal is neither copyable nor movable.
-        //!
-        //! It is a member of the classes that own it, and every Connection handed out refers back
-        //! to this instance. Copying would give two signals one connection list; moving would
-        //! leave the view below pointing at the wrong object.
+        //! A Signal is neither copyable nor movable: every Connection handed out refers back to
+        //! this instance, and view() holds a reference to it.
         Signal
             (
             const Signal&
@@ -133,11 +126,10 @@ namespace QtLikeSignal
             Signal&&
             ) = delete;
 
-        //! Gets a subscription-only view of this signal, for a class that wants to let callers
-        //! connect without letting them emit. Thread-safe.
+        //! Gets a subscription-only view of this signal. Thread-safe.
         //!
-        //! Const because obtaining a view only permits subscribing -- like Qt's connect() on a
-        //! const sender -- so it does not modify the signal.
+        //! Const because obtaining a view only permits subscribing, like Qt's connect() on a const
+        //! sender.
         SignalView<Args...>& view() const
         {
             return mView;
@@ -163,16 +155,15 @@ namespace QtLikeSignal
 
         //! Emits the signal with the specified arguments. Thread-safe.
         //!
-        //! Forwards rather than taking Args... by value. By value cost one copy of every argument
-        //! per emit before the slots had even been reached -- invisible for an int, a whole
-        //! payload for anything that owns memory. Caught by
-        //! ObjectTest.DeepArgumentCopying_QueuedEventsMinimizeCopies, which counts copies.
-        //!
-        //! The arguments are passed to each slot as lvalues, never forwarded into one: with more
-        //! than one receiver, moving into the first would leave the rest with a moved-from value.
-        //! Moving into the *last* slot would be sound and is deliberately not done -- it would make
-        //! what happens to the caller's object depend on how many receivers happen to be connected,
-        //! which is a worse thing to owe a caller than one copy. Qt makes the same choice.
+        //! Arguments are forwarded here and passed to each slot as lvalues, never moved into one:
+        //! with several receivers, moving into the first would leave the rest with a moved-from
+        //! value. A direct or same-thread slot therefore copies nothing; a queued one copies once.
+        //! Qt makes the same choice.
+        // Taking Args... by value cost one copy of every argument per emit before the slots had even
+        // been reached. Caught by ObjectTest.DeepArgumentCopying_QueuedEventsMinimizeCopies.
+        //
+        // Moving into the *last* slot would be sound and is deliberately not done: it would make what
+        // happens to the caller's object depend on how many receivers happen to be connected.
         template <typename ... EmitArgs>
         void emit
             (
@@ -194,30 +185,23 @@ namespace QtLikeSignal
 
         //! Disconnects every slot from this signal. Thread-safe.
         //!
-        //! Blunt by design, and correspondingly rare: a receiver that wants to stop listening
-        //! should disconnect its own handle. This exists for the sender tearing itself down, and
-        //! for tests that need a signal emptied without tracking every handle.
-        //!
-        //! Called from inside a slot, the slots this emission has not yet reached are skipped.
+        //! Blunt by design: a receiver that wants to stop listening should disconnect its own
+        //! handle. Called from inside a slot, the slots this emission has not yet reached are
+        //! skipped.
         void disconnectAll()
         {
             mImpl->disconnectAll();
         }
 
-        //! True if no slots are connected to this signal. Thread-safe, and stale on return: a
-        //! connect() on another thread may land before you act on the answer. See Global.hpp.
+        //! True if no slots are connected. Thread-safe, and stale on return.
         bool empty() const
         {
             return mImpl->connectionCount() == 0;
         }
 
-        //! Gets the number of slots currently connected to this signal. Thread-safe.
+        //! Gets the number of slots currently connected. Thread-safe, and stale on return.
         //!
-        //! Read-only diagnostic, mirroring Qt's QObject::receivers(). Mainly useful for asserting
-        //! that a destroyed receiver really was disconnected rather than left as an inert slot --
-        //! see ObjectDefectTest.DestroyedReceiverIsDisconnectedFromItsSender.
-        //!
-        //! Stale on return, like every count taken from another thread. See Global.hpp.
+        //! A diagnostic, mirroring Qt's QObject::receivers(). O(connections).
         std::size_t receivers() const
         {
             return mImpl->connectionCount();
@@ -249,12 +233,11 @@ namespace QtLikeSignal
 
             //! Where this slot sits in the owning Impl's mWorking. Guarded by that Impl's mMutex.
             //!
-            //! An index rather than an iterator, so the writers' side can stay a *vector*. Removal
-            //! at a known index is O(1) if the element is merely nulled rather than erased, and the
-            //! nulls are compacted away in bulk later -- which keeps both of the things that matter
-            //! cheap. A std::list would also give O(1) removal, and was tried: it costs 66% more on
-            //! a connect/emit churn loop, because every snapshot rebuild then chases pointers
-            //! instead of copying a contiguous block.
+            //! An index rather than an iterator, so the writers' side stays a vector: removal at a
+            //! known index is O(1) when the element is nulled rather than erased, and the snapshot
+            //! rebuild copies a contiguous block rather than chasing pointers.
+            // A std::list would also give O(1) removal, and was tried: it costs 66% more on a
+            // connect/emit churn loop, because every snapshot rebuild then chases pointers.
             std::size_t mIndex { 0 };
 
             //! True while mIndex names a live element. Guarded by the owning Impl's mMutex.
@@ -267,23 +250,23 @@ namespace QtLikeSignal
 
         //! The connection list, held behind a shared_ptr so a Connection can outlive the Signal.
         //!
-        //! Two lists, not one. Writers own a list no reader ever touches; readers get an immutable
-        //! vector snapshot of it, rebuilt only when it has actually changed. So a run of emits with
-        //! no connects in it costs no allocation at all, and a run of connects with no emits in it
-        //! costs no copying at all -- each pays only when the other has been busy.
+        //! Two lists, not one. Writers own a list no reader ever touches; readers walk an immutable
+        //! snapshot of it, rebuilt only when it has changed. A run of emits with no connects costs
+        //! no allocation, and a run of connects with no emits costs no copying.
         //!
-        //! Removal is O(1) and does not disturb the order: the element is nulled where it stands,
-        //! and the nulls are compacted away in bulk once they outnumber the live entries. Each slot
-        //! knows its own index, so nothing has to be searched for. This is what stops tearing down
-        //! N receivers of one signal costing O(N^2) -- see PERFORMANCE-20260813.md (P7).
-        //!
-        //! The obvious alternative -- one list, copied on write, mutated in place when
-        //! shared_ptr::use_count() says nobody is reading -- is **wrong**, and was written and
-        //! caught by ThreadSanitizer before this replaced it. use_count() is a relaxed load, so
-        //! reading 1 establishes no ordering against the reader that just released its reference;
-        //! the writer is then free, in the memory model, to reorder its writes before the reader's
-        //! last read of the vector. It happens to work most of the time, which is the worst
-        //! property a concurrency bug can have.
+        //! Removal is O(1) and preserves order: the element is nulled where it stands, and the nulls
+        //! are compacted in bulk once they outnumber the live entries. Each slot knows its own
+        //! index, so nothing is searched for.
+        // This is what stops tearing down N receivers of one signal costing O(N^2) -- see
+        // PERFORMANCE-20260813.md (P7).
+        //
+        // The obvious alternative -- one list, copied on write, mutated in place when
+        // shared_ptr::use_count() says nobody is reading -- is wrong, and was written and caught by
+        // ThreadSanitizer before this replaced it. use_count() is a relaxed load, so reading 1
+        // establishes no ordering against the reader that just released its reference; the writer is
+        // then free, in the memory model, to reorder its writes before the reader's last read of the
+        // vector. It happens to work most of the time, which is the worst property a concurrency bug
+        // can have.
         class Impl : public Private::SignalImplBase
         {
         public:
@@ -409,11 +392,11 @@ namespace QtLikeSignal
 
             //! Drops the one slot @p aState belongs to. See SignalImplBase.
             //!
-            //! O(1). The slot is reached through the back-pointer in its own state and erased at
-            //! the iterator it carries, so no part of this depends on how many other connections
-            //! exist. It used to scan the whole list looking for anything marked dead, which made
-            //! destroying N receivers of one signal O(N^2) -- 671 ms for 16 000 of them, against
-            //! boost::signals2's 2.7 ms. See PERFORMANCE-20260813.md (P7).
+            //! O(1): the slot is reached through the back-pointer in its own state and nulled at the
+            //! index it carries, so the cost does not depend on how many other connections exist.
+            // It used to scan the whole list looking for anything marked dead, which made destroying N
+            // receivers of one signal O(N^2) -- 671 ms for 16 000 of them. See PERFORMANCE-20260813.md
+            // (P7).
             virtual void removeConnection
                 (
                 const std::shared_ptr<Private::ConnectionState>& aState
@@ -458,11 +441,9 @@ namespace QtLikeSignal
             //! Squeezes the nulls out of mWorking once they outnumber the live entries.
             //!
             //! Amortised O(1) per removal: each compaction costs one pass but at least halves the
-            //! list, so the passes are geometrically rare. Callers already hold mMutex.
-            //!
-            //! Deferred rather than immediate because compacting reassigns indices, and doing that
-            //! on every removal would put back exactly the O(all connections) this design exists to
-            //! avoid.
+            //! list. Deferred rather than immediate because compacting reassigns indices, which
+            //! would otherwise cost O(connections) on every removal. Callers already hold mMutex.
+            // The passes are geometrically rare.
             void compactIfMostlyDead()
             {
                 if( mTombstones * 2 <= mWorking.size() )
@@ -484,13 +465,11 @@ namespace QtLikeSignal
                 mTombstones = 0;
             }
 
-            //! Returns the immutable snapshot readers walk, rebuilding it if the working list has
-            //! changed since the last one was taken.
-            //!
-            //! The rebuild is the only copy in the whole design, and it happens once per *change*
-            //! rather than once per emit. A steady emit loop rebuilds nothing; a burst of connects
-            //! with no emit between them rebuilds nothing either, and pays one copy on the emit
-            //! that follows.
+            //! Returns the immutable snapshot readers walk, rebuilding it only if the working list
+            //! has changed. The rebuild happens once per change, not once per emit.
+            // The rebuild is the only copy in the whole design. A steady emit loop rebuilds nothing; a
+            // burst of connects with no emit between them rebuilds nothing either, and pays one copy on
+            // the emit that follows.
             PublishedListPtr publishedSlots() const
             {
                 std::lock_guard<std::mutex> lock( mMutex );
@@ -513,17 +492,13 @@ namespace QtLikeSignal
                 return mPublished;
             }
 
-            //! Drops our reference to the snapshot, because it still names slots that have just
-            //! been removed. Callers already hold mMutex.
+            //! Drops our reference to the snapshot, which still names slots just removed. Callers
+            //! already hold mMutex.
             //!
-            //! Needed for promptness, not correctness of dispatch: a removed slot is skipped by its
-            //! own flag either way. But the snapshot holding the last reference would keep the slot
-            //! -- and therefore the Cleanup token that prunes Object::mIncoming, and whatever the
-            //! closure captured -- alive until the next emit rebuilt it. A disconnect has to be
-            //! visible immediately, so the reference goes now.
-            //!
-            //! An emit already in flight is unaffected: it holds its own reference to the old
-            //! snapshot and keeps walking it.
+            //! For promptness, not dispatch correctness: a removed slot is skipped by its own flag
+            //! either way, but the snapshot would otherwise keep it -- and the Cleanup token that
+            //! prunes Object::mIncoming -- alive until the next emit. An emit already in flight is
+            //! unaffected; it holds its own reference to the old snapshot.
             void discardSnapshot() const
             {
                 mPublished.reset();
