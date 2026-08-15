@@ -18,3 +18,11 @@ Rule: Naming: Parameter should start with `a` (aNewValue), class data member sho
 Rule: Naming: Class/namespace name must start with a capital letter (MyWorker).
 Rule: Casting: Do not use C style cast.
 Rule: File structure: One header should have only one public class/struct type.
+Rule: Commit message: This repo is reviewed in Gerrit (remote `gerrit`, server 3.10.9), which checks the message on push. Follow the four rules below so a push reports nothing.
+Rule: Commit message: The subject (first line) must be 50 characters or fewer. Over that, Gerrit warns `subject >50 characters; use shorter first paragraph`. Put the detail in the body, not the subject.
+Rule: Commit message: Leave exactly one blank line between the subject and the body.
+Rule: Commit message: Wrap the body at 72 characters. Gerrit warns `too many message lines longer than 72 characters; manually wrap lines`. Note this is 72, not the 100 used for code.
+Rule: Commit message: A `Change-Id:` footer is required. All-Projects sets `requireChangeId = true`, so a push to `refs/for/*` without one is **rejected**, not warned. Install the hook once per clone, and let it generate the footer instead of writing one by hand:
+`
+scp -p gerrit-local:hooks/commit-msg .git/hooks/
+`
