@@ -402,7 +402,8 @@ namespace QtMimic
         return removed;
     }
 
-    //! Removes timer @p aTimerId and every pending event for it. Callers must hold mMutex.
+    //! Removes timer @p aTimerId and every pending event for it. Returns true if it was registered.
+    //! Callers must hold mMutex.
     bool EventDispatcherDefault::takeTimerLocked
         (
         int aTimerId  //!< Unique timer identifier.

@@ -507,10 +507,9 @@ namespace QtLikeSignal
     namespace
     {
         //! Cancels the entries of one published batch that @p aMatches selects.
-        //!
-        //! A template only because the queued-event batch is a deque and the other two are vectors;
-        //! there is one behaviour here, not three. A null batch means the pass does not have that
-        //! kind of work, which is normal.
+        // A template only because the queued-event batch is a deque and the other two are vectors;
+        // there is one behaviour here, not three. A null batch means the pass does not have that
+        // kind of work, which is normal.
         template <typename Batch, typename Predicate>
         void cancelBatchEntries
             (
@@ -537,9 +536,9 @@ namespace QtLikeSignal
 
         //! Moves the entries of one published batch that target @p aReceiver into @p aTaken.
         //!
-        //! The event is handed over rather than deleted, and the slot is cleared so the dispatch
-        //! loop skips it -- the same ownership handover cancelBatchEntries() performs, minus the
-        //! delete.
+        //! Hands the event over rather than deleting it, and clears the slot so the dispatch loop
+        //! skips it.
+        // The same ownership handover cancelBatchEntries() performs, minus the delete.
         template <typename Batch>
         void takeBatchEntries
             (
@@ -580,8 +579,8 @@ namespace QtLikeSignal
         }
     }
 
-    //! Cancels every published entry targeting @p aReceiver. Callers must hold mMutex; see
-    //! mDispatchFrames in the header for why that is what makes this safe.
+    //! Cancels every published entry targeting @p aReceiver. Callers must hold mMutex.
+    // See mDispatchFrames in the header for why holding mMutex is what makes this safe.
     void EventDispatcherDefault::cancelPublishedEntriesFor
         (
         Object* aReceiver  //!< The receiver whose entries should be cancelled.
@@ -610,9 +609,10 @@ namespace QtLikeSignal
 
     //! Removes @p aFrame from the chain of running passes. Callers must hold mMutex.
     //!
-    //! Unlinks that specific frame rather than popping the head. Passes on one thread nest strictly,
-    //! but two threads driving the same dispatcher would not, and searching costs nothing at these
-    //! depths.
+    //! Unlinks that specific frame rather than popping the head, so two threads driving the same
+    //! dispatcher cannot corrupt the chain.
+    // Passes on one thread nest strictly, but two threads driving the same dispatcher would not,
+    // and searching costs nothing at these depths.
     void EventDispatcherDefault::unlinkDispatchFrame
         (
         DispatchFrame* aFrame  //!< The frame to remove.
@@ -673,10 +673,10 @@ namespace QtLikeSignal
 
     //! Removes the receiver's pending events and hands them over, still alive. Thread-safe.
     //!
-    //! Reaches the running passes as well as the queue, using the same publication R28 added: an
-    //! entry taken out of a batch is cleared rather than deleted, and the dispatch loop skips a
-    //! cleared slot. That is what makes this work when moveToThread() is called from inside a
-    //! handler, which is where the object's own thread usually is when it moves itself.
+    //! Reaches the running passes as well as the queue, so it also works when moveToThread() is
+    //! called from inside a handler.
+    // Uses the same publication R28 added: an entry taken out of a batch is cleared rather than
+    // deleted, and the dispatch loop skips a cleared slot.
     std::vector<Event*> EventDispatcherDefault::takeEventsForReceiver
         (
         Object* aReceiver  //!< The receiver whose events should be taken.
