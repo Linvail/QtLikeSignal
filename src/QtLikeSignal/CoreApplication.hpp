@@ -1,6 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! QtLikeSignal::CoreApplication - mimics Qt's QCoreApplication. It adopts the
+//! program's main thread as a Thread so Objects created on it gain thread
+//! affinity, and runs an event loop (exec()) that dispatches both queued
+//! Object slot invocations and external/OS-level events via a pluggable
+//! dispatcher.
+//!
+//! Typical usage:
+//! @code
+//!   QtLikeSignal::CoreApplication app(aArgc, aArgv);
+//!   ... create Objects, wire signals ...
+//!   return app.exec();   // blocks until quit()/exit()
+//! @endcode
+
 #ifndef QT_LIKE_SIGNAL_COREAPPLICATION_HPP
 #define QT_LIKE_SIGNAL_COREAPPLICATION_HPP
 

@@ -1,6 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! QtLikeSignal::Timer - repeating and single-shot timers, mirroring Qt's QTimer.
+//!
+//! A Timer is an Object, so it lives in a thread; its timeout signal is emitted by that thread's
+//! event loop. The loop is what drives it, so a Timer belonging to a thread that never runs one
+//! (a bare adopted thread, say) will never fire.
+
 #ifndef QT_LIKE_SIGNAL_TIMER_HPP
 #define QT_LIKE_SIGNAL_TIMER_HPP
 

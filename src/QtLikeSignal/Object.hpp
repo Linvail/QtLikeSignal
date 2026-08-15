@@ -1,6 +1,26 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! Qt-like object model: signal/slot connections with thread affinity, built on Signal and the
+//! C++17 threading library.
+//!
+//! Two building blocks are provided:
+//!   * QtLikeSignal::Thread - an event-loop thread. Every object "lives" in one
+//!                        Thread; queued slot invocations are executed in
+//!                        that thread's event loop.
+//!   * QtLikeSignal::Object - a base class that carries thread affinity and offers
+//!                        static connect() helpers that mirror Qt's
+//!                        connect(sender-signal, receiver, &Receiver::slot).
+//!
+//! Like Qt, the delivery is decided at emit time (ConnectionType::Auto):
+//!   * If the signal is emitted on the receiver's own thread, the slot runs
+//!     synchronously (direct connection).
+//!   * If the signal is emitted on a different thread, the slot invocation is
+//!     queued into the receiver thread's event loop and executed there
+//!     (queued connection). The arguments are copied, exactly like Qt.
+
 #ifndef QT_LIKE_SIGNAL_OBJECT_HPP
 #define QT_LIKE_SIGNAL_OBJECT_HPP
 

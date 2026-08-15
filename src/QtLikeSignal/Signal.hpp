@@ -1,6 +1,19 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! Thread-safe signal, and the subscription-only view a class exposes in its place.
+//!
+//! Usage: declare a Signal<Args...> as a member, return view() from an accessor so callers may
+//! subscribe without being able to emit, and call emit() to fire. Connect through Object::connect()
+//! rather than Signal::connect() -- that is what adds thread affinity, lifetime tracking, and the
+//! queued delivery a cross-thread connection needs.
+//!
+//! Limitations: a Signal is neither copyable nor movable; a SignalView is valid only while the
+//! Signal it refers to lives; and emission does not wait for slots already running on other
+//! threads.
+
 #ifndef QT_LIKE_SIGNAL_SIGNAL_HPP
 #define QT_LIKE_SIGNAL_SIGNAL_HPP
 

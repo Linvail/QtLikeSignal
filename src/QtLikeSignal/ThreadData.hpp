@@ -1,6 +1,19 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! Per-thread state that outlives its Thread object.
+//!
+//! ThreadData is the key to safe thread affinity without dangling pointers. Objects hold
+//! shared_ptr<ThreadData>, not raw Thread*. When the Thread is destroyed, ~Thread() nulls the
+//! back-pointer, so any surviving holder sees thread() == nullptr rather than a use-after-free.
+//! This is exactly how Qt's QThreadData/QObject::thread() works internally.
+//!
+//! ThreadData also OWNS the thread's event dispatcher, which in turn owns the event queue and the
+//! timer list. Posting therefore goes through the ThreadData -- which the poster keeps alive with a
+//! shared_ptr -- and never dereferences a Thread* that a concurrent ~Thread() could free.
+
 #ifndef QT_LIKE_SIGNAL_THREADDATA_HPP
 #define QT_LIKE_SIGNAL_THREADDATA_HPP
 

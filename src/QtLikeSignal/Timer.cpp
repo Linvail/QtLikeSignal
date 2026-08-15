@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! Implementation of QtLikeSignal::Timer.
+
 #include "QtLikeSignal/Timer.hpp"
 
 #include <cstdio>

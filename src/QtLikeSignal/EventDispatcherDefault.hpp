@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! Cross-platform event dispatcher: queue, timers, condition-variable wait.
+
 #ifndef QT_LIKE_SIGNAL_EVENTDISPATCHERDEFAULT_HPP
 #define QT_LIKE_SIGNAL_EVENTDISPATCHERDEFAULT_HPP
 

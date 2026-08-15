@@ -1,6 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! QtLikeSignal::Thread - an event-loop thread. Every Object "lives" in one Thread; queued slot
+//! invocations are executed in that thread's event loop.
+//!
+//! A Thread owns a ThreadData, which owns the thread's event dispatcher, which owns the event queue
+//! and the timer list. Posting therefore goes through the ThreadData and never dereferences a
+//! Thread* a concurrent ~Thread() could free.
+
 #ifndef QT_LIKE_SIGNAL_THREAD_HPP
 #define QT_LIKE_SIGNAL_THREAD_HPP
 

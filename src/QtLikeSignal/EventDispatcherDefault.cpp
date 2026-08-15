@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! Cross-platform event dispatcher implementation.
+
 #include "QtLikeSignal/EventDispatcherDefault.hpp"
 #include "QtLikeSignal/Event.hpp"
 #include "QtLikeSignal/Object.hpp"

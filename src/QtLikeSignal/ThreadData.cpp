@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! Out-of-line members of QtLikeSignal::ThreadData.
+
 #include "QtLikeSignal/ThreadData.hpp"
 
 #include "QtLikeSignal/Event.hpp"

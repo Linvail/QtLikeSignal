@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! Implementation of QtLikeSignal::Object (thread affinity + connection lifetime
+//! management).
+
 #include "QtLikeSignal/Object.hpp"
 
 #include "QtLikeSignal/AbstractEventDispatcher.hpp"

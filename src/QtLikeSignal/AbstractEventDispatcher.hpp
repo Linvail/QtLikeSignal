@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! Abstract interface every event dispatcher implements.
+
 #ifndef QT_LIKE_SIGNAL_ABSTRACTEVENTDISPATCHER_HPP
 #define QT_LIKE_SIGNAL_ABSTRACTEVENTDISPATCHER_HPP
 

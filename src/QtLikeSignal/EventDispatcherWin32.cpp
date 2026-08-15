@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! Win32 event dispatcher implementation.
+
 #include "QtLikeSignal/EventDispatcherWin32.hpp"
 
 #include <cstdio>

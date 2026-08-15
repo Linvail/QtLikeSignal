@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! Linux event dispatcher implementation.
+
 #include "QtLikeSignal/EventDispatcherLinux.hpp"
 
 #include <cerrno>

@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! Implementation of QtLikeSignal::Thread (event loop).
+
 #include "QtLikeSignal/Thread.hpp"
 
 #include "QtLikeSignal/EventDispatcherDefault.hpp"

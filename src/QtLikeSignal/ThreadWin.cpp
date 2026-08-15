@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! Windows-specific half of QtLikeSignal::Thread: native OS thread creation, priority, and join.
+
 #include "QtLikeSignal/Thread.hpp"
 
 #include <cstdio>

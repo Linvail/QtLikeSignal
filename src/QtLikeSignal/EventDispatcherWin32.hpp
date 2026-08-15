@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! Win32 event dispatcher: blocks on the thread message queue.
+
 #ifndef QT_LIKE_SIGNAL_EVENTDISPATCHERWIN32_HPP
 #define QT_LIKE_SIGNAL_EVENTDISPATCHERWIN32_HPP
 

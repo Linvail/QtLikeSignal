@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! Implementation of QtLikeSignal::CoreApplication.
+
 #include "QtLikeSignal/CoreApplication.hpp"
 
 #include "QtLikeSignal/AbstractEventDispatcher.hpp"

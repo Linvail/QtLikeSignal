@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! The event types the loop carries: MetaCall, Timer and DeferredDelete.
+
 #ifndef QT_LIKE_SIGNAL_EVENT_HPP
 #define QT_LIKE_SIGNAL_EVENT_HPP
 

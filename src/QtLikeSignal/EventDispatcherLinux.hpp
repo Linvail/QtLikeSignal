@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+//!
+//! Linux event dispatcher: blocks in poll() on an eventfd.
+
 #ifndef QT_LIKE_SIGNAL_EVENTDISPATCHERLINUX_HPP
 #define QT_LIKE_SIGNAL_EVENTDISPATCHERLINUX_HPP
 
