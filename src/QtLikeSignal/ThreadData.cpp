@@ -22,7 +22,7 @@ namespace QtLikeSignal
         }
     }
 
-    //! @return the Thread this data describes, or nullptr once that Thread has been destroyed.
+    //! Gets the Thread this data describes, or nullptr once that Thread has been destroyed.
     //! Safe to call at any time: the ThreadData itself is kept alive by whoever holds it.
     Thread* ThreadData::thread() const
     {
@@ -38,7 +38,7 @@ namespace QtLikeSignal
         mThread.store( aThread, std::memory_order_release );
     }
 
-    //! @return true while the owning thread's body is executing.
+    //! Reports whether the owning thread's body is executing.
     //!
     //! Safe to call from any thread at any time, including once that Thread has been destroyed --
     //! it reports false, because the run body clears this before the Thread can be torn down.

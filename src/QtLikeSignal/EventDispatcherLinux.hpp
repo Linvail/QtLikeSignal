@@ -78,8 +78,9 @@ namespace QtLikeSignal
             //! Distinguishes this registration from any later one reusing the same descriptor.
             //!
             //! A descriptor number is not an identity: unregister it, close it, and the next open()
-            //! may hand the same number straight back. Without this, a poll() round that began
-            //! before all that could deliver its stale readiness to whatever now owns the number.
+            //! may hand the same number back.
+            // Without the generation, a poll() round that began before all that could deliver its
+            // stale readiness to whatever now owns the number.
             unsigned long long mGeneration;
         };
 

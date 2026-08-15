@@ -20,14 +20,14 @@ namespace QtMimic
             delete parked.mEvent;
         }
     }
-    //! @return the Thread this data describes, or nullptr once that Thread has been destroyed.
+    //! Gets the Thread this data describes, or nullptr once that Thread has been destroyed.
     //! Safe to call at any time: the ThreadData itself is kept alive by whoever holds it.
     Thread* ThreadData::thread() const
     {
         return mThread.load( std::memory_order_acquire );
     }
 
-    //! @brief Set by Thread's constructor and cleared by ~Thread(). Only Thread may touch it.
+    //! Set by Thread's constructor and cleared by ~Thread(). Only Thread may touch it.
     void ThreadData::setThread
         (
         Thread* aThread    //!< The owning thread, or nullptr once it is gone.
@@ -36,7 +36,7 @@ namespace QtMimic
         mThread.store( aThread, std::memory_order_release );
     }
 
-    //! @return true while the owning thread's body is executing.
+    //! Reports whether the owning thread's body is executing.
     //!
     //! Safe to call from any thread at any time, including once that Thread has been destroyed --
     //! it reports false, because the run body clears this before the Thread can be torn down.
@@ -47,7 +47,7 @@ namespace QtMimic
         return mThreadRunning.load( std::memory_order_acquire );
     }
 
-    //! @brief Record whether the owning thread's body is executing. Only Thread may touch it.
+    //! Records whether the owning thread's body is executing. Only Thread may touch it.
     void ThreadData::setThreadRunning
         (
         bool aRunning    //!< True on start, false once the run body has finished.
@@ -56,7 +56,7 @@ namespace QtMimic
         mThreadRunning.store( aRunning, std::memory_order_release );
     }
 
-    //! @return a strong reference to this thread's dispatcher, or nullptr if none is installed.
+    //! Gets a strong reference to this thread's dispatcher, or nullptr if none is installed.
     //! Thread-safe.
     std::shared_ptr<AbstractEventDispatcher> ThreadData::dispatcher() const
     {
@@ -64,7 +64,7 @@ namespace QtMimic
         return mDispatcher;
     }
 
-    //! @brief Install or clear this thread's dispatcher. Thread-safe.
+    //! Installs or clears this thread's dispatcher, and hands it anything parked. Thread-safe.
     void ThreadData::setDispatcher
         (
         std::shared_ptr<AbstractEventDispatcher> aDispatcher  //!< Dispatcher to install; nullptr clears.

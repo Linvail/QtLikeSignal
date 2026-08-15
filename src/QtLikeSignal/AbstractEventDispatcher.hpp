@@ -70,7 +70,7 @@ namespace QtLikeSignal
 
         //! Stops the dispatcher accepting further events, before its final drain.
         //!
-        //! Closes the shutdown race: a thread finishing used to drain its deferred deletes and only
+        //! Closes the shutdown race: a thread finishing drains its deferred deletes and only
         //! then release the dispatcher, so a deleteLater() landing between those two steps was
         //! accepted by a queue nothing would drain again. The event was freed with the dispatcher
         //! and its receiver never deleted -- neither run nor deleted, i.e. leaked. Refusing posts
@@ -147,13 +147,12 @@ namespace QtLikeSignal
         //! The counterpart of removeEventsForReceiver() for a move rather than a destruction: the
         //! events are detached from this dispatcher but not deleted, so Object::moveToThread() can
         //! post them onto the destination thread. Ownership passes to the caller, which must post
-        //! or delete every one of them.
-        //!
-        //! Qt does the same thing at the same point, walking the old thread's postEventList and
-        //! re-adding each entry to the target's ("move posted events" in
-        //! QObjectPrivate::setThreadData_helper). Without it a queued call posted just before a move
-        //! runs on the thread the object has left -- which is the one thing a queued connection
-        //! exists to prevent. Thread-safe.
+        //! or delete every one of them. Thread-safe.
+        // Qt does the same thing at the same point, walking the old thread's postEventList and
+        // re-adding each entry to the target's ("move posted events" in
+        // QObjectPrivate::setThreadData_helper). Without it a queued call posted just before a move
+        // runs on the thread the object has left -- which is the one thing a queued connection
+        // exists to prevent.
         virtual std::vector<Event*> takeEventsForReceiver
             (
             Object* aReceiver  //!< The receiver whose events should be taken.

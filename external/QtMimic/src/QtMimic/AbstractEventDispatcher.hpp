@@ -59,8 +59,9 @@ namespace QtMimic
         //! Loop-level like wakeUp() and interrupt(), so it is public for the same reason -- it
         //! cannot be aimed at a particular receiver.
         //!
-        //! The callback may run with this dispatcher's internal lock held, so it must not block or
-        //! call back into the dispatcher; signal the native loop and return. Thread-safe.
+        //! The callback runs with no dispatcher lock held and may call back in. It should not
+        //! block: it is on the critical path of every post. Signal the native loop and return.
+        //! Thread-safe.
         virtual void setWakeCallback
             (
             std::function<void()> aCallback  //!< Invoked on post; nullptr clears.
@@ -142,9 +143,10 @@ namespace QtMimic
 
         //! Removes the receiver's pending events and hands them over, still alive.
         //!
-        //! The counterpart of removeEventsForReceiver() for a move rather than a destruction:
-        //! Object::moveToThread() uses it to carry queued work to the destination thread. Ownership
-        //! passes to the caller, which must post or delete every event returned. Thread-safe.
+        //! The counterpart of removeEventsForReceiver() for a move rather than a destruction: the
+        //! events are detached from this dispatcher but not deleted, so Object::moveToThread() can
+        //! post them onto the destination thread. Ownership passes to the caller, which must post
+        //! or delete every one of them. Thread-safe.
         virtual std::vector<Event*> takeEventsForReceiver
             (
             Object* aReceiver  //!< The receiver whose events should be taken.
@@ -153,6 +155,7 @@ namespace QtMimic
         friend class Object;
 
         //! Grants ThreadData the ability to hand over events parked before a dispatcher existed.
+        //! See ThreadData::mParkedEvents.
         friend struct ThreadData;
     };
 }

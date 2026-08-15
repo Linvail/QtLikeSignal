@@ -48,7 +48,8 @@ namespace QtMimic
     //! @p aEvents is a poll(2) mask (POLLIN, POLLOUT, ...). @p aCallback runs on the dispatcher's
     //! own thread with no lock held, so it may freely post events, start timers, or register and
     //! unregister sources. Registering a descriptor that is already registered replaces its mask
-    //! and callback. Returns false if @p aFd is negative or @p aCallback is empty. Thread-safe.
+    //! and callback, and counts as a new registration for the purposes of unregisterEventSource().
+    //! Returns false if @p aFd is negative or @p aCallback is empty. Thread-safe.
     bool EventDispatcherLinux::registerEventSource
         (
         int aFd,                          //!< Descriptor to poll; must be >= 0.
@@ -95,7 +96,19 @@ namespace QtMimic
         return true;
     }
 
-    //! Stops polling a descriptor. Returns true if it was registered. Thread-safe.
+    //! Stops polling a descriptor. Returns true if it was registered.
+    //!
+    //! **Called from the dispatcher's own thread -- including from inside a callback -- this is
+    //! synchronous:** the callback will not run again, not even for a readiness this poll() round
+    //! has already observed, because every invocation re-checks the registration first.
+    //!
+    //! Called from another thread it is not, and cannot be without blocking on a callback that may
+    //! be running arbitrary code. The callback can still be in progress when this returns. A caller
+    //! that is about to destroy what the callback captures must either unregister from the loop's
+    //! own thread or arrange its own hand-off; closing the descriptor is safe either way, since a
+    //! closed descriptor is re-checked and skipped rather than dispatched.
+    //!
+    //! Thread-safe.
     bool EventDispatcherLinux::unregisterEventSource
         (
         int aFd  //!< Descriptor previously passed to registerEventSource().
@@ -201,7 +214,8 @@ namespace QtMimic
     //! Copies the callback of the registration identified by @p aFd and @p aGeneration.
     //!
     //! Empty if that registration is gone -- unregistered, or replaced by a later
-    //! registerEventSource() on the same descriptor. Takes mMutex itself.
+    //! registerEventSource() on the same descriptor. Takes mMutex itself, since it is called from
+    //! waitForEvents() with the lock released.
     EventDispatcherLinux::EventSourceCallback EventDispatcherLinux::callbackIfStillRegistered
         (
         int aFd,                        //!< The descriptor that poll() reported ready.

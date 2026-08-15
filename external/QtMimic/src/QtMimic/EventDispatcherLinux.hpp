@@ -81,11 +81,10 @@ namespace QtMimic
             unsigned long long mGeneration;    //!< Invoked with the revents when ready.
         };
 
-        //! Copies the callback of the registration identified by @p aFd and @p aGeneration.
+        //! Looks up a still-registered source by descriptor and generation, and copies its callback.
         //!
-        //! Empty if that registration is gone. Looking it up again immediately before invoking is
-        //! what makes unregisterEventSource() take effect at once rather than one poll() round
-        //! later.
+        //! Returns an empty callback if that exact registration is gone, which is the check that
+        //! makes unregisterEventSource() take effect immediately rather than one poll() round later.
         EventSourceCallback callbackIfStillRegistered
             (
             int aFd,
