@@ -1,4 +1,4 @@
-#include "Thread.h"
+#include "Thread.hpp"
 
 #include <cstdio>
 #include <windows.h>

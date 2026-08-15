@@ -1,8 +1,8 @@
-#include "Object.h"
+#include "Object.hpp"
 
-#include "AbstractEventDispatcher.h"
-#include "Event.h"
-#include "Thread.h"
+#include "AbstractEventDispatcher.hpp"
+#include "Event.hpp"
+#include "Thread.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -673,7 +673,7 @@ namespace QtLikeSignal
     }
 
     //! Return true if the specified aData belongs to the calling thread.
-    //! We need this helper function because we cannot include Thread.h in Object.h.
+    //! We need this helper function because we cannot include Thread.hpp in Object.hpp.
     bool Object::isCurrentThread
         (
         const std::shared_ptr<ThreadData>& aData

@@ -1,7 +1,7 @@
-#ifndef QT_LIKE_SIGNAL_EVENTDISPATCHERWIN32_H
-#define QT_LIKE_SIGNAL_EVENTDISPATCHERWIN32_H
+#ifndef QT_LIKE_SIGNAL_EVENTDISPATCHERWIN32_HPP
+#define QT_LIKE_SIGNAL_EVENTDISPATCHERWIN32_HPP
 
-#include "EventDispatcherDefault.h"
+#include "EventDispatcherDefault.hpp"
 
 namespace QtLikeSignal
 {
@@ -50,7 +50,7 @@ namespace QtLikeSignal
         //! The hidden message-only window, or nullptr if it could not be created.
         //!
         //! Typed void* rather than HWND so this header does not pull <windows.h> -- and its macros --
-        //! into every translation unit that includes it. Thread.h keeps its native handle the same
+        //! into every translation unit that includes it. Thread.hpp keeps its native handle the same
         //! way for the same reason.
         void* mMessageWindow { nullptr };
 
@@ -62,4 +62,4 @@ namespace QtLikeSignal
     };
 }
 
-#endif // QT_LIKE_SIGNAL_EVENTDISPATCHERWIN32_H
+#endif // QT_LIKE_SIGNAL_EVENTDISPATCHERWIN32_HPP

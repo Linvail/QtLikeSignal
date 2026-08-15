@@ -1,7 +1,7 @@
-#ifndef QT_LIKE_SIGNAL_EVENTDISPATCHERDEFAULT_H
-#define QT_LIKE_SIGNAL_EVENTDISPATCHERDEFAULT_H
+#ifndef QT_LIKE_SIGNAL_EVENTDISPATCHERDEFAULT_HPP
+#define QT_LIKE_SIGNAL_EVENTDISPATCHERDEFAULT_HPP
 
-#include "AbstractEventDispatcher.h"
+#include "AbstractEventDispatcher.hpp"
 #include <deque>
 #include <vector>
 #include <mutex>
@@ -245,4 +245,4 @@ namespace QtLikeSignal
     };
 }
 
-#endif // QT_LIKE_SIGNAL_EVENTDISPATCHERDEFAULT_H
+#endif // QT_LIKE_SIGNAL_EVENTDISPATCHERDEFAULT_HPP

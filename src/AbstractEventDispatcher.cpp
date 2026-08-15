@@ -1,4 +1,4 @@
-#include "AbstractEventDispatcher.h"
+#include "AbstractEventDispatcher.hpp"
 
 namespace QtLikeSignal
 {

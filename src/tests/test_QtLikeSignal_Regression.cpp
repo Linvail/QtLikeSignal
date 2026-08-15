@@ -29,10 +29,10 @@
 
 #include <gtest/gtest.h>
 
-#include "Object.h"
-#include "PerfHarness.h"
-#include "Signal.h"
-#include "Thread.h"
+#include "Object.hpp"
+#include "PerfHarness.hpp"
+#include "Signal.hpp"
+#include "Thread.hpp"
 
 #include <chrono>
 #include <memory>
@@ -108,7 +108,7 @@ namespace
 //! The QtLikeSignal side of the timing guards, which live in test_Qt6_Performance.cpp.
 //!
 //! Defined here rather than there because that file cannot include our headers: Qt's `emit` macro
-//! would turn every `signal.emit( 1 )` into a syntax error. Declared in PerfHarness.h, which is the
+//! would turn every `signal.emit( 1 )` into a syntax error. Declared in PerfHarness.hpp, which is the
 //! seam between the two.
 namespace PerfHarness
 {

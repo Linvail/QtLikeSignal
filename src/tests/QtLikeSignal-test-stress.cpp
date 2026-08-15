@@ -7,7 +7,7 @@
 //! names -- so the two can be diffed against each other. See
 //! history/TEST-UNIFICATION-PLAN-20260810.md.
 
-#include "QtLikeSignal-test-types.h"
+#include "QtLikeSignal-test-types.hpp"
 
 #include "gtest/gtest.h"
 

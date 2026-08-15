@@ -1,7 +1,7 @@
-#ifndef QT_LIKE_SIGNAL_EVENTDISPATCHERLINUX_H
-#define QT_LIKE_SIGNAL_EVENTDISPATCHERLINUX_H
+#ifndef QT_LIKE_SIGNAL_EVENTDISPATCHERLINUX_HPP
+#define QT_LIKE_SIGNAL_EVENTDISPATCHERLINUX_HPP
 
-#include "EventDispatcherDefault.h"
+#include "EventDispatcherDefault.hpp"
 
 #include <atomic>
 #include <functional>
@@ -106,4 +106,4 @@ namespace QtLikeSignal
     };
 }
 
-#endif // QT_LIKE_SIGNAL_EVENTDISPATCHERLINUX_H
+#endif // QT_LIKE_SIGNAL_EVENTDISPATCHERLINUX_HPP

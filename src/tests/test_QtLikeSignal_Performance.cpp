@@ -24,21 +24,21 @@
 //! to fixed per-emit overhead. Treat the ratios as meaningful and the absolute nanoseconds as
 //! indicative. See history/PERFORMANCE-20260808.md for where the overhead goes.
 
-#include "PerfHarness.h"
+#include "PerfHarness.hpp"
 
 #include <gtest/gtest.h>
 
-#include "Object.h"
-#include "Signal.h"
-#include "Thread.h"
-
-// QtMimic, reached through its exported include directory. Its headers use .hpp so they do not
-// collide with ours. Both libraries do have a ThreadData.hpp, but each is pulled in by a quoted
-// include from its own directory, and a quoted include searches the including file's directory
-// first -- so neither library can accidentally pick up the other's.
 #include "Object.hpp"
 #include "Signal.hpp"
 #include "Thread.hpp"
+
+// QtMimic, by path rather than through its exported include directory. Both libraries now use
+// .hpp and every header this file wants exists under both names, so a bare "Object.hpp" would
+// resolve by include-path order -- which is not something a benchmark comparing the two should
+// depend on. The path says which library is meant.
+#include "../../external/QtMimic/src/Object.hpp"
+#include "../../external/QtMimic/src/Signal.hpp"
+#include "../../external/QtMimic/src/Thread.hpp"
 
 #include <atomic>
 #include <chrono>

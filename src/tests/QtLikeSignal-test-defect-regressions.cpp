@@ -7,11 +7,11 @@
 // enables one or the other, never both -- see tools/toolchain-linux.py -- so run it under each in
 // turn, since they catch disjoint classes of defect).
 #include <gtest/gtest.h>
-#include "Object.h"
-#include "Thread.h"
-#include "Timer.h"
-#include "Signal.h"
-#include "EventDispatcherDefault.h"
+#include "Object.hpp"
+#include "Thread.hpp"
+#include "Timer.hpp"
+#include "Signal.hpp"
+#include "EventDispatcherDefault.hpp"
 #include <atomic>
 #include <chrono>
 #include <future>

@@ -8,12 +8,12 @@
 #if defined( __linux__ )
 
 #include <gtest/gtest.h>
-#include "CoreApplication.h"
-#include "EventDispatcherLinux.h"
-#include "Object.h"
-#include "TestCpuTime.h"
-#include "Thread.h"
-#include "Timer.h"
+#include "CoreApplication.hpp"
+#include "EventDispatcherLinux.hpp"
+#include "Object.hpp"
+#include "TestCpuTime.hpp"
+#include "Thread.hpp"
+#include "Timer.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -253,7 +253,7 @@ TEST( EventDispatcherLinuxTest, RegisteringWhileBlockedTakesEffectWithoutOtherAc
 //! Verifies an idle loop consumes essentially no CPU -- mission stage 5's "no 100% cpu-spin".
 //!
 //! With no timers and no ready descriptors, poll() must block with no timeout. Measured as process
-//! CPU time against wall time; see TestCpuTime.h for why that is not std::clock().
+//! CPU time against wall time; see TestCpuTime.hpp for why that is not std::clock().
 TEST( EventDispatcherLinuxTest, IdleLoopDoesNotSpin )
 {
     CoreApplication app;

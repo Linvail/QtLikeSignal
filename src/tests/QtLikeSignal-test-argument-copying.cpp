@@ -9,9 +9,9 @@
 //! Modelled on QtMimic's DeepArgumentCopying tests, which cover the same contract for that library.
 
 #include <gtest/gtest.h>
-#include "Object.h"
-#include "Signal.h"
-#include "Thread.h"
+#include "Object.hpp"
+#include "Signal.hpp"
+#include "Thread.hpp"
 
 #include <atomic>
 #include <chrono>

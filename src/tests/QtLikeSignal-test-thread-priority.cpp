@@ -7,10 +7,10 @@
 //! same names -- so the two can be diffed against each other. See
 //! history/TEST-UNIFICATION-PLAN-20260810.md.
 
-#include "QtLikeSignal-test-types.h"
+#include "QtLikeSignal-test-types.hpp"
 
-#include "Thread.h"
-#include "Object.h"
+#include "Thread.hpp"
+#include "Object.hpp"
 
 #include "gtest/gtest.h"
 #include <atomic>

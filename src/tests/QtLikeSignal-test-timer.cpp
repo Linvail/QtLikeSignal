@@ -6,13 +6,13 @@
 //!
 //! Copyright 2026 by Garmin Ltd. or its subsidiaries.
 
-#include "QtLikeSignal-test-types.h"
+#include "QtLikeSignal-test-types.hpp"
 
-#include "Event.h"
-#include "Object.h"
-#include "Signal.h"
-#include "Thread.h"
-#include "Timer.h"
+#include "Event.hpp"
+#include "Object.hpp"
+#include "Signal.hpp"
+#include "Thread.hpp"
+#include "Timer.hpp"
 
 #include "gtest/gtest.h"
 #include <atomic>

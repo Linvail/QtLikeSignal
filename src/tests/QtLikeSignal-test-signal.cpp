@@ -10,12 +10,12 @@
 //! Four of them matter, and they are the four ForAI/mission-signal.md identified as the reason
 //! replacing boost::signals2 was delicate. Each one fails silently rather than at compile time.
 
-#include "QtLikeSignal-test-types.h"
+#include "QtLikeSignal-test-types.hpp"
 
 #include "gtest/gtest.h"
-#include "Object.h"
-#include "Signal.h"
-#include "Thread.h"
+#include "Object.hpp"
+#include "Signal.hpp"
+#include "Thread.hpp"
 #include <atomic>
 #include <memory>
 #include <thread>

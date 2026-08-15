@@ -3,7 +3,7 @@ def build(bld):
     kw["includes"] = ["."]
     kw["export_includes"] = ["."]
     # No boost. QtLikeSignal used to get its signal from boost::signals2; it has its own now
-    # (src/Signal.h, src/Connection.h). QtMimic still depends on boost, so the submodule stays.
+    # (src/Signal.hpp, src/Connection.hpp). QtMimic still depends on boost, so the submodule stays.
     kw["use"] = []
     kw["features"] = ["cxx", "debug-info"]
 

@@ -1,7 +1,7 @@
 #ifndef QT_LIKE_SIGNAL_THREADDATA_HPP
 #define QT_LIKE_SIGNAL_THREADDATA_HPP
 
-#include "AbstractEventDispatcher.h"
+#include "AbstractEventDispatcher.hpp"
 
 #include <atomic>
 #include <memory>

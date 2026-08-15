@@ -56,7 +56,7 @@ Direct emit, measured on one machine, `-O2`, no sanitizer, same harness shape:
 
 The remaining gap is one heap allocation per emit, measured at exactly 1.000 allocations/emit
 against Qt's 0.000. That is the snapshot vector in `Signal::Impl::emit()`. Removing it is an
-afternoon of ordinary work on `Signal.h` — see section 3 — and a code generator would not remove it,
+afternoon of ordinary work on `Signal.hpp` — see section 3 — and a code generator would not remove it,
 because the allocation has nothing to do with type erasure or with how signals are declared.
 
 Where we ARE slow is somewhere moc does not help either:

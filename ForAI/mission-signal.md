@@ -9,7 +9,7 @@ The current set of public functions of `Signal<>` is enough.
 
 ## PLAN (written 2026-08-12, no implementation done yet)
 
-This doc is for AI. Read it before touching `Signal.h` / `Signal.hpp`.
+This doc is for AI. Read it before touching `Signal.hpp` / `Signal.hpp`.
 
 ### 0. Why this is smaller than it looks, and where the danger actually is
 
@@ -21,9 +21,9 @@ The surface we use from boost is tiny. The whole dependency is:
 | `boost::signals2::connection` | `disconnect()`, `connected()`, `operator==`, default-construct, copy |
 | `connect_extended()` | QtMimic's `connectReflective()`: the slot also receives its own connection |
 
-That is it. Six functions and one handle type, in exactly two files — `src/Signal.h` and
+That is it. Six functions and one handle type, in exactly two files — `src/Signal.hpp` and
 `external/QtMimic/src/Signal.hpp` — plus the `using Connection = boost::signals2::connection` in
-`src/Global.h` and QtMimic's `Signal.hpp`.
+`src/Global.hpp` and QtMimic's `Signal.hpp`.
 
 So the typing is not the problem. The problem is that boost is currently supplying four
 *guarantees* that the rest of both libraries quietly lean on, and three of them are not obvious
@@ -139,7 +139,7 @@ files are near-identical and the second one takes an hour once the first is prov
    not yet wired in.
 2. Unit-test it directly against section 2's four guarantees, before any integration. These are the
    tests that will actually find the bugs; the existing suite exercises them only indirectly.
-3. Swap `src/Signal.h` and `src/Global.h` over. Build. Expect the failures to be concentrated in the
+3. Swap `src/Signal.hpp` and `src/Global.hpp` over. Build. Expect the failures to be concentrated in the
    stress suite.
 4. Fix. Then run the whole suite under BOTH sanitizers — `./waf configure
    --enable-thread-sanitizer-on-Linux` and the default AddressSanitizer build. A signal

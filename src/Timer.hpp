@@ -1,9 +1,9 @@
-#ifndef QT_LIKE_SIGNAL_TIMER_H
-#define QT_LIKE_SIGNAL_TIMER_H
+#ifndef QT_LIKE_SIGNAL_TIMER_HPP
+#define QT_LIKE_SIGNAL_TIMER_HPP
 
-#include "Event.h"
-#include "Object.h"
-#include "Signal.h"
+#include "Event.hpp"
+#include "Object.hpp"
+#include "Signal.hpp"
 
 #include <utility>
 
@@ -319,4 +319,4 @@ namespace QtLikeSignal
     }
 }
 
-#endif // QT_LIKE_SIGNAL_TIMER_H
+#endif // QT_LIKE_SIGNAL_TIMER_HPP

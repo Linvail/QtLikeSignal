@@ -1,8 +1,8 @@
-#ifndef QT_LIKE_SIGNAL_OBJECT_H
-#define QT_LIKE_SIGNAL_OBJECT_H
+#ifndef QT_LIKE_SIGNAL_OBJECT_HPP
+#define QT_LIKE_SIGNAL_OBJECT_HPP
 
-#include "Event.h"
-#include "Global.h"
+#include "Event.hpp"
+#include "Global.hpp"
 #include "ThreadData.hpp"
 
 #include <array>
@@ -1211,4 +1211,4 @@ namespace QtLikeSignal
     }
 }
 
-#endif // QT_LIKE_SIGNAL_OBJECT_H
+#endif // QT_LIKE_SIGNAL_OBJECT_HPP

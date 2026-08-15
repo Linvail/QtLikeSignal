@@ -1,7 +1,7 @@
-#ifndef QT_LIKE_SIGNAL_GLOBAL_H
-#define QT_LIKE_SIGNAL_GLOBAL_H
+#ifndef QT_LIKE_SIGNAL_GLOBAL_HPP
+#define QT_LIKE_SIGNAL_GLOBAL_HPP
 
-#include "Connection.h"
+#include "Connection.hpp"
 
 #include <type_traits>
 
@@ -125,7 +125,7 @@ namespace QtLikeSignal
     using NonDeduced = typename Identity<T>::type;
 
     //! Type trait detecting Signal instances. False for every T except a Signal<Args...>
-    //! specialization, which the Signal.h header specializes to true.
+    //! specialization, which the Signal.hpp header specializes to true.
     template<typename T>
     struct IsSignal : std::false_type
     {
@@ -239,4 +239,4 @@ namespace QtLikeSignal
     #endif
 }
 
-#endif // QT_LIKE_SIGNAL_GLOBAL_H
+#endif // QT_LIKE_SIGNAL_GLOBAL_HPP

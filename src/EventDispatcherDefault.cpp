@@ -1,6 +1,6 @@
-#include "EventDispatcherDefault.h"
-#include "Event.h"
-#include "Object.h"
+#include "EventDispatcherDefault.hpp"
+#include "Event.hpp"
+#include "Object.hpp"
 #include <algorithm>
 #include <unordered_set>
 

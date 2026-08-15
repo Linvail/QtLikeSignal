@@ -7,15 +7,15 @@
 //! names -- so the two can be diffed against each other. See
 //! history/TEST-UNIFICATION-PLAN-20260810.md.
 
-#include "QtLikeSignal-test-types.h"
+#include "QtLikeSignal-test-types.hpp"
 
 #include "gtest/gtest.h"
-#include "Object.h"
-#include "Signal.h"
-#include "Event.h"
-#include "CoreApplication.h"
-#include "Thread.h"
-#include "Timer.h"
+#include "Object.hpp"
+#include "Signal.hpp"
+#include "Event.hpp"
+#include "CoreApplication.hpp"
+#include "Thread.hpp"
+#include "Timer.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <mutex>

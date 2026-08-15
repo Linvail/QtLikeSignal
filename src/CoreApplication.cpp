@@ -1,14 +1,14 @@
-#include "CoreApplication.h"
+#include "CoreApplication.hpp"
 
-#include "AbstractEventDispatcher.h"
-#include "EventDispatcherDefault.h"
+#include "AbstractEventDispatcher.hpp"
+#include "EventDispatcherDefault.hpp"
 #if defined( _WIN32 )
-    #include "EventDispatcherWin32.h"
+    #include "EventDispatcherWin32.hpp"
 #elif defined( __linux__ )
-    #include "EventDispatcherLinux.h"
+    #include "EventDispatcherLinux.hpp"
 #endif
-#include "Event.h"
-#include "Thread.h"
+#include "Event.hpp"
+#include "Thread.hpp"
 
 #include <cstdio>
 

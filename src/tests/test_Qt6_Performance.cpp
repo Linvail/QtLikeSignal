@@ -4,7 +4,7 @@
 //! all three appear in a single comparison table.
 //!
 //! Qt is the thing this project is imitating, so it is the reference the other two should be read
-//! against. The scenarios, iteration counts and timing code are shared through PerfHarness.h, and
+//! against. The scenarios, iteration counts and timing code are shared through PerfHarness.hpp, and
 //! the slot bodies do the same trivial work, so the only difference between rows is the dispatch
 //! machinery.
 //!
@@ -12,8 +12,8 @@
 //! because Qt defines `emit` as an empty macro, which would turn every `sig.emit( 1 )` in the other
 //! benchmarks into a syntax error if the headers met.
 
-#include "PerfHarness.h"
-#include "Qt6PerfObjects.h"
+#include "PerfHarness.hpp"
+#include "Qt6PerfObjects.hpp"
 
 #include <gtest/gtest.h>
 

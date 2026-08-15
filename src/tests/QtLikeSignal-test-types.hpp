@@ -10,9 +10,9 @@
 //! order, so a test written against one compiles against the other. See
 //! history/TEST-UNIFICATION-PLAN-20260810.md.
 
-#include "Object.h"
-#include "Signal.h"
-#include "Thread.h"
+#include "Object.hpp"
+#include "Signal.hpp"
+#include "Thread.hpp"
 
 // ---------------------------------------------------------------------------------------------
 // Feature macros.

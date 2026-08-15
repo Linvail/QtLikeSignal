@@ -1,10 +1,10 @@
-#include "Thread.h"
+#include "Thread.hpp"
 
-#include "EventDispatcherDefault.h"
+#include "EventDispatcherDefault.hpp"
 #if defined( _WIN32 )
-    #include "EventDispatcherWin32.h"
+    #include "EventDispatcherWin32.hpp"
 #elif defined( __linux__ )
-    #include "EventDispatcherLinux.h"
+    #include "EventDispatcherLinux.hpp"
 #endif
 
 #include <cstdio>
@@ -404,14 +404,14 @@ namespace QtLikeSignal
     //! Checks if the thread is currently running. Thread-safe, and stale on return: the thread may
     //! start or finish before you act on the answer, so this reports an instant that has passed. To
     //! synchronise with a thread's end, call wait(). Qt attaches the same warning to
-    //! QThread::isRunning(). See Global.h.
+    //! QThread::isRunning(). See Global.hpp.
     bool Thread::isRunning() const
     {
         return mData->isThreadRunning();
     }
 
     //! Checks if the thread has finished execution. Thread-safe, and stale on return; see
-    //! isRunning() above and Global.h.
+    //! isRunning() above and Global.hpp.
     bool Thread::isFinished() const
     {
         return mFinishing.load();

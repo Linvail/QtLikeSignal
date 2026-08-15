@@ -1,8 +1,8 @@
-#ifndef QT_LIKE_SIGNAL_THREAD_H
-#define QT_LIKE_SIGNAL_THREAD_H
+#ifndef QT_LIKE_SIGNAL_THREAD_HPP
+#define QT_LIKE_SIGNAL_THREAD_HPP
 
-#include "Object.h"
-#include "Signal.h"
+#include "Object.hpp"
+#include "Signal.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -361,4 +361,4 @@ namespace QtLikeSignal
     }
 }
 
-#endif // QT_LIKE_SIGNAL_THREAD_H
+#endif // QT_LIKE_SIGNAL_THREAD_HPP

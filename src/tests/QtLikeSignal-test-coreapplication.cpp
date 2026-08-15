@@ -1,12 +1,12 @@
-#include "QtLikeSignal-test-types.h"
-#include "TestCpuTime.h"
+#include "QtLikeSignal-test-types.hpp"
+#include "TestCpuTime.hpp"
 
 #include "gtest/gtest.h"
-#include "CoreApplication.h"
-#include "Object.h"
-#include "Signal.h"
-#include "Thread.h"
-#include "Timer.h"
+#include "CoreApplication.hpp"
+#include "Object.hpp"
+#include "Signal.hpp"
+#include "Thread.hpp"
+#include "Timer.hpp"
 #include <atomic>
 #include <memory>
 #include <chrono>

@@ -1,6 +1,6 @@
 #include "ThreadData.hpp"
 
-#include "Event.h"
+#include "Event.hpp"
 
 #include <algorithm>
 

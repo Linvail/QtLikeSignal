@@ -1,7 +1,7 @@
-#ifndef QT_LIKE_SIGNAL_SIGNAL_H
-#define QT_LIKE_SIGNAL_SIGNAL_H
+#ifndef QT_LIKE_SIGNAL_SIGNAL_HPP
+#define QT_LIKE_SIGNAL_SIGNAL_HPP
 
-#include "Global.h"
+#include "Global.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -189,7 +189,7 @@ namespace QtLikeSignal
         }
 
         //! True if no slots are connected to this signal. Thread-safe, and stale on return: a
-        //! connect() on another thread may land before you act on the answer. See Global.h.
+        //! connect() on another thread may land before you act on the answer. See Global.hpp.
         bool empty() const
         {
             return mImpl->connectionCount() == 0;
@@ -201,7 +201,7 @@ namespace QtLikeSignal
         //! that a destroyed receiver really was disconnected rather than left as an inert slot --
         //! see ObjectDefectTest.DestroyedReceiverIsDisconnectedFromItsSender.
         //!
-        //! Stale on return, like every count taken from another thread. See Global.h.
+        //! Stale on return, like every count taken from another thread. See Global.hpp.
         std::size_t receivers() const
         {
             return mImpl->connectionCount();
@@ -566,4 +566,4 @@ namespace QtLikeSignal
     }
 }
 
-#endif // QT_LIKE_SIGNAL_SIGNAL_H
+#endif // QT_LIKE_SIGNAL_SIGNAL_HPP

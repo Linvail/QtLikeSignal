@@ -77,7 +77,7 @@ def build(bld):
         bld(
             name="moc_Qt6PerfObjects",
             rule="%s -I%s ${SRC} -o ${TGT}" % (qt6["moc"], qt6["include"]),
-            source="Qt6PerfObjects.h",
+            source="Qt6PerfObjects.hpp",
             target=moc_output,
         )
 
