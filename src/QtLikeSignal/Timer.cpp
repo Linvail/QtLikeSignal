@@ -21,7 +21,12 @@ namespace QtLikeSignal
     {
     }
 
-    //! Destroys the timer.
+    //! Destroys the timer, stopping it if it is still running.
+    //!
+    //! Matches QTimer::~QTimer(), and shares its consequence: killTimer() is thread-confined, so
+    //! destroying an *active* timer from a thread other than its own warns. That is a genuine misuse
+    //! signal, not noise -- destroy the timer on the thread it lives in. Nothing leaks either way,
+    //! because ~Object() strips this object's timer registrations regardless.
     Timer::~Timer()
     {
         // Matches QTimer::~QTimer(), which likewise stops a still-running timer. Note the consequence
@@ -35,8 +40,13 @@ namespace QtLikeSignal
         }
     }
 
-    //! Corrects a caller-supplied interval to one a timer can actually run at. Mirrors Qt's
-    //! checkInterval() in qtimer.cpp.
+    //! Corrects a caller-supplied interval to one a timer can actually run at. Returns the
+    //! interval to use, in milliseconds.
+    //!
+    //! Mirrors Qt's checkInterval() in qtimer.cpp, including its choice to correct rather than
+    //! reject: Qt treats a negative interval as a caller mistake worth reporting but not worth
+    //! cancelling the call over, so the timer still runs, just at the shortest interval there is.
+    //! Shared by every entry point that takes one so none of them can drift from the others.
     int Timer::checkInterval
         (
         const char* aCaller,  //!< Name of the calling function, for the warning text.
@@ -65,8 +75,10 @@ namespace QtLikeSignal
     //! waiting for the next start(). It restarts unconditionally, even when the value is unchanged.
     //!
     //! **Must be called from this timer's own thread whenever the timer is active**, because the
-    //! restart goes through Object::startTimer()/killTimer(); see start(). It is safe from any
-    //! thread only while the timer is inactive, where it is a plain assignment.
+    //! restart goes through Object::startTimer()/killTimer(); see start(). Calling it off-thread on
+    //! an active timer warns and leaves the old timer registered while this object reports itself
+    //! stopped. It is safe from any thread only while the timer is inactive, where it is a plain
+    //! assignment.
     void Timer::setInterval
         (
         int aMsec  //!< Interval in milliseconds.
@@ -79,19 +91,19 @@ namespace QtLikeSignal
         }
     }
 
-    //! Checks if the timer is currently active (running).
+    //! Checks whether the timer is currently active (running).
     bool Timer::isActive() const
     {
         return mActive;
     }
 
-    //! Checks if the timer is single-shot.
+    //! Checks whether the timer stops itself after firing once.
     bool Timer::isSingleShot() const
     {
         return mSingleShot;
     }
 
-    //! Sets whether the timer is single-shot.
+    //! Sets whether the timer stops itself after firing once.
     void Timer::setSingleShot
         (
         bool aSingleShot  //!< True for single-shot, false for periodic.
@@ -100,20 +112,20 @@ namespace QtLikeSignal
         mSingleShot = aSingleShot;
     }
 
-    //! Gets the unique ID of the internal timer, or -1 if inactive.
+    //! Gets the underlying Object timer id, or -1 while inactive.
     int Timer::timerId() const
     {
         return mTimerId;
     }
 
-    //! Gets a subscription-only view of the signal emitted each time the interval elapses (Qt-like
-    //! QTimer::timeout()). A view can be connected to but not emitted.
+    //! Gets a subscription-only view of the signal emitted each time the interval elapses
+    //! (Qt-like QTimer::timeout()). A view can be connected to but not emitted.
     SignalView<>& Timer::getTimeout() const
     {
         return mTimeout.view();
     }
 
-    //! Starts or restarts the timer with specified interval in milliseconds.
+    //! Starts or restarts the timer with a new interval.
     void Timer::start
         (
         int aMsec  //!< Interval in milliseconds.
@@ -123,7 +135,7 @@ namespace QtLikeSignal
         start();
     }
 
-    //! Starts or restarts the timer using the existing interval.
+    //! Starts or restarts the timer using the interval already configured.
     //!
     //! **Must be called from this timer's own thread**; see start(int).
     void Timer::start()
@@ -150,7 +162,7 @@ namespace QtLikeSignal
         mActive = ( mTimerId != -1 );
     }
 
-    //! Stops the timer.
+    //! Stops the timer. Does nothing if it is not running.
     //!
     //! **Must be called from this timer's own thread**, because it goes through
     //! Object::killTimer(). Calling it from elsewhere warns and leaves the timer running.
@@ -164,7 +176,7 @@ namespace QtLikeSignal
         }
     }
 
-    //! Internal timer event handler.
+    //! Delivers one expiry: emits timeout, having first stopped a single-shot timer.
     void Timer::timerEvent
         (
         TimerEvent* aEvent  //!< Timer event.

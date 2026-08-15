@@ -11,9 +11,8 @@
 namespace QtMimic
 {
 
-    //! @brief Constructor - creates an inactive timer living in @p aThread.
-    //! @param aThread The Thread this timer lives in; null (the default) means the calling thread,
-    //!        exactly as for Object.
+    //! Constructs an inactive timer living in @p aThread, or in the calling thread if none is
+    //! given. See Object's constructor.
     Timer::Timer
         (
         Thread* aThread
@@ -22,7 +21,7 @@ namespace QtMimic
     {
     }
 
-    //! @brief Destructor - stops the timer if it is still running.
+    //! Destroys the timer, stopping it if it is still running.
     //!
     //! Matches QTimer::~QTimer(), and shares its consequence: killTimer() is thread-confined, so
     //! destroying an *active* timer from a thread other than its own warns. That is a genuine misuse
@@ -36,13 +35,13 @@ namespace QtMimic
         }
     }
 
-    //! @brief Correct a caller-supplied interval to one a timer can actually run at.
+    //! Corrects a caller-supplied interval to one a timer can actually run at. Returns the
+    //! interval to use, in milliseconds.
     //!
     //! Mirrors Qt's checkInterval() in qtimer.cpp, including its choice to correct rather than
     //! reject: Qt treats a negative interval as a caller mistake worth reporting but not worth
     //! cancelling the call over, so the timer still runs, just at the shortest interval there is.
     //! Shared by every entry point that takes one so none of them can drift from the others.
-    //! @return the interval to use, in milliseconds.
     int Timer::checkInterval
         (
         const char* aCaller,  //!< Name of the calling function, for the warning text.
@@ -59,13 +58,13 @@ namespace QtMimic
         return aMsec;
     }
 
-    //! @return the interval in milliseconds.
+    //! Gets the timer interval in milliseconds.
     int Timer::interval() const
     {
         return mInterval;
     }
 
-    //! @brief Set the interval, restarting a running timer so the new value takes effect at once.
+    //! Sets the interval, restarting a running timer so the new value takes effect at once.
     //!
     //! Matches QTimer::setInterval(), which likewise kills and restarts an active timer rather than
     //! waiting for the next start(). It restarts unconditionally, even when the value is unchanged.
@@ -87,19 +86,19 @@ namespace QtMimic
         }
     }
 
-    //! @return true while the timer is running.
+    //! Checks whether the timer is currently active (running).
     bool Timer::isActive() const
     {
         return mActive;
     }
 
-    //! @return true if the timer stops itself after firing once.
+    //! Checks whether the timer stops itself after firing once.
     bool Timer::isSingleShot() const
     {
         return mSingleShot;
     }
 
-    //! @brief Set whether the timer stops itself after firing once.
+    //! Sets whether the timer stops itself after firing once.
     void Timer::setSingleShot
         (
         bool aSingleShot  //!< True for single-shot, false for repeating.
@@ -108,20 +107,20 @@ namespace QtMimic
         mSingleShot = aSingleShot;
     }
 
-    //! @return the underlying Object timer id, or -1 while inactive.
+    //! Gets the underlying Object timer id, or -1 while inactive.
     int Timer::timerId() const
     {
         return mTimerId;
     }
 
-    //! @brief Return a view of the signal emitted each time the interval elapses (Qt-like
-    //! QTimer::timeout()). A view can be connected to but not emitted.
+    //! Gets a subscription-only view of the signal emitted each time the interval elapses
+    //! (Qt-like QTimer::timeout()). A view can be connected to but not emitted.
     SignalView<>& Timer::getTimeout() const
     {
         return mTimeout.view();
     }
 
-    //! @brief Start or restart the timer with a new interval.
+    //! Starts or restarts the timer with a new interval.
     void Timer::start
         (
         int aMsec  //!< Interval in milliseconds.
@@ -131,7 +130,7 @@ namespace QtMimic
         start();
     }
 
-    //! @brief Start or restart the timer using the interval already configured.
+    //! Starts or restarts the timer using the interval already configured.
     //!
     //! **Must be called from this timer's own thread**; see start(int).
     void Timer::start()
@@ -158,7 +157,7 @@ namespace QtMimic
         mActive = ( mTimerId != -1 );
     }
 
-    //! @brief Stop the timer. Does nothing if it is not running.
+    //! Stops the timer. Does nothing if it is not running.
     //!
     //! **Must be called from this timer's own thread**, because it goes through
     //! Object::killTimer(). Calling it from elsewhere warns and leaves the timer running.
@@ -172,7 +171,7 @@ namespace QtMimic
         }
     }
 
-    //! @brief Deliver one expiry: emit timeout, having first stopped a single-shot timer.
+    //! Delivers one expiry: emits timeout, having first stopped a single-shot timer.
     void Timer::timerEvent
         (
         TimerEvent* aEvent  //!< The expiry being delivered.
