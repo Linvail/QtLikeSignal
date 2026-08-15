@@ -10,8 +10,8 @@
 #include "QtLikeSignal-test-types.hpp"
 
 #include "gtest/gtest.h"
-#include "Thread.hpp"
-#include "Signal.hpp"
+#include "QtLikeSignal/Thread.hpp"
+#include "QtLikeSignal/Signal.hpp"
 #include <chrono>
 #include <future>
 #include <thread>

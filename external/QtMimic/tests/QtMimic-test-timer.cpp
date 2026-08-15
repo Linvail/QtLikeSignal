@@ -8,10 +8,10 @@
 
 #include "QtMimic-test-types.hpp"
 
-#include "Object.hpp"
-#include "Thread.hpp"
-#include "Timer.hpp"
-#include "Event.hpp"
+#include "QtMimic/Object.hpp"
+#include "QtMimic/Thread.hpp"
+#include "QtMimic/Timer.hpp"
+#include "QtMimic/Event.hpp"
 
 #include "gtest/gtest.h"
 #include <atomic>

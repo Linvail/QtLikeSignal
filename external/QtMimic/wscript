@@ -6,20 +6,23 @@ def build(bld):
     kw["use"] = []
     kw["features"] = ["cxx"]
     kw["source"] = bld.path.ant_glob(
-        "src/*.cpp",
+        "src/QtMimic/*.cpp",
         excl=[
-            "src/ThreadWin.cpp",
-            "src/ThreadPosix.cpp",
-            "src/EventDispatcherWin32.cpp",
-            "src/EventDispatcherLinux.cpp",
+            "src/QtMimic/ThreadWin.cpp",
+            "src/QtMimic/ThreadPosix.cpp",
+            "src/QtMimic/EventDispatcherWin32.cpp",
+            "src/QtMimic/EventDispatcherLinux.cpp",
         ],
     )
     if bld.env.DEST_OS == "win32":
-        kw["source"].append(bld.path.find_node("src/ThreadWin.cpp"))
-        kw["source"].append(bld.path.find_node("src/EventDispatcherWin32.cpp"))
+        kw["source"].append(bld.path.find_node("src/QtMimic/ThreadWin.cpp"))
+        kw["source"].append(bld.path.find_node("src/QtMimic/EventDispatcherWin32.cpp"))
     elif bld.env.DEST_OS == "linux":
-        kw["source"].append(bld.path.find_node("src/ThreadPosix.cpp"))
-        kw["source"].append(bld.path.find_node("src/EventDispatcherLinux.cpp"))
+        kw["source"].append(bld.path.find_node("src/QtMimic/ThreadPosix.cpp"))
+        kw["source"].append(bld.path.find_node("src/QtMimic/EventDispatcherLinux.cpp"))
+    # src/QtMimic/ holds the sources; src/ is what goes on the include path, so every include of a
+    # QtMimic header is written "QtMimic/Object.hpp". All thirteen header names also exist in
+    # QtLikeSignal, so an unprefixed include resolves by include-path order rather than by intent.
     kw["includes"] = "src"
     kw["export_includes"] = "src"
 

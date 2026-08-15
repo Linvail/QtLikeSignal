@@ -19,27 +19,27 @@ norm() {
     | sed -e 's|//!.*||' -e 's|//.*||' \
     | sed -e 's/QtLikeSignal/LIB/g' -e 's/QtMimic/LIB/g' \
           -e 's/QT_LIKE_SIGNAL_/LIBGUARD_/g' -e 's/QT_MIMIC_/LIBGUARD_/g' \
-          -e 's/\.hpp/.h/g' -e 's/_HPP/_H/g' -e 's/_HPP/_H/g' \
+          -e 's/\.hpp/.h/g' -e 's/_HPP/_H/g' \
           -e 's/[[:space:]]\+$//' \
     | grep -v '^[[:space:]]*$'
 }
 for stem in AbstractEventDispatcher Connection CoreApplication Event EventDispatcherDefault EventDispatcherLinux EventDispatcherWin32 Global Object Signal Thread ThreadData Timer; do
   for ext_q in h hpp; do
-    a="src/$stem.$ext_q"; [ -f "$a" ] && break
+    a="src/QtLikeSignal/$stem.$ext_q"; [ -f "$a" ] && break
   done
-  b="external/QtMimic/src/$stem.hpp"
+  b="external/QtMimic/src/QtMimic/$stem.hpp"
   if [ -f "$a" ] && [ -f "$b" ]; then
     n=$(diff <(norm "$a") <(norm "$b") | grep -c '^[<>]')
     printf '%-28s %5s\n' "$stem.h" "$n"
   fi
-  a="src/$stem.cpp"; b="external/QtMimic/src/$stem.cpp"
+  a="src/QtLikeSignal/$stem.cpp"; b="external/QtMimic/src/QtMimic/$stem.cpp"
   if [ -f "$a" ] && [ -f "$b" ]; then
     n=$(diff <(norm "$a") <(norm "$b") | grep -c '^[<>]')
     printf '%-28s %5s\n' "$stem.cpp" "$n"
   fi
 done
 for stem in ThreadPosix ThreadWin; do
-  a="src/$stem.cpp"; b="external/QtMimic/src/$stem.cpp"
+  a="src/QtLikeSignal/$stem.cpp"; b="external/QtMimic/src/QtMimic/$stem.cpp"
   n=$(diff <(norm "$a") <(norm "$b") | grep -c '^[<>]')
   printf '%-28s %5s\n' "$stem.cpp" "$n"
 done

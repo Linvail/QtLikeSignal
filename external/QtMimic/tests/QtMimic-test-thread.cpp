@@ -8,8 +8,8 @@
 #include "QtMimic-test-types.hpp"
 
 #include "gtest/gtest.h"
-#include "Thread.hpp"
-#include "Signal.hpp"
+#include "QtMimic/Thread.hpp"
+#include "QtMimic/Signal.hpp"
 #include <chrono>
 #include <future>
 #include <thread>

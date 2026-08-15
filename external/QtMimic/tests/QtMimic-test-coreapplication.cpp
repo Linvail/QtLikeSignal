@@ -6,11 +6,11 @@
 #include "TestCpuTime.hpp"
 
 #include "gtest/gtest.h"
-#include "CoreApplication.hpp"
-#include "Object.hpp"
-#include "Signal.hpp"
-#include "Thread.hpp"
-#include "Timer.hpp"
+#include "QtMimic/CoreApplication.hpp"
+#include "QtMimic/Object.hpp"
+#include "QtMimic/Signal.hpp"
+#include "QtMimic/Thread.hpp"
+#include "QtMimic/Timer.hpp"
 #include <atomic>
 #include <memory>
 #include <chrono>

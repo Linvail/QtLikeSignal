@@ -13,9 +13,9 @@
 #include "QtLikeSignal-test-types.hpp"
 
 #include "gtest/gtest.h"
-#include "Object.hpp"
-#include "Signal.hpp"
-#include "Thread.hpp"
+#include "QtLikeSignal/Object.hpp"
+#include "QtLikeSignal/Signal.hpp"
+#include "QtLikeSignal/Thread.hpp"
 #include <atomic>
 #include <memory>
 #include <thread>

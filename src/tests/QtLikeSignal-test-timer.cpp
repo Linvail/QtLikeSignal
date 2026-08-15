@@ -8,11 +8,11 @@
 
 #include "QtLikeSignal-test-types.hpp"
 
-#include "Event.hpp"
-#include "Object.hpp"
-#include "Signal.hpp"
-#include "Thread.hpp"
-#include "Timer.hpp"
+#include "QtLikeSignal/Event.hpp"
+#include "QtLikeSignal/Object.hpp"
+#include "QtLikeSignal/Signal.hpp"
+#include "QtLikeSignal/Thread.hpp"
+#include "QtLikeSignal/Timer.hpp"
 
 #include "gtest/gtest.h"
 #include <atomic>

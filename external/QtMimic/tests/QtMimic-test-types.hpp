@@ -7,8 +7,8 @@
 #ifndef QT_MIMIC_TEST_TYPES
 #define QT_MIMIC_TEST_TYPES
 
-#include "Object.hpp"
-#include "Thread.hpp"
+#include "QtMimic/Object.hpp"
+#include "QtMimic/Thread.hpp"
 
 // ---------------------------------------------------------------------------------------------
 // Feature macros.

@@ -8,12 +8,12 @@
 #if defined( __linux__ )
 
 #include <gtest/gtest.h>
-#include "CoreApplication.hpp"
-#include "EventDispatcherLinux.hpp"
-#include "Object.hpp"
+#include "QtMimic/CoreApplication.hpp"
+#include "QtMimic/EventDispatcherLinux.hpp"
+#include "QtMimic/Object.hpp"
 #include "TestCpuTime.hpp"
-#include "Thread.hpp"
-#include "Timer.hpp"
+#include "QtMimic/Thread.hpp"
+#include "QtMimic/Timer.hpp"
 
 #include <atomic>
 #include <chrono>

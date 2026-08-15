@@ -29,10 +29,10 @@
 
 #include <gtest/gtest.h>
 
-#include "Object.hpp"
+#include "QtLikeSignal/Object.hpp"
 #include "PerfHarness.hpp"
-#include "Signal.hpp"
-#include "Thread.hpp"
+#include "QtLikeSignal/Signal.hpp"
+#include "QtLikeSignal/Thread.hpp"
 
 #include <chrono>
 #include <memory>

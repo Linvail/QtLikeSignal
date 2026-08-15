@@ -8,12 +8,12 @@
 #include "QtMimic-test-types.hpp"
 
 #include "gtest/gtest.h"
-#include "Object.hpp"
-#include "Signal.hpp"
-#include "Event.hpp"
-#include "CoreApplication.hpp"
-#include "Thread.hpp"
-#include "Timer.hpp"
+#include "QtMimic/Object.hpp"
+#include "QtMimic/Signal.hpp"
+#include "QtMimic/Event.hpp"
+#include "QtMimic/CoreApplication.hpp"
+#include "QtMimic/Thread.hpp"
+#include "QtMimic/Timer.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <mutex>

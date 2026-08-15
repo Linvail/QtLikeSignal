@@ -13,9 +13,9 @@
 #include "QtMimic-test-types.hpp"
 
 #include "gtest/gtest.h"
-#include "Object.hpp"
-#include "Signal.hpp"
-#include "Thread.hpp"
+#include "QtMimic/Object.hpp"
+#include "QtMimic/Signal.hpp"
+#include "QtMimic/Thread.hpp"
 #include <atomic>
 #include <memory>
 #include <thread>

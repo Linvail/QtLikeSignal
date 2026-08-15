@@ -10,9 +10,9 @@
 //! order, so a test written against one compiles against the other. See
 //! history/TEST-UNIFICATION-PLAN-20260810.md.
 
-#include "Object.hpp"
-#include "Signal.hpp"
-#include "Thread.hpp"
+#include "QtLikeSignal/Object.hpp"
+#include "QtLikeSignal/Signal.hpp"
+#include "QtLikeSignal/Thread.hpp"
 
 // ---------------------------------------------------------------------------------------------
 // Feature macros.

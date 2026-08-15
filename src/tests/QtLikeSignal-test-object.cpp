@@ -10,12 +10,12 @@
 #include "QtLikeSignal-test-types.hpp"
 
 #include "gtest/gtest.h"
-#include "Object.hpp"
-#include "Signal.hpp"
-#include "Event.hpp"
-#include "CoreApplication.hpp"
-#include "Thread.hpp"
-#include "Timer.hpp"
+#include "QtLikeSignal/Object.hpp"
+#include "QtLikeSignal/Signal.hpp"
+#include "QtLikeSignal/Event.hpp"
+#include "QtLikeSignal/CoreApplication.hpp"
+#include "QtLikeSignal/Thread.hpp"
+#include "QtLikeSignal/Timer.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <mutex>

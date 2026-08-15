@@ -28,17 +28,17 @@
 
 #include <gtest/gtest.h>
 
-#include "Object.hpp"
-#include "Signal.hpp"
-#include "Thread.hpp"
+#include "QtLikeSignal/Object.hpp"
+#include "QtLikeSignal/Signal.hpp"
+#include "QtLikeSignal/Thread.hpp"
 
 // QtMimic, by path rather than through its exported include directory. Both libraries now use
 // .hpp and every header this file wants exists under both names, so a bare "Object.hpp" would
 // resolve by include-path order -- which is not something a benchmark comparing the two should
 // depend on. The path says which library is meant.
-#include "../../external/QtMimic/src/Object.hpp"
-#include "../../external/QtMimic/src/Signal.hpp"
-#include "../../external/QtMimic/src/Thread.hpp"
+#include "QtMimic/Object.hpp"
+#include "QtMimic/Signal.hpp"
+#include "QtMimic/Thread.hpp"
 
 #include <atomic>
 #include <chrono>
