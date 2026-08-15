@@ -23,15 +23,14 @@ namespace QtMimic
 
     std::atomic<CoreApplication*> CoreApplication::sInstance { nullptr };
 
-    //! @brief Constructor - adopt the calling (main) thread, with no command-line arguments.
+    //! Constructs the application and adopts the calling thread as the main thread.
     CoreApplication::CoreApplication()
         : Object()
     {
         adoptMainThread();
     }
 
-    //! @brief Constructor - adopt the calling (main) thread and capture command-line arguments.
-    //! Creates a singleton CoreApplication instance. There can be at most one instance.
+    //! Constructs the application, capturing the command line, and adopts the calling thread.
     CoreApplication::CoreApplication
         (
         int aArgc,
@@ -49,12 +48,10 @@ namespace QtMimic
         adoptMainThread();
     }
 
-    //! @brief Turn the calling thread into the main Thread and bind this application to it.
+    //! Turns the calling thread into the main Thread and binds this application to it.
     //!
-    //! Shared by both constructors. The calling thread is already adopted by the time this runs --
-    //! this object's own Object base asked for currentThread() a moment ago, which adopted it if
-    //! nobody had -- so all that remains is to record it and give it the platform dispatcher its
-    //! loop needs.
+    //! Shared by both constructors. The calling thread is already adopted by the time this runs, so
+    //! all that remains is to record it and give it the platform dispatcher its loop needs.
     void CoreApplication::adoptMainThread()
     {
         // Qt asserts here ("there should be only one application object"). Warn rather than abort:
@@ -89,7 +86,7 @@ namespace QtMimic
         mMainThread->mData->setDispatcher( mDispatcher );
     }
 
-    //! @brief Destructor - drains pending deferred deletes and clears the singleton instance.
+    //! Destroys the application, releasing the main thread it adopted.
     CoreApplication::~CoreApplication()
     {
         // Drain deferred deletes before letting go of the dispatcher, mirroring what
@@ -121,14 +118,18 @@ namespace QtMimic
         sInstance.compare_exchange_strong( self, nullptr );
     }
 
-    //! @brief Get the single CoreApplication instance (or nullptr if none exists).
+    //! Returns the global application instance, or nullptr if none has been constructed.
+    //! Thread-safe.
     CoreApplication* CoreApplication::instance()
     {
         return sInstance.load();
     }
 
-    //! @brief Run the main event loop until quit() or exit() is called.
-    //! @return The exit code passed to exit() (0 if quit() was used).
+    //! Runs the main thread's event loop until exit()/quit() is called; returns the exit code.
+    //!
+    //! **Must be called from the thread the application was constructed on**, and must not be
+    //! nested. Both are rejected with a warning and a -1 return, matching Qt, which refuses the
+    //! same two ("Must be called from the main thread" / "The event loop is already running").
     int CoreApplication::exec()
     {
         if( !mMainThread )
@@ -168,8 +169,15 @@ namespace QtMimic
         return returnCode;
     }
 
-    //! @brief Stop the main event loop with the given exit code. Thread-safe.
-    //! @param aCode The exit code to return from exec().
+    //! Stops the main event loop, making exec() return @p aReturnCode. Thread-safe.
+    //!
+    //! Static, so any thread can ask the application to stop without holding a pointer to it. Does
+    //! nothing if no application exists.
+    //!
+    //! **Thread-safety note:** may be called from any thread. Thread-safety is not guaranteed if the
+    //! CoreApplication object is being destroyed at the same time -- destroy it only after the
+    //! threads that may call this have stopped. Qt states the same caveat for QCoreApplication::quit()
+    //! and it has the same cause: the instance pointer is loaded, and then dereferenced.
     void CoreApplication::exit
         (
         int aReturnCode
@@ -182,14 +190,24 @@ namespace QtMimic
         }
     }
 
-    //! @brief Convenience for exit(0): stop the main event loop, returning 0 from exec(). Thread-safe.
+    //! Convenience for exit(0): stops the main event loop, returning 0 from exec(). Thread-safe.
+    //!
+    //! **Thread-safety note:** may be called from any thread. Thread-safety is not guaranteed if the
+    //! CoreApplication object is being destroyed at the same time; see exit(), which this forwards
+    //! to and which carries the reasoning.
     void CoreApplication::quit()
     {
         exit( 0 );
     }
 
-    //! @brief Queue a task onto the main thread's event loop. Thread-safe. Static convenience
-    //! method; operates on the singleton CoreApplication instance (if one exists).
+    //! Queues a task onto the main thread's event loop. Thread-safe.
+    //!
+    //! Static, like exit()/quit(), so any thread can hand work to the main loop without holding a
+    //! pointer to the application. Does nothing if no application exists. The task is dropped if the
+    //! main thread has no dispatcher, exactly as Thread::post() reports.
+    //!
+    //! **Thread-safety note:** may be called from any thread. Thread-safety is not guaranteed if the
+    //! CoreApplication object is being destroyed at the same time; see exit() for why.
     void CoreApplication::post
         (
         std::function<void()> aTask

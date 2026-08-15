@@ -177,12 +177,11 @@ namespace QtLikeSignal
     //! CoreApplication object is being destroyed at the same time -- destroy it only after the
     //! threads that may call this have stopped. Qt states the same caveat for QCoreApplication::quit()
     //! and it has the same cause: the instance pointer is loaded, and then dereferenced.
-    //!
-    //! **This is deliberately a stronger promise than Qt's**, which is worth stating so nobody
-    //! "corrects" it. Qt documents QCoreApplication::exit() as *not* thread-safe and tells the
-    //! caller to use quit() instead -- because Qt's exit() walks the main thread's eventLoops list
-    //! from the calling thread. Ours does not: it stores two atomics and calls the dispatcher, which
-    //! is locked. There is nothing here for another thread to trip over.
+    // This is deliberately a stronger promise than Qt's, which is worth stating so nobody
+    // "corrects" it. Qt documents QCoreApplication::exit() as *not* thread-safe and tells the
+    // caller to use quit() instead -- because Qt's exit() walks the main thread's eventLoops list
+    // from the calling thread. Ours does not: it stores two atomics and calls the dispatcher, which
+    // is locked. There is nothing here for another thread to trip over.
     void CoreApplication::exit
         (
         int aReturnCode  //!< Value exec() should return.
@@ -200,10 +199,9 @@ namespace QtLikeSignal
     //! **Thread-safety note:** may be called from any thread. Thread-safety is not guaranteed if the
     //! CoreApplication object is being destroyed at the same time; see exit(), which this forwards
     //! to and which carries the reasoning.
-    //!
-    //! Unlike Qt's quit(), this does not post an event to reach the main thread. Qt needs to,
-    //! because its exit() is not safe to call from elsewhere; ours is, so a queued hop would only
-    //! delay every quit() behind whatever work is already in the queue.
+    // Unlike Qt's quit(), this does not post an event to reach the main thread. Qt needs to,
+    // because its exit() is not safe to call from elsewhere; ours is, so a queued hop would only
+    // delay every quit() behind whatever work is already in the queue.
     void CoreApplication::quit()
     {
         exit( 0 );
