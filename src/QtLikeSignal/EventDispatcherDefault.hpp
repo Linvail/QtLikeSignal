@@ -112,9 +112,9 @@ namespace QtLikeSignal
         //! **Called with mMutex released, on every path.** It may run mWakeCallback, which is user
         //! code, and user code that touches the dispatcher it was woken by is the obvious thing to
         //! write -- so calling it under a non-recursive mutex is a deadlock waiting for the first
-        //! caller who does the obvious thing. postEvent() always released the lock first; the three
-        //! timer paths did not, which made the hazard depend on which operation happened to wake
-        //! the loop.
+        //! caller who does the obvious thing.
+        // postEvent() always released the lock first; the three timer paths did not, which made the
+        // hazard depend on which operation happened to wake the loop.
         virtual void wakeWaiter();
 
         //! Drains and dispatches OS/platform events. Called once per processEvents() pass with
@@ -189,9 +189,9 @@ namespace QtLikeSignal
         //! A chain rather than one frame because passes nest: a handler may run a nested
         //! processEvents(), which is an ordinary thing for user code to do, and a cancellation
         //! raised inside the nested pass must still reach the outer pass's batches -- the outer pass
-        //! will go on dispatching them after the inner one returns. Publishing a single frame would
-        //! make the inner pass hide the outer one and then un-publish it on the way out, which is
-        //! worse than not publishing at all, because it looks safe.
+        //! will go on dispatching them after the inner one returns.
+        // Publishing a single frame would make the inner pass hide the outer one and then un-publish
+        // it on the way out, which is worse than not publishing at all, because it looks safe.
         //!
         //! Guarded by mMutex, as is every access to any entry of any frame, so ownership of each
         //! event passes to exactly one party: whoever clears the slot first has it, and the other
