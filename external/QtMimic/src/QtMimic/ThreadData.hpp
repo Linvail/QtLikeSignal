@@ -30,8 +30,6 @@ namespace QtMimic
     class Thread;
 
     //----------------------------------------------------------------
-    //! @class ThreadData
-    //!
     //! Per-thread state owning that thread's event dispatcher.
     //!
     //! Handed out by Object::threadData()/Thread::threadData() as an opaque handle. The dispatcher
@@ -151,8 +149,6 @@ namespace QtMimic
     };
 
     //----------------------------------------------------------------
-    //! @class Affinity
-    //!
     //! One Object's thread affinity, held in a separately-allocated box so it can be read from any
     //! thread at any time -- including after the Object it describes has been destroyed.
     //!

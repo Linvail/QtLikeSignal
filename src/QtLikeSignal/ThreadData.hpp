@@ -30,23 +30,32 @@ namespace QtLikeSignal
     class Object;
     class Thread;
 
+    //----------------------------------------------------------------
     //! Per-thread state owning that thread's event dispatcher.
     //!
-    //! Handed out by Object::threadData()/Thread::threadData() as an opaque handle. The dispatcher is
-    //! held by shared_ptr and only ever reachable through dispatcher(), which hands back a *strong*
-    //! reference. That is what makes cross-thread use safe: a thread finishing can drop its dispatcher
-    //! at any moment, and an atomic raw pointer would only have made the pointer load safe, not the
-    //! object's lifetime -- the owning thread could free it between another thread's load and its call.
-    //! Holding a strong reference for the duration of the call keeps it alive until that caller is done.
+    //! Handed out by Object::threadData()/Thread::threadData() as an opaque handle. The dispatcher
+    //! is held by shared_ptr and only ever reachable through dispatcher(), which hands back a
+    //! *strong* reference. That is what makes cross-thread use safe: a thread finishing can drop its
+    //! dispatcher at any moment, and an atomic raw pointer would only have made the pointer load
+    //! safe, not the object's lifetime -- the owning thread could free it between another thread's
+    //! load and its call. Holding a strong reference for the duration of the call keeps it alive
+    //! until that caller is done.
     //!
-    //! Also outlives its Thread: mThread is set once by Thread's constructor and nulled by ~Thread(),
-    //! mirroring Qt's QThreadData/QObject::thread(). Anything that only holds this ThreadData (an
-    //! Object's Affinity box, notably) sees thread() == nullptr once the owning Thread is gone, rather
-    //! than dereferencing a dangling Thread*.
+    //! Also outlives its Thread: mThread is set once by Thread's constructor and nulled by
+    //! ~Thread(), so anything holding only this data sees thread() == nullptr rather than a dangling
+    //! Thread*. Capturing a raw Thread* instead is not safe: an adopted Thread is destroyed at
+    //! native thread exit, and a user-owned one whenever its owner likes.
+    //!
+    //! Lifetime is managed with shared_ptr rather than Qt's intrusive refcount. Note this class
+    //! deliberately does NOT own its Thread: Qt's QThreadData does own the adopted QThread and
+    //! deletes it, which forces Qt into a documented refcount hack ("the refcount will become
+    //! negative, but that's acceptable") to break the resulting cycle. Nulling the back-pointer
+    //! achieves the same safety with no cycle to break.
     //!
     //! Access is private on purpose: a writable dispatcher handle would let outside code redirect a
-    //! running loop or drop a dispatcher still in use. Only the three classes that legitimately manage
-    //! a thread's lifecycle are granted access.
+    //! running loop or drop a dispatcher still in use. Only the classes that legitimately manage a
+    //! thread's lifecycle are granted access.
+    //----------------------------------------------------------------
     struct ThreadData
     {
     public:
@@ -89,13 +98,8 @@ namespace QtLikeSignal
 
         //! Hands back the dispatcher to post @p aEvent to, or parks the event and returns nullptr.
         //!
-        //! One call rather than "ask, then decide", because the answer must not change in between:
-        //! a thread that installs its dispatcher a moment after we looked would leave the event
-        //! parked forever, and one that drops it a moment after would have us post into a dispatcher
-        //! that is going away. Both are decided under the same lock here.
-        //!
-        //! Ownership of @p aEvent passes to this ThreadData when it is parked, and stays with the
-        //! caller when a dispatcher comes back.
+        //! One call rather than "ask, then decide", so the answer cannot change in between.
+        //! Ownership of @p aEvent passes to this ThreadData when it is parked.
         std::shared_ptr<AbstractEventDispatcher> dispatcherOrPark
             (
             Object* aReceiver,
@@ -108,16 +112,19 @@ namespace QtLikeSignal
             Object* aReceiver
             );
 
-        std::atomic<Thread*> mThread { nullptr };                 //!< Owning thread; nulled by ~Thread().
+        std::atomic<Thread*> mThread { nullptr };  //!< Owning thread; nulled by ~Thread().
 
-        //! True while the owning thread's body is executing. Lives here rather than in Thread so
-        //! that "is this object's thread still running?" can be answered from any thread without
-        //! dereferencing a Thread* that a concurrent ~Thread() could free -- the whole point of
-        //! ThreadData outliving its Thread. Thread::isRunning() reads through to this, so there is
-        //! one source of truth rather than a mirror that could drift.
+        //! True while the owning thread's body is executing.
+        //!
+        //! Lives here rather than in Thread so that "is this object's thread still running?" can be
+        //! answered from any thread without dereferencing a Thread* that a concurrent ~Thread()
+        //! could free -- the whole point of ThreadData outliving its Thread. Thread::isRunning()
+        //! reads through to this, so there is one source of truth rather than a mirror that could
+        //! drift.
         std::atomic<bool> mThreadRunning { false };
-        mutable std::mutex mDispatcherMutex;                      //!< Guards mDispatcher and mParkedEvents.
-        std::shared_ptr<AbstractEventDispatcher> mDispatcher;    //!< This thread's dispatcher, if any.
+
+        mutable std::mutex mDispatcherMutex;                    //!< Guards mDispatcher.
+        std::shared_ptr<AbstractEventDispatcher> mDispatcher;  //!< This thread's dispatcher, if any.
 
         //! One event waiting for this thread to have a dispatcher at all.
         struct ParkedEvent
@@ -129,14 +136,9 @@ namespace QtLikeSignal
         //! Events moved here by Object::moveToThread() before this thread had a dispatcher.
         //!
         //! The canonical idiom builds a Thread, moves objects onto it, and only then calls start()
-        //! -- and a Thread has no dispatcher until its run body creates one. Anything already posted
-        //! for a migrating object would otherwise have nowhere to go: dropping it loses work
-        //! silently, and leaving it behind runs it on the thread the object just left, which is the
-        //! defect the migration exists to fix.
-        //!
-        //! Qt has no equivalent because its queue lives in QThreadData rather than in the
-        //! dispatcher, so a target thread always has somewhere to put events. This is the smallest
-        //! version of that: a holding area the dispatcher drains the moment it is installed.
+        //! -- and a Thread has no dispatcher until its run body creates one. Dropping the events
+        //! loses work silently; leaving them behind runs them on the thread the object just left.
+        //! The dispatcher drains this the moment it is installed.
         std::vector<ParkedEvent> mParkedEvents;
 
         friend class Object;
@@ -148,24 +150,22 @@ namespace QtLikeSignal
     };
 
     //----------------------------------------------------------------
-    //! @class Affinity
-    //!
     //! One Object's thread affinity, held in a separately-allocated box so it can be read from any
     //! thread at any time -- including after the Object it describes has been destroyed.
     //!
-    //! Why this exists, in one sentence: a queued connection has to resolve the receiver's affinity at
-    //! EMIT time (that is what makes moveToThread() affect connections made before it), but the
-    //! receiver may be destroyed concurrently, and boost::signals2 does not make disconnect() wait for
-    //! an in-flight emit -- so reading thread()/threadData() straight off the receiver Object is a
-    //! use-after-free. The connect() wrapper's weak_ptr<int> life-token check narrows that window but
-    //! does not close it: a successful lock() only proves ~Object() had not yet reached mLife.reset()
-    //! at the moment of the check, not that it cannot start immediately afterward, concurrently with
-    //! this thread going on to dereference the receiver's own mAffinity/mutex/atomic members.
+    //! Why this exists, in one sentence: a queued connection has to resolve the receiver's affinity
+    //! at EMIT time (that is what makes moveToThread() affect connections made before it), but the
+    //! receiver may be destroyed concurrently, and disconnect() does not wait
+    //! for an in-flight emit -- so reading thread()/threadData() straight off the receiver Object is
+    //! a use-after-free. The connect() wrapper's weak_ptr<int> life-token check narrows that window
+    //! but does not close it: a successful lock() only proves ~Object() had not yet reached
+    //! mLife.reset() at the moment of the check, not that it cannot start immediately afterward,
+    //! concurrently with this thread going on to dereference the receiver's own members.
     //!
-    //! The box breaks that dependency: connect() captures a shared_ptr<Affinity> at CONNECT time, and
-    //! the wrapper resolves affinity through the box at EMIT time, never through the receiver. Because
-    //! the box is independently heap-allocated and kept alive by the closure's own shared_ptr, it is
-    //! safe to read no matter what has happened to the Object by then.
+    //! The box breaks that dependency: connect() captures a shared_ptr<Affinity> at CONNECT time,
+    //! and the wrapper resolves affinity through the box at EMIT time, never through the receiver.
+    //! Because the box is independently heap-allocated and kept alive by the closure's own
+    //! shared_ptr, it is safe to read no matter what has happened to the Object by then.
     //----------------------------------------------------------------
     class Affinity
     {
@@ -207,11 +207,12 @@ namespace QtLikeSignal
         }
 
     private:
-        //! Guards mData: moveToThread() writes from the object's own thread while emits read from any
-        //! other. The same reason QObject keeps its threadData in a QAtomicPointer.
+        //! Guards mData: moveToThread() writes from the object's own thread while emits read from
+        //! any other. The same reason QObject keeps its threadData in a QAtomicPointer.
         mutable std::mutex mMutex;
         std::shared_ptr<ThreadData> mData;
     };
-}
+
+} // namespace QtLikeSignal
 
 #endif // QT_LIKE_SIGNAL_THREADDATA_HPP
