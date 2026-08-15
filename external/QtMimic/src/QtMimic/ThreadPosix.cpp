@@ -28,18 +28,16 @@ namespace QtMimic
         {
             //! Maps a Thread priority onto a scheduler policy and priority number.
             //!
-            //! This is Qt's mapping from qthread_unix.cpp, including its deliberately coarse
-            //! scaling: the divisor is TimeCriticalPriority rather than the span between the
-            //! lowest and highest values, so the enum lands on the low end of the platform's
-            //! range rather than spreading across it. Kept as Qt has it so behaviour matches.
-            //! @return true if a priority could be calculated; false if the platform would not
-            //!         report a range.
+            //! This is Qt's mapping from qthread_unix.cpp, including its deliberately coarse scaling: the
+            //! divisor is TimeCriticalPriority rather than the span between the lowest and highest values, so
+            //! the enum lands on the low end of the platform's range rather than spreading across it. Kept as
+            //! Qt has it so behaviour matches. Returns true if a priority could be calculated; false if the
+            //! platform would not report a range.
             bool calculateUnixPriority
                 (
                 int aPriority,      //!< The Thread priority to convert.
-                int* aSchedPolicy,  //!< In: the thread's current policy. Out: the policy to
-                                    //!< apply, which only changes when IdlePriority selects
-                                    //!< SCHED_IDLE.
+                int* aSchedPolicy,  //!< In: the thread's current policy. Out: the policy to apply, which
+                                    //!< only changes when IdlePriority selects SCHED_IDLE.
                 int* aSchedPriority //!< Out: the priority number to apply under that policy.
                 )
             {
@@ -83,8 +81,8 @@ namespace QtMimic
 
     #endif
 
-    //! @brief Create the OS thread, already at mPriority when it executes its first instruction,
-    //! by passing it in the pthread_create() attributes.
+    //! Creates the OS thread, already at mPriority when it executes its first instruction, by
+    //! passing it in the pthread_create() attributes.
     //!
     //! The one exception is a kernel that refuses the scheduling attributes outright, where the
     //! thread is created inheriting the caller's priority and applies the requested one to
@@ -154,8 +152,8 @@ namespace QtMimic
         mJoinable = true;
     }
 
-    //! @brief Entry point handed to pthread_create(). Returns nullptr always; nothing is passed
-    //! back through wait().
+    //! Entry point handed to pthread_create(). Returns nullptr always; nothing is passed back
+    //! through pthread_join().
     void* Thread::threadEntry
         (
         void* aArg      //!< The Thread that is starting, as a void*.
@@ -165,16 +163,16 @@ namespace QtMimic
         return nullptr;
     }
 
-    //! @brief Push a priority down to the OS thread.
+    //! Pushes a priority down to the OS thread.
     //!
     //! Split out so the platform code sits in one place. The caller must hold mPriorityMutex and
     //! must already have established that mThreadId is valid, because this uses it.
-    //! @param aPriority The priority to apply. InheritPriority is meaningful only on Windows and
-    //!        only from start(); UNIX expresses inheritance through the pthread attributes
-    //!        instead and never comes here with it.
     void Thread::applyPriority
         (
-        Priority aPriority
+        Priority aPriority  //!< The priority to apply. InheritPriority is meaningful only on Windows
+                            //!< and only from start(), where it means "the priority of the thread
+                            //!< calling start()"; UNIX expresses inheritance through the pthread
+                            //!< attributes instead and never comes here with it.
         )
     {
         #if defined( QT_MIMIC_HAS_THREAD_PRIORITY_SCHEDULING )
@@ -220,8 +218,9 @@ namespace QtMimic
         #endif
     }
 
-    //! @brief Block until the event loop has exited and the OS thread has been reaped, or
-    //! @p aTime milliseconds have passed. Thread-safe.
+    //! Blocks until the event loop has exited and the OS thread has been reaped, or @p aTime
+    //! milliseconds have passed. Returns true if the thread finished (or there was nothing to
+    //! wait for); false on timeout. Thread-safe.
     //!
     //! pthread_join() has no portable timed form -- pthread_timedjoin_np() is a glibc extension
     //! Qt guards with a configure test -- so the timeout is served by the same condition variable
@@ -237,11 +236,9 @@ namespace QtMimic
     //! needs that same mutex to get past its very first step, and this thread cannot finish --
     //! and so let the wait return -- until it does. Holding the mutex across the wait would be a
     //! self-inflicted deadlock against a thread that has barely started.
-    //! @param aTime Maximum time to wait in milliseconds; ULONG_MAX blocks indefinitely.
-    //! @return true if the thread finished (or there was nothing to wait for); false on timeout.
     bool Thread::wait
         (
-        unsigned long aTime
+        unsigned long aTime  //!< Maximum time to wait in milliseconds; ULONG_MAX blocks indefinitely.
         )
     {
         {

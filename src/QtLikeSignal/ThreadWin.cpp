@@ -18,6 +18,12 @@
 
 namespace QtLikeSignal
 {
+    //! Creates the OS thread, already at mPriority when it executes its first instruction.
+    //!
+    //! Created suspended, given its priority, then resumed. A new thread otherwise starts at
+    //! normal priority, so a low-priority thread that starts another low-priority thread would
+    //! be preempted by its own child for the window between creation and the priority landing.
+    //! Called by start() with mPriorityMutex held.
     void Thread::startPlatformSpecific()
     {
         // Created suspended, given its priority, then resumed. Qt does this and explains why:
@@ -47,8 +53,8 @@ namespace QtLikeSignal
         }
     }
 
-    //! Entry point handed to _beginthreadex(). Returns 0 always; the thread's own exit code
-    //! is not used.
+    //! Entry point handed to _beginthreadex(). Returns 0 always; nothing reads a per-thread
+    //! exit code back through wait().
     unsigned int __stdcall Thread::threadEntry
         (
         void* aArg      //!< The Thread that is starting, as a void*.
@@ -61,7 +67,7 @@ namespace QtLikeSignal
     //! Pushes a priority down to the OS thread.
     //!
     //! Split out so the platform code sits in one place. The caller must hold mPriorityMutex and
-    //! must already have established that the native handle is valid, because this uses it.
+    //! must already have established that mHandle is valid, because this uses it.
     void Thread::applyPriority
         (
         Priority aPriority  //!< The priority to apply. InheritPriority is meaningful only on Windows
@@ -115,11 +121,21 @@ namespace QtLikeSignal
         }
     }
 
-    //! Blocks until the thread has finished executing or timeout expires. Thread-safe. Returns
-    //! true if thread finished, false if timeout occurred.
+    //! Blocks until the event loop has exited and the OS thread has been reaped, or @p aTime
+    //! milliseconds have passed. Returns true if the thread finished (or there was nothing to
+    //! wait for); false on timeout.
+    //!
+    //! Thread-safe: WaitForSingleObject() supports any number of concurrent waiters on the same
+    //! handle, so this only needs to track who closes it, via mWaiters.
+    //!
+    //! Deliberately does NOT hold mPriorityMutex across the actual wait: run()'s priority
+    //! fix-up (relevant only on the UNIX side, but the code path is shared) needs that same
+    //! mutex to get past its very first step, and this thread cannot finish -- and so signal the
+    //! handle -- until it does. Holding the mutex across the wait would be a self-inflicted
+    //! deadlock against a thread that has barely started.
     bool Thread::wait
         (
-        unsigned long aTime  //!< Maximum time to wait in milliseconds.
+        unsigned long aTime  //!< Maximum time to wait in milliseconds; ULONG_MAX blocks indefinitely.
         )
     {
         HANDLE handle = nullptr;

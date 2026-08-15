@@ -35,9 +35,10 @@ namespace QtLikeSignal
             //! This is Qt's mapping from qthread_unix.cpp, including its deliberately coarse scaling: the
             //! divisor is TimeCriticalPriority rather than the span between the lowest and highest values, so
             //! the enum lands on the low end of the platform's range rather than spreading across it. Kept as
-            //! Qt has it so behaviour matches; the alternative would be a library that claims to mimic QThread
-            //! and then schedules differently. Returns true if a priority could be calculated; false if the
+            //! Qt has it so behaviour matches. Returns true if a priority could be calculated; false if the
             //! platform would not report a range.
+            // The alternative would be a library that claims to mimic QThread and then schedules
+            // differently.
             bool calculateUnixPriority
                 (
                 int aPriority,      //!< The Thread priority to convert.
@@ -87,6 +88,13 @@ namespace QtLikeSignal
 
     #endif
 
+    //! Creates the OS thread, already at mPriority when it executes its first instruction, by
+    //! passing it in the pthread_create() attributes.
+    //!
+    //! The one exception is a kernel that refuses the scheduling attributes outright, where the
+    //! thread is created inheriting the caller's priority and applies the requested one to
+    //! itself as its first action, in run(). Qt falls back the same way. Called by start() with
+    //! mPriorityMutex held.
     void Thread::startPlatformSpecific()
     {
         pthread_attr_t attr;
@@ -169,7 +177,7 @@ namespace QtLikeSignal
     //! Pushes a priority down to the OS thread.
     //!
     //! Split out so the platform code sits in one place. The caller must hold mPriorityMutex and
-    //! must already have established that the native handle is valid, because this uses it.
+    //! must already have established that mThreadId is valid, because this uses it.
     void Thread::applyPriority
         (
         Priority aPriority  //!< The priority to apply. InheritPriority is meaningful only on Windows
@@ -224,11 +232,27 @@ namespace QtLikeSignal
         #endif
     }
 
-    //! Blocks until the thread has finished executing or timeout expires. Thread-safe. Returns
-    //! true if thread finished, false if timeout occurred.
+    //! Blocks until the event loop has exited and the OS thread has been reaped, or @p aTime
+    //! milliseconds have passed. Returns true if the thread finished (or there was nothing to
+    //! wait for); false on timeout. Thread-safe.
+    //!
+    //! pthread_join() has no portable timed form -- pthread_timedjoin_np() is a glibc extension
+    //! Qt guards with a configure test -- so the timeout is served by the same condition variable
+    //! threadBody() ends by notifying, and the pthread_join() that follows is only ever the
+    //! already-finished kind. Windows can pass its timeout straight to WaitForSingleObject().
+    //!
+    //! Only the caller that actually claims mJoinable does the real pthread_join() -- calling
+    //! pthread_join() on the same pthread_t concurrently from two threads is undefined, unlike
+    //! WaitForSingleObject() on Windows, which is fine with multiple waiters. A second
+    //! concurrent caller simply finds nothing left to claim and returns.
+    //!
+    //! Deliberately does NOT hold mPriorityMutex across the actual wait: run()'s priority fix-up
+    //! needs that same mutex to get past its very first step, and this thread cannot finish --
+    //! and so let the wait return -- until it does. Holding the mutex across the wait would be a
+    //! self-inflicted deadlock against a thread that has barely started.
     bool Thread::wait
         (
-        unsigned long aTime  //!< Maximum time to wait in milliseconds.
+        unsigned long aTime  //!< Maximum time to wait in milliseconds; ULONG_MAX blocks indefinitely.
         )
     {
         {

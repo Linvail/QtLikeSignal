@@ -18,7 +18,7 @@
 namespace QtMimic
 {
 
-    //! @brief Create the OS thread, already at mPriority when it executes its first instruction.
+    //! Creates the OS thread, already at mPriority when it executes its first instruction.
     //!
     //! Created suspended, given its priority, then resumed. A new thread otherwise starts at
     //! normal priority, so a low-priority thread that starts another low-priority thread would
@@ -47,8 +47,8 @@ namespace QtMimic
         }
     }
 
-    //! @brief Entry point handed to _beginthreadex(). Returns 0 always; nothing reads a
-    //! per-thread exit code back through wait().
+    //! Entry point handed to _beginthreadex(). Returns 0 always; nothing reads a per-thread
+    //! exit code back through wait().
     unsigned int __stdcall Thread::threadEntry
         (
         void* aArg      //!< The Thread that is starting, as a void*.
@@ -58,15 +58,16 @@ namespace QtMimic
         return 0;
     }
 
-    //! @brief Push a priority down to the OS thread.
+    //! Pushes a priority down to the OS thread.
     //!
     //! Split out so the platform code sits in one place. The caller must hold mPriorityMutex and
     //! must already have established that mHandle is valid, because this uses it.
-    //! @param aPriority The priority to apply. InheritPriority is meaningful only from start(),
-    //!        where it means "the priority of the thread calling start()".
     void Thread::applyPriority
         (
-        Priority aPriority
+        Priority aPriority  //!< The priority to apply. InheritPriority is meaningful only on Windows
+                            //!< and only from start(), where it means "the priority of the thread
+                            //!< calling start()"; UNIX expresses inheritance through the pthread
+                            //!< attributes instead and never comes here with it.
         )
     {
         int prio;
@@ -114,8 +115,9 @@ namespace QtMimic
         }
     }
 
-    //! @brief Block until the event loop has exited and the OS thread has been reaped, or
-    //! @p aTime milliseconds have passed.
+    //! Blocks until the event loop has exited and the OS thread has been reaped, or @p aTime
+    //! milliseconds have passed. Returns true if the thread finished (or there was nothing to
+    //! wait for); false on timeout.
     //!
     //! Thread-safe: WaitForSingleObject() supports any number of concurrent waiters on the same
     //! handle, so this only needs to track who closes it, via mWaiters.
@@ -125,11 +127,9 @@ namespace QtMimic
     //! mutex to get past its very first step, and this thread cannot finish -- and so signal the
     //! handle -- until it does. Holding the mutex across the wait would be a self-inflicted
     //! deadlock against a thread that has barely started.
-    //! @param aTime Maximum time to wait in milliseconds; ULONG_MAX blocks indefinitely.
-    //! @return true if the thread finished (or there was nothing to wait for); false on timeout.
     bool Thread::wait
         (
-        unsigned long aTime
+        unsigned long aTime  //!< Maximum time to wait in milliseconds; ULONG_MAX blocks indefinitely.
         )
     {
         HANDLE handle = nullptr;
