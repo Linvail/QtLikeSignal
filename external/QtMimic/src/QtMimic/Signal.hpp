@@ -358,7 +358,8 @@ namespace QtMimic
                 std::weak_ptr<int> aLife
                 )
             {
-                auto node = std::make_shared<Private::ConnectionNode>( aOwner, std::move( aLife ) );
+                auto node = std::make_shared<Private::ConnectionNode>( aSelf, aOwner,
+                    std::move( aLife ) );
                 auto slot = std::make_shared<SlotImpl<std::decay_t<Callable> > >(
                     std::forward<Callable>( aSlot ), node );
 
@@ -369,7 +370,7 @@ namespace QtMimic
                     mWorking.push_back( std::move( slot ) );
                     mDirty = true;
                 }
-                return Connection( aSelf, std::move( node ) );
+                return Connection( std::move( node ) );
             }
 
             //! Calls every connected slot, with no lock held. See the class comment.
@@ -452,7 +453,7 @@ namespace QtMimic
             //! cost does not depend on how many other connections exist.
             virtual void removeConnection
                 (
-                const std::shared_ptr<Private::ConnectionNode>& aNode
+                Private::ConnectionNode* aNode
                 ) override
             {
                 if( !aNode )
@@ -538,7 +539,7 @@ namespace QtMimic
             //!
             //! For promptness, not dispatch correctness: a removed slot is skipped by its own flag
             //! either way, but the snapshot would otherwise keep it -- and the Cleanup token that
-            //! prunes Object::mIncoming -- alive until the next emit. An emit already in flight is
+            //! unlinks it from the receiver -- alive until the next emit. An emit already in flight is
             //! unaffected; it holds its own reference to the old snapshot.
             void discardSnapshot() const
             {

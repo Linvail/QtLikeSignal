@@ -168,7 +168,7 @@ namespace QtLikeSignal
         std::size_t incomingConnectionCount() const
         {
             std::lock_guard<std::mutex> lock( mIncomingMutex );
-            return mIncoming.size();
+            return mIncomingCount;
         }
 
         //! Gets the weak pointer tracking the lifetime of this object. Thread-safe.
@@ -849,10 +849,10 @@ namespace QtLikeSignal
             // prunes the receiver's incoming list in the same step, whichever route ends it.
             Connection handle = aSignal.connect( std::move( wrapper ), aContext, weakLife );
 
-            // Records the handle in aContext->mIncoming, and does nothing if a concurrent
-            // disconnectAll() pruned the connection while we were between the two lines. Both this
+            // Links the node into aContext's incoming list, and does nothing if a concurrent
+            // disconnectAll() unlinked the connection while we were between the two lines. Both this
             // and the prune take aContext->mIncomingMutex, so one of the two orders always holds and
-            // no entry is left behind for a prune that already ran.
+            // nothing is left linked for an unlink that already ran.
             // The Cleanup token this replaced got the same result from its own lifetime, and needed
             // a paragraph to say why; see R29 in history/OPEN-RISKS-20260813.md for the lock that was
             // added for a race a TSan probe then failed to reproduce, and reverted.
@@ -864,8 +864,8 @@ namespace QtLikeSignal
         friend class EventDispatcherDefault;
 
         //! Grants a connection node the two members that are its half of the bookkeeping: it
-        //! registers itself in mIncoming when the connection is made, and prunes itself when the
-        //! connection ends.
+        //! links itself into the incoming list when the connection is made, and unlinks itself
+        //! when the connection ends.
         friend struct Private::ConnectionNode;
 
         //! Grants the callLater pending-call registry (defined in Object.cpp) the ability to
@@ -910,15 +910,26 @@ namespace QtLikeSignal
         //! there. Use the object from the thread it lives in.
         std::string mObjectName;
 
-        //! Connections where this object is the receiver, disconnected by ~Object().
+        //! Head of the list of connections where this object is the receiver, disconnected by
+        //! ~Object().
         //!
         //! Without this a destroyed receiver's slot stays in the sender's slot list forever. The
         //! wrapper's life-token check makes it inert, but inert is not gone: it retains its
         //! captured state and is still walked on every emit, so one long-lived signal feeding
         //! many short-lived receivers grows without bound in both memory and emit cost. Qt does
         //! the equivalent by walking cd->senders in ~QObject().
-        std::vector<Connection> mIncoming;
-        mutable std::mutex mIncomingMutex;                   //!< Guards mIncoming.
+        //!
+        //! Intrusive: the list is threaded through the connection nodes themselves, so an incoming
+        //! connection costs no allocation here and both linking and unlinking are O(1). It was a
+        //! std::vector<Connection>, which cost a block per receiver and made unlinking a linear
+        //! scan -- see PERFORMANCE-20260813.md (P10) for the block, and (P7) for the scan.
+        Private::ConnectionNode* mIncomingHead { nullptr };
+
+        //! How many nodes mIncomingHead's list holds, so the count stays O(1) rather than a walk.
+        std::size_t mIncomingCount { 0 };
+
+        //! Guards mIncomingHead, mIncomingCount, and every node's incoming links.
+        mutable std::mutex mIncomingMutex;
 
         //! Timer ids started on this object and not yet killed.
         //!

@@ -26,6 +26,8 @@ namespace QtLikeSignal
 
     namespace Private
     {
+        class SignalImplBase;
+
         //! Everything about one connection except the callable itself.
         //!
         //! Untemplated so a Connection can answer connected() and compare equal without knowing the
@@ -45,7 +47,11 @@ namespace QtLikeSignal
         // a handle would then keep the callable alive, so a caller who kept a Connection to
         // disconnect with would pin everything the slot captured. SignalTest.
         // SlotSurvivesDisconnectingItselfMidCall catches it.
-        struct ConnectionNode
+        //
+        // The node is also the receiver's list element: it carries its own sibling pointers rather
+        // than being named by a Connection stored in a vector, which is the third of the five blocks
+        // and the last quadratic term in the library (P7's residual).
+        struct ConnectionNode : std::enable_shared_from_this<ConnectionNode>
         {
             //! Constructs a node for a connection whose receiver is @p aOwner.
             //!
@@ -53,10 +59,12 @@ namespace QtLikeSignal
             //! no receiver and therefore no incoming list to keep.
             ConnectionNode
                 (
-                Object* aOwner,          //!< Receiver owning the mIncoming entry, or null.
-                std::weak_ptr<int> aLife //!< Receiver's life token; expired means it is gone.
+                std::weak_ptr<SignalImplBase> aImpl,  //!< The signal that owns the connection.
+                Object* aOwner,                       //!< Receiver keeping it incoming, or null.
+                std::weak_ptr<int> aLife              //!< Receiver's life token; expired means gone.
                 )
-                : mOwner( aOwner )
+                : mImpl( std::move( aImpl ) )
+                , mOwner( aOwner )
                 , mLife( std::move( aLife ) )
             {
             }
@@ -71,30 +79,31 @@ namespace QtLikeSignal
                 const ConnectionNode&
                 ) = delete;
 
-            //! Records @p aHandle in the receiver's incoming list. Called once, by connect().
+            //! Links this node into the receiver's incoming list. Called once, by connect().
             //!
-            //! Does nothing if the connection ended before the handle got here, which a concurrent
-            //! disconnectAll() can do: the entry would otherwise never be pruned, since the pruning
-            //! already happened. Both sides take the receiver's mIncomingMutex, so one of the two
-            //! orders always holds.
-            void registerWithReceiver
-                (
-                const Connection& aHandle
-                );
+            //! Does nothing if the connection ended before we got here, which a concurrent
+            //! disconnectAll() can do: the node would otherwise stay linked forever, since the
+            //! unlinking already happened. Both sides take the receiver's mIncomingMutex, so one of
+            //! the two orders always holds.
+            void registerWithReceiver();
 
-            //! Removes this connection's handle from the receiver's incoming list.
+            //! Unlinks this node from the receiver's incoming list. O(1).
             //!
             //! Called by the Signal on every route out of its list -- a manual disconnect(),
             //! disconnectAll(), or the Signal being destroyed -- so a disconnect is visible in the
-            //! receiver immediately rather than at some later sweep. Without it mIncoming would only
+            //! receiver immediately rather than at some later sweep. Without it the list would only
             //! ever grow for an object that outlives connections made to it, and would eventually
-            //! hold stale handles.
+            //! hold stale entries.
             //!
             //! Must be called with the Signal's own mutex released: this takes the receiver's
             //! mIncomingMutex, and ~Object() takes the two in the opposite order.
             void pruneReceiver();
 
             std::atomic<bool> mConnected { true };
+
+            //! The Signal that owns this connection, so ~Object() can end it. Weak: a Connection
+            //! may outlive its Signal, and once the Signal is gone every connection died with it.
+            const std::weak_ptr<SignalImplBase> mImpl;
 
             //! Where this slot sits in the owning Signal's working list. Guarded by that Signal's
             //! mutex.
@@ -113,19 +122,34 @@ namespace QtLikeSignal
             //! must not null an element the first one has already given to somebody else.
             bool mLinked { false };
 
-            //! True once pruneReceiver() has run. Guarded by the receiver's mIncomingMutex.
-            bool mPruned { false };
+            //! True while this node is in mOwner's incoming list. Guarded by mOwner's
+            //! mIncomingMutex, as are the two sibling pointers below.
+            bool mInIncoming { false };
 
-            Object* mOwner;             //!< Receiver owning the mIncoming entry, or null.
+            //! True once the receiver is finished with this node, so registerWithReceiver() must not
+            //! put it back. Set by pruneReceiver() and by ~Object(). Guarded the same way.
+            bool mIncomingDone { false };
+
+            Object* mOwner;             //!< Receiver keeping this node incoming, or null.
             std::weak_ptr<int> mLife;   //!< Receiver's life token; expired means it is gone.
+
+            //! This node's place in the receiver's list, which is what makes both linking and
+            //! unlinking O(1) and costs no allocation of its own.
+            //!
+            //! Raw, because the list does not own the node: a node is only ever in the list while it
+            //! is also in its Signal's, which is what keeps it alive. ~Object() is the one reader
+            //! that outlives that guarantee, so it upgrades through shared_from_this() while holding
+            //! mIncomingMutex, before it lets go of anything.
+            ConnectionNode* mPrevIncoming { nullptr };
+            ConnectionNode* mNextIncoming { nullptr };
         };
 
         //! The part of a Signal a Connection can reach without knowing its argument types.
         //!
-        //! A Connection may outlive its Signal, so it holds a weak reference to this rather than to
-        //! the Signal. Once the Signal is gone the reference expires and disconnect() has nothing to
-        //! do, which is correct: every connection died with the signal.
-        // It happens routinely: Object::mIncoming holds handles to signals already destroyed.
+        //! A Connection may outlive its Signal, so the node holds a weak reference to this rather
+        //! than to the Signal. Once the Signal is gone the reference expires and disconnect() has
+        //! nothing to do, which is correct: every connection died with the signal.
+        // It happens routinely: a receiver's incoming list names signals already destroyed.
         class SignalImplBase
         {
         public:
@@ -133,11 +157,13 @@ namespace QtLikeSignal
 
             //! Drops the connection @p aNode describes. O(1) in the number of connections.
             //!
-            //! Prunes the receiver's incoming list in the same step, so a disconnect is visible on
-            //! both sides at once.
+            //! Unlinks the node from the receiver's incoming list in the same step, so a disconnect
+            //! is visible on both sides at once.
+            //!
+            //! @p aNode is raw: the caller must hold a reference to it for the whole call.
             virtual void removeConnection
                 (
-                const std::shared_ptr<ConnectionNode>& aNode
+                ConnectionNode* aNode
                 ) = 0;
         };
     }
@@ -146,8 +172,8 @@ namespace QtLikeSignal
     //!
     //! Copyable, and copies compare equal. Thread-safe. A default-constructed handle is valid and
     //! reports itself disconnected, which is what connect() returns when given no context.
-    // Copies must compare equal: Object::mIncoming stores one while the caller keeps another, and
-    // pruneReceiver() finds its entry by comparing them.
+    // A handle is one pointer: the node carries the Signal it belongs to, since the receiver's
+    // incoming list is made of nodes and ~Object() has to reach each one's Signal from there.
     class Connection
     {
     public:
@@ -155,13 +181,11 @@ namespace QtLikeSignal
         Connection() = default;
 
         //! Constructs a handle to a live connection. Called only by Signal.
-        Connection
+        explicit Connection
             (
-            std::weak_ptr<Private::SignalImplBase> aImpl,       //!< The signal that owns it.
-            std::shared_ptr<Private::ConnectionNode> aNode      //!< That connection's node.
+            std::shared_ptr<Private::ConnectionNode> aNode  //!< That connection's node.
             )
-            : mImpl( std::move( aImpl ) )
-            , mNode( std::move( aNode ) )
+            : mNode( std::move( aNode ) )
         {
         }
 
@@ -183,9 +207,11 @@ namespace QtLikeSignal
             // this thread did before clearing it.
             mNode->mConnected.store( false, std::memory_order_release );
 
-            if( auto impl = mImpl.lock() )
+            // mNode keeps the node alive for the whole call, which is what lets
+            // removeConnection() take it raw.
+            if( auto impl = mNode->mImpl.lock() )
             {
-                impl->removeConnection( mNode );
+                impl->removeConnection( mNode.get() );
             }
         }
 
@@ -215,22 +241,20 @@ namespace QtLikeSignal
         }
 
     private:
-        //! Records this handle in its receiver's incoming list. Called once, by Object::connect().
+        //! Links this connection into its receiver's incoming list. Called once, by
+        //! Object::connect().
         void registerWithReceiver() const
         {
             if( mNode )
             {
-                mNode->registerWithReceiver( *this );
+                mNode->registerWithReceiver();
             }
         }
 
-        std::weak_ptr<Private::SignalImplBase> mImpl;     //!< Expires when the signal dies.
         std::shared_ptr<Private::ConnectionNode> mNode;   //!< The connection itself; the identity.
 
-        //! Grants Object the private registration above, which only connect() may perform, and the
-        //! node the pointer comparison pruneReceiver() finds its own entry by.
+        //! Grants Object the private registration above, which only connect() may perform.
         friend class Object;
-        friend struct Private::ConnectionNode;
     };
 }
 

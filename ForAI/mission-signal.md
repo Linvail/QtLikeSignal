@@ -52,8 +52,9 @@ SignalView<Args...>                           subscription-only window onto a Si
 
 Connection
     disconnect(), connected(), operator==, default-construct, copy.
-    Copies must refer to the same connection: Object::mIncoming stores copies and the
-    connection node later std::remove_if()s the one that points back at itself.
+    Copies must refer to the same connection, and a handle is one pointer: the node it
+    names carries both the live flag and the Signal, and is itself the receiver's
+    list element. See 1d.
 ```
 
 **1a.** `emit()` must forward, never take `Args...` by value. Taking by value cost one copy of every
@@ -70,6 +71,14 @@ than the feature.
 own allocation, which is one heap block rather than two — the emit-time wrapper `Object::connect()`
 builds is far past any small-object buffer. If you type-erase at this boundary you put that block
 back. See P10 in `history/PERFORMANCE-20260813.md`.
+
+**1d.** A `Connection` is a single `shared_ptr` to the connection node, and the node carries the
+`weak_ptr` to the Signal rather than the handle carrying it. That is not tidiness: the receiver's
+list of incoming connections is threaded through the nodes themselves, so `~Object()` walks nodes,
+not handles, and has to reach each one's Signal from the node. Two connections cost two heap blocks
+in total — one node and one slot each — with nothing allocated for the receiver's list. A design
+that keeps the receiver's side in a container instead pays a third block per connection and makes
+ending K connections into one receiver O(K²).
 
 ### 2. The four guarantees boost is silently providing
 

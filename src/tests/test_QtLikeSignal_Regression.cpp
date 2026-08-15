@@ -85,6 +85,33 @@ namespace
             std::chrono::steady_clock::now() - start ).count();
     }
 
+    //! Nanoseconds per connection to disconnect @p aCount connections into **one** receiver, one at
+    //! a time.
+    double incomingDisconnectNs
+        (
+        int aCount   //!< Connections to make into the single receiver, then end individually.
+        )
+    {
+        Signal<int> signal;
+        Receiver receiver;
+
+        std::vector<Connection> handles;
+        handles.reserve( aCount );
+        for( int i = 0; i < aCount; ++i )
+        {
+            handles.push_back( Object::connect( signal, &receiver, &Receiver::onValue,
+                ConnectionType::Direct ) );
+        }
+
+        const auto start = std::chrono::steady_clock::now();
+        for( auto& handle : handles )
+        {
+            handle.disconnect();
+        }
+        return std::chrono::duration<double, std::nano>(
+            std::chrono::steady_clock::now() - start ).count() / aCount;
+    }
+
     //! Nanoseconds to construct and destroy one Object, against @p aPending undeliverable callLaters.
     double constructDestroyNs
         (
@@ -196,6 +223,41 @@ TEST( PerformanceRegression, TeardownStaysLinearInTheNumberOfReceivers )
         "PERFORMANCE-20260813.md (P7).";
 }
 
+//! Fails if ending one receiver's connections stops being O(1) each.
+//!
+//! Pins P10 stage 2, and the residual noted at the end of P7. A receiver's incoming connections used
+//! to be a std::vector<Connection>, and ending one scanned it for the entry to erase -- so ending
+//! all K of them one at a time was O(K^2). The list is now threaded through the connection nodes
+//! themselves and the unlink is O(1).
+//!
+//! Four times the connections should cost the same *per connection*, and it does: 35 ns at 500 and
+//! 62 ns at 32 000, against the vector's 223 ns and 15 435 ns. The bar is 4x, which is calibrated
+//! rather than guessed -- the vector version measured 15.3x on the same two sizes.
+TEST( PerformanceRegression, EndingOneReceiversConnectionsCostsTheSameEach )
+{
+    constexpr int kSmall = 2000;
+    constexpr int kLarge = 8000;   // 4x
+
+    const double small = PerfHarness::bestOf( 3, []()
+        {
+            return incomingDisconnectNs( kSmall );
+        } );
+    const double large = PerfHarness::bestOf( 3, []()
+        {
+            return incomingDisconnectNs( kLarge );
+        } );
+
+    ASSERT_GT( small, 0.0 ) << "the small case was too fast to time; raise kSmall";
+
+    const double growth = large / small;
+    EXPECT_LT( growth, 4.0 )
+        << "ending each of " << kLarge << " connections into one receiver cost " << growth
+        << "x what it cost with " << kSmall << " (" << small << " ns -> " << large
+        << " ns per connection). It should cost the same: the receiver's list is intrusive and the "
+        "unlink is O(1). Growth proportional to K means the list is being scanned again, which "
+        "makes ending them all O(K^2) -- see PERFORMANCE-20260813.md (P10).";
+}
+
 //! Fails if destroying an unrelated Object starts to depend on how much work is queued elsewhere.
 //!
 //! Pins P1. `~Object()` used to walk the process-wide callLater registry and the dispatcher's whole
@@ -301,14 +363,14 @@ TEST( PerformanceRegression, SameThreadAutoEmitAllocatesNothing )
 
 //! Fails if one connection starts costing more heap blocks than it does today.
 //!
-//! Pins P10, which is not a defect but a budget: a connection currently costs three blocks -- the
-//! slot with the wrapper closure inside it, the connection node, and the receiver's mIncoming entry
-//! -- against Qt's two. It cost five until 2026-08-15. That number should go **down** if anything,
-//! and this fails if a change quietly adds a fourth.
+//! Pins P10, which is not a defect but a budget: a connection costs two blocks -- the slot with the
+//! wrapper closure inside it, and the connection node -- which is what Qt costs. It was five until
+//! 2026-08-15. That number should go **down** if anything, and this fails if a change quietly adds
+//! a third.
 //!
 //! Counted over many connections so the amortised growth of the two containers is included; the
 //! bar is per-connection so it does not move when the counts change.
-TEST( PerformanceRegression, OneConnectionCostsAtMostThreeHeapBlocks )
+TEST( PerformanceRegression, OneConnectionCostsAtMostTwoHeapBlocks )
 {
     if( !PerfHarness::Allocations::available() )
     {
@@ -333,10 +395,11 @@ TEST( PerformanceRegression, OneConnectionCostsAtMostThreeHeapBlocks )
     const long allocations = PerfHarness::Allocations::stop();
 
     const double perConnection = double( allocations ) / kOps;
-    EXPECT_LT( perConnection, 3.5 )
-        << perConnection << " heap blocks per connect(), up from the three it costs today: the slot "
-        "holding the wrapper closure, the connection node, and the receiver's mIncoming entry. Qt "
-        "manages two. Adding a fourth is a regression -- see PERFORMANCE-20260813.md (P10).";
+    EXPECT_LT( perConnection, 2.5 )
+        << perConnection << " heap blocks per connect(), up from the two it costs today: the slot "
+        "holding the wrapper closure, and the connection node. Two is what Qt costs, and it is a "
+        "floor rather than a target -- the two have different lifetimes. Adding a third is a "
+        "regression -- see PERFORMANCE-20260813.md (P10).";
 }
 
 //! Fails if a queued emit starts allocating more than it does today.

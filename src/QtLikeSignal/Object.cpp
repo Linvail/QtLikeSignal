@@ -183,9 +183,8 @@ namespace QtLikeSignal
         // arbitrary user cleanup-callback code).
         //
         // Doing it before the disconnect loop below is also what keeps that loop re-entrancy-free:
-        // disconnect() destroys the slot, which destroys its captured Cleanup, whose destructor
-        // checks this very token and bails out rather than trying to prune mIncoming while we are
-        // already tearing it down.
+        // disconnect() reaches pruneReceiver(), which checks this very token and bails out rather
+        // than asking for mIncomingMutex while we are already tearing the list down.
         mLife.reset();
 
         // Disconnect every connection where this object is the receiver, so the sender stops
@@ -194,18 +193,43 @@ namespace QtLikeSignal
         // every emit, so a long-lived signal accumulates dead slots without bound. Qt does the
         // same thing by walking cd->senders in ~QObject().
         //
-        // Swap the handles out and disconnect them with mIncomingMutex released. Holding it across
-        // disconnect() would nest our mutex inside the Signal's, the reverse of the order
-        // ~Cleanup takes them in (a slot is destroyed with the Signal's mutex held), and there is no
-        // reason to invite that inversion when a swap avoids it entirely.
-        std::vector<Connection> incoming;
+        // Take the list out and end the connections with mIncomingMutex released. Holding it across
+        // removeConnection() would nest our mutex inside the Signal's, the reverse of the order
+        // pruneReceiver() takes them in, and there is no reason to invite that inversion.
+        //
+        // The nodes are upgraded to shared_ptr *while the mutex is held*, and that is the whole of
+        // why this is safe. A node in the list is one whose prune has not run, so its Signal still
+        // holds it -- but the instant we unlink it here, a Signal disconnecting on another thread
+        // may drop the last reference. Holding one ourselves closes that window. The upgrade cannot
+        // fail: every node is created by make_shared.
+        std::vector<std::shared_ptr<Private::ConnectionNode> > incoming;
         {
             std::lock_guard<std::mutex> lock( mIncomingMutex );
-            incoming.swap( mIncoming );
+            incoming.reserve( mIncomingCount );
+            for( Private::ConnectionNode* node = mIncomingHead; node != nullptr; )
+            {
+                Private::ConnectionNode* next = node->mNextIncoming;
+
+                // Unlinked here rather than left to pruneReceiver(), which will not run: it sees
+                // the expired life token above and returns before it reaches the list. A node that
+                // outlives us must not keep a pointer to one that does not.
+                node->mPrevIncoming = nullptr;
+                node->mNextIncoming = nullptr;
+                node->mInIncoming   = false;
+                node->mIncomingDone = true;
+                incoming.push_back( node->shared_from_this() );
+                node = next;
+            }
+            mIncomingHead  = nullptr;
+            mIncomingCount = 0;
         }
-        for( auto& handle : incoming )
+        for( const auto& node : incoming )
         {
-            handle.disconnect();
+            node->mConnected.store( false, std::memory_order_release );
+            if( auto impl = node->mImpl.lock() )
+            {
+                impl->removeConnection( node.get() );
+            }
         }
 
         // Only objects that have actually used callLater() can have entries to drop.
@@ -911,14 +935,11 @@ namespace QtLikeSignal
         return false;
     }
 
-    //! Records @p aHandle in the receiver's mIncoming. See ConnectionNode.
+    //! Links this node into the receiver's incoming list. See ConnectionNode.
     //!
     //! Defined here rather than in Connection.hpp because it is the receiver's list it touches, and
     //! that needs Object to be complete.
-    void Private::ConnectionNode::registerWithReceiver
-        (
-        const Connection& aHandle
-        )
+    void Private::ConnectionNode::registerWithReceiver()
     {
         // No receiver, or one already being destroyed. Signal::connect() takes the first branch:
         // a slot subscribed without an Object has no incoming list to appear in.
@@ -928,31 +949,59 @@ namespace QtLikeSignal
         }
 
         std::lock_guard<std::mutex> lock( mOwner->mIncomingMutex );
-        if( !mPruned )
+        if( mIncomingDone )
         {
-            mOwner->mIncoming.push_back( aHandle );
+            return;
         }
+
+        // At the head, because the order of the list does not matter: it is a set of connections to
+        // end, and ~Object() ends all of them.
+        mPrevIncoming = nullptr;
+        mNextIncoming = mOwner->mIncomingHead;
+        if( mNextIncoming != nullptr )
+        {
+            mNextIncoming->mPrevIncoming = this;
+        }
+        mOwner->mIncomingHead = this;
+        mInIncoming = true;
+        ++mOwner->mIncomingCount;
     }
 
-    //! Removes this connection's handle from the receiver's mIncoming. See ConnectionNode.
+    //! Unlinks this node from the receiver's incoming list. See ConnectionNode.
     void Private::ConnectionNode::pruneReceiver()
     {
-        // The receiver is gone or already being destroyed; ~Object() has taken mIncoming over and
+        // The receiver is gone or already being destroyed; ~Object() has taken the list over and
         // touching mOwner here would be a use-after-free. This is also what makes ~Object()'s own
-        // disconnect loop non-re-entrant, since it resets the life token before disconnecting.
+        // disconnect loop non-re-entrant: it resets the life token before disconnecting, so this
+        // returns before it can ask for a mutex ~Object() is holding.
         if( mOwner == nullptr || mLife.expired() )
         {
             return;
         }
 
         std::lock_guard<std::mutex> lock( mOwner->mIncomingMutex );
-        mPruned = true;
+        mIncomingDone = true;
+        if( !mInIncoming )
+        {
+            return;
+        }
 
-        auto& handles = mOwner->mIncoming;
-        handles.erase( std::remove_if( handles.begin(), handles.end(),
-            [this]( const Connection& aHandle )
-            {
-                return aHandle.mNode.get() == this;
-            } ), handles.end() );
+        if( mPrevIncoming != nullptr )
+        {
+            mPrevIncoming->mNextIncoming = mNextIncoming;
+        }
+        else
+        {
+            mOwner->mIncomingHead = mNextIncoming;
+        }
+        if( mNextIncoming != nullptr )
+        {
+            mNextIncoming->mPrevIncoming = mPrevIncoming;
+        }
+
+        mPrevIncoming = nullptr;
+        mNextIncoming = nullptr;
+        mInIncoming   = false;
+        --mOwner->mIncomingCount;
     }
 }

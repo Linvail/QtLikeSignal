@@ -345,5 +345,5 @@ TEST( PerformanceRegression, ConnectKeepsUpWithQt6 )
     EXPECT_LT( ratio, 6.0 )
         << "connect() costs " << ratio << "x Qt 6's (" << ours << " ns against " << qt
         << " ns), against 2.9x when this guard was written. This row is noisy, so a failure here "
-        "means a large change; OneConnectionCostsAtMostThreeHeapBlocks will say what allocated.";
+        "means a large change; OneConnectionCostsAtMostTwoHeapBlocks will say what allocated.";
 }
