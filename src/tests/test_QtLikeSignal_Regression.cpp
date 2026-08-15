@@ -301,14 +301,14 @@ TEST( PerformanceRegression, SameThreadAutoEmitAllocatesNothing )
 
 //! Fails if one connection starts costing more heap blocks than it does today.
 //!
-//! Pins P10, which is not a defect but a budget: a connection currently costs five blocks -- the
-//! wrapper closure, the Slot, the Cleanup token, the ConnectionState, and the receiver's mIncoming
-//! entry -- against Qt's two. That number should go **down** if anything, and this fails if a change
-//! quietly adds a sixth.
+//! Pins P10, which is not a defect but a budget: a connection currently costs three blocks -- the
+//! slot with the wrapper closure inside it, the connection node, and the receiver's mIncoming entry
+//! -- against Qt's two. It cost five until 2026-08-15. That number should go **down** if anything,
+//! and this fails if a change quietly adds a fourth.
 //!
 //! Counted over many connections so the amortised growth of the two containers is included; the
 //! bar is per-connection so it does not move when the counts change.
-TEST( PerformanceRegression, OneConnectionCostsAtMostFiveHeapBlocks )
+TEST( PerformanceRegression, OneConnectionCostsAtMostThreeHeapBlocks )
 {
     if( !PerfHarness::Allocations::available() )
     {
@@ -333,11 +333,10 @@ TEST( PerformanceRegression, OneConnectionCostsAtMostFiveHeapBlocks )
     const long allocations = PerfHarness::Allocations::stop();
 
     const double perConnection = double( allocations ) / kOps;
-    EXPECT_LT( perConnection, 5.5 )
-        << perConnection << " heap blocks per connect(), up from the five this was written at: the "
-        "wrapper closure, the Slot, the Cleanup token, the ConnectionState, and the receiver's "
-        "mIncoming entry. Qt manages two. Adding a sixth is a regression -- see "
-        "PERFORMANCE-20260813.md (P10).";
+    EXPECT_LT( perConnection, 3.5 )
+        << perConnection << " heap blocks per connect(), up from the three it costs today: the slot "
+        "holding the wrapper closure, the connection node, and the receiver's mIncoming entry. Qt "
+        "manages two. Adding a fourth is a regression -- see PERFORMANCE-20260813.md (P10).";
 }
 
 //! Fails if a queued emit starts allocating more than it does today.

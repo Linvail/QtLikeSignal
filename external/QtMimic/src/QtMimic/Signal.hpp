@@ -20,7 +20,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -62,9 +61,19 @@ namespace QtMimic
         //!
         //! Private, with Object a friend, so subscribing goes through Object::connect() and picks
         //! up the thread affinity and lifetime tracking that a bare slot has no idea about.
+        template <typename Callable>
         Connection connect
             (
-            std::function<void( Args... )> aSlot  //!< The callable slot function.
+            Callable&& aSlot  //!< The callable slot function.
+            );
+
+        //! Subscribes a slot that belongs to a receiver Object. Thread-safe.
+        template <typename Callable>
+        Connection connect
+            (
+            Callable&& aSlot,          //!< The callable slot function.
+            Object* aOwner,            //!< Receiver whose incoming list to keep.
+            std::weak_ptr<int> aLife   //!< That receiver's life token.
             );
 
         Signal<Args...>& mSignal;
@@ -134,12 +143,18 @@ namespace QtMimic
         }
 
         //! Connects a callable slot to this signal. Thread-safe.
+        //!
+        //! @p aSlot is taken as its own type rather than as a std::function<void(Args...)>, so it
+        //! is stored inside the connection's own allocation instead of behind a second one. It must
+        //! be callable with Args.
+        template <typename Callable>
         Connection connect
             (
-            std::function<void( Args... )> aSlot  //!< The callable slot function.
+            Callable&& aSlot  //!< The callable slot function.
             )
         {
-            return mImpl->connect( std::move( aSlot ), mImpl );
+            return mImpl->connect( std::forward<Callable>( aSlot ), mImpl, nullptr,
+                std::weak_ptr<int>() );
         }
 
         //! Disconnects a connection by handle. Thread-safe.
@@ -201,43 +216,106 @@ namespace QtMimic
         }
 
     private:
-        struct Slot;
-
-        //! The writers' list. Holds null entries where connections have been removed; see mLinked.
-        using SlotList = std::vector<std::shared_ptr<Slot> >;
-
-        //! One connection: the slot itself, the flag its handles share, and its place in the list.
-        struct Slot
+        //! Subscribes a slot that belongs to a receiver Object. Thread-safe.
+        //!
+        //! Private, with Object a friend: the receiver and its life token are bookkeeping
+        //! Object::connect() adds, and the connection node carries them so that ending the
+        //! connection prunes the receiver's incoming list in the same step.
+        template <typename Callable>
+        Connection connect
+            (
+            Callable&& aSlot,          //!< The callable slot function.
+            Object* aOwner,            //!< Receiver whose incoming list to keep.
+            std::weak_ptr<int> aLife   //!< That receiver's life token.
+            )
         {
-            //! Constructs a slot, taking ownership of both members. Unlinked until connect() has
-            //! put it in the list and recorded where.
-            Slot
+            return mImpl->connect( std::forward<Callable>( aSlot ), mImpl, aOwner,
+                std::move( aLife ) );
+        }
+
+        //! The callable half of a connection, with its concrete type erased behind one virtual
+        //! call.
+        //!
+        //! Separate from the node a Connection holds, and deliberately so: the callable must be
+        //! released as soon as the connection ends, while the node has to outlive it for as long as
+        //! any handle can still be asked whether the connection is live. Qt splits the same two
+        //! lifetimes the same way, into QObjectPrivate::Connection and QSlotObjectBase.
+        struct SlotBase
+        {
+            //! Constructs a slot for the connection @p aNode describes.
+            explicit SlotBase
                 (
-                std::function<void( Args... )> aSlot,               //!< The callable.
-                std::shared_ptr<Private::ConnectionState> aState    //!< Its shared live flag.
+                std::shared_ptr<Private::ConnectionNode> aNode  //!< Its connection node.
                 )
-                : mSlot( std::move( aSlot ) )
-                , mState( std::move( aState ) )
+                : mNode( std::move( aNode ) )
             {
             }
 
-            std::function<void( Args... )> mSlot;
-            std::shared_ptr<Private::ConnectionState> mState;
+            virtual ~SlotBase() = default;
 
-            //! Where this slot sits in the owning Impl's mWorking. Guarded by that Impl's mMutex.
-            //!
-            //! An index rather than an iterator, so the writers' side stays a vector: removal at a
-            //! known index is O(1) when the element is nulled rather than erased, and the snapshot
-            //! rebuild copies a contiguous block rather than chasing pointers.
-            std::size_t mIndex { 0 };
+            SlotBase
+                (
+                const SlotBase&
+                ) = delete;
 
-            //! True while mIndex names a live element. Guarded by the owning Impl's mMutex.
+            SlotBase& operator=
+                (
+                const SlotBase&
+                ) = delete;
+
+            //! Calls the slot with the emitted arguments.
             //!
-            //! Needed because a slot can be removed by more than one route -- its own handle,
-            //! disconnectAll(), or the Signal being destroyed -- and whichever gets there second
-            //! must not null an element the first one has already given to somebody else.
-            bool mLinked { false };
+            //! The parameters are the signal's own Args, exactly as a std::function<void(Args...)>
+            //! declared them, so a value emitted as something merely convertible still converts
+            //! here and a slot that asks for a mutable reference still gets one.
+            virtual void invoke
+                (
+                Args... aArgs
+                ) = 0;
+
+            //! The connection this slot belongs to. Strong, and the only strong reference from a
+            //! slot to a node, so the node outlives the slot without either owning the other twice.
+            const std::shared_ptr<Private::ConnectionNode> mNode;
         };
+
+        //! One slot, holding its callable by value inside the node's own allocation.
+        //!
+        //! Keeping the callable's concrete type is what removes the block a
+        //! std::function<void(Args...)> needed for it: the emit-time wrapper Object::connect()
+        //! builds is far past any small-object buffer, so type-erasing it cost a second allocation
+        //! per connection and an indirect call per emit. See PERFORMANCE-20260813.md (P10).
+        template <typename Callable>
+        struct SlotImpl : SlotBase
+        {
+            //! Constructs a slot, taking ownership of the callable.
+            SlotImpl
+                (
+                Callable aSlot,                                 //!< The callable.
+                std::shared_ptr<Private::ConnectionNode> aNode   //!< Its connection node.
+                )
+                : SlotBase( std::move( aNode ) )
+                , mSlot( std::move( aSlot ) )
+            {
+            }
+
+            virtual void invoke
+                (
+                Args... aArgs
+                ) override
+            {
+                // Forwarded, not passed on as lvalues: these parameters are this slot's own copies,
+                // made by the call above, so moving out of them costs the emitter nothing and no
+                // other slot can see it. std::function<void(Args...)> forwarded them for the same
+                // reason, and SignalTest.EmitCopiesOncePerByValueSlotAndNoMore counts the
+                // difference.
+                mSlot( std::forward<Args>( aArgs )... );
+            }
+
+            Callable mSlot;
+        };
+
+        //! The writers' list. Holds null entries where connections have been removed; see mLinked.
+        using SlotList = std::vector<std::shared_ptr<SlotBase> >;
 
         //! The connection list, held behind a shared_ptr so a Connection can outlive the Signal.
         //!
@@ -252,7 +330,7 @@ namespace QtMimic
         {
         public:
             //! What readers walk: a snapshot of mWorking, contiguous and immutable.
-            using PublishedList = std::vector<std::shared_ptr<Slot> >;
+            using PublishedList = std::vector<std::shared_ptr<SlotBase> >;
             using PublishedListPtr = std::shared_ptr<const PublishedList>;
 
             //! Constructs an empty list. Never null, so readers need no null check.
@@ -263,46 +341,35 @@ namespace QtMimic
 
             //! Marks every remaining connection dead, so handles that outlive this signal report
             //! themselves disconnected rather than pointing at a list that no longer exists.
+            //!
+            //! disconnectAll() is exactly that, plus emptying a list about to be emptied anyway.
             virtual ~Impl() override
             {
-                std::lock_guard<std::mutex> lock( mMutex );
-                for( const auto& slot : mWorking )
-                {
-                    if( !slot )
-                    {
-                        continue;
-                    }
-                    slot->mState->mConnected.store( false, std::memory_order_release );
-
-                    // Unlinked as well as marked dead: a handle disconnected after this point still
-                    // reaches removeConnection(), which must not touch a list about to be destroyed
-                    // with us.
-                    slot->mLinked = false;
-                }
+                disconnectAll();
             }
 
             //! Adds a slot and returns a handle to it.
+            template <typename Callable>
             Connection connect
                 (
-                std::function<void( Args... )> aSlot,
-                const std::shared_ptr<Impl>& aSelf
+                Callable&& aSlot,
+                const std::shared_ptr<Impl>& aSelf,
+                Object* aOwner,
+                std::weak_ptr<int> aLife
                 )
             {
-                auto state = std::make_shared<Private::ConnectionState>();
-                auto slot = std::make_shared<Slot>( std::move( aSlot ), state );
-
-                // The back-pointer disconnect() follows to find this slot in O(1). Set before the
-                // handle below can reach any caller, and never written again.
-                state->mSlot = slot;
+                auto node = std::make_shared<Private::ConnectionNode>( aOwner, std::move( aLife ) );
+                auto slot = std::make_shared<SlotImpl<std::decay_t<Callable> > >(
+                    std::forward<Callable>( aSlot ), node );
 
                 {
                     std::lock_guard<std::mutex> lock( mMutex );
-                    slot->mIndex  = mWorking.size();
-                    slot->mLinked = true;
+                    node->mIndex  = mWorking.size();
+                    node->mLinked = true;
                     mWorking.push_back( std::move( slot ) );
                     mDirty = true;
                 }
-                return Connection( aSelf, std::move( state ) );
+                return Connection( aSelf, std::move( node ) );
             }
 
             //! Calls every connected slot, with no lock held. See the class comment.
@@ -322,9 +389,9 @@ namespace QtMimic
                     // Re-checked here rather than only when the snapshot was taken: a slot earlier
                     // in this same loop may have disconnected this one, and it must not be called
                     // afterwards. Holding the snapshot is what keeps it alive to be asked.
-                    if( slot->mState->mConnected.load( std::memory_order_acquire ) )
+                    if( slot->mNode->mConnected.load( std::memory_order_acquire ) )
                     {
-                        slot->mSlot( aArgs ... );
+                        slot->invoke( aArgs ... );
                     }
                 }
             }
@@ -341,19 +408,27 @@ namespace QtMimic
                         {
                             continue;
                         }
-                        slot->mState->mConnected.store( false, std::memory_order_release );
+                        slot->mNode->mConnected.store( false, std::memory_order_release );
 
                         // Unlinked before the list is emptied, so a handle disconnected after this
                         // point finds nothing to remove instead of nulling somebody else's element.
-                        slot->mLinked = false;
+                        slot->mNode->mLinked = false;
                     }
                     dropped.swap( mWorking );
                     mTombstones = 0;
                     discardSnapshot();
                 }
-                // `dropped` dies here, with the lock released. A slot's destructor runs the Cleanup
-                // token, which takes Object::mIncomingMutex, and holding ours across that would
-                // nest the two locks in the opposite order to connect().
+
+                // Pruned with the lock released, and `dropped` dies here for the same reason:
+                // pruneReceiver() takes Object::mIncomingMutex, and holding ours across that would
+                // nest the two locks in the opposite order to ~Object().
+                for( const auto& slot : dropped )
+                {
+                    if( slot )
+                    {
+                        slot->mNode->pruneReceiver();
+                    }
+                }
             }
 
             //! Number of connections still live. A diagnostic, so it counts rather than caches.
@@ -363,7 +438,7 @@ namespace QtMimic
                 std::size_t count = 0;
                 for( const auto& slot : mWorking )
                 {
-                    if( slot && slot->mState->mConnected.load( std::memory_order_acquire ) )
+                    if( slot && slot->mNode->mConnected.load( std::memory_order_acquire ) )
                     {
                         ++count;
                     }
@@ -371,48 +446,40 @@ namespace QtMimic
                 return count;
             }
 
-            //! Drops the one slot @p aState belongs to. See SignalImplBase.
+            //! Drops the connection @p aNode describes. See SignalImplBase.
             //!
-            //! O(1): the slot is reached through the back-pointer in its own state and nulled at the
-            //! index it carries, so the cost does not depend on how many other connections exist.
+            //! O(1): the node carries its own index, so the slot is nulled where it stands and the
+            //! cost does not depend on how many other connections exist.
             virtual void removeConnection
                 (
-                const std::shared_ptr<Private::ConnectionState>& aState
+                const std::shared_ptr<Private::ConnectionNode>& aNode
                 ) override
             {
-                if( !aState )
+                if( !aNode )
                 {
                     return;
                 }
 
                 // Declared before the lock, so that when it turns out to hold the last reference
-                // the slot is destroyed *after* the unlock below. A slot's destructor runs the
-                // Cleanup token, which takes Object::mIncomingMutex, and holding ours across that
-                // would nest the two locks in the opposite order to connect().
-                const std::shared_ptr<Slot> slot
-                    = std::static_pointer_cast<Slot>( aState->mSlot.lock() );
-                if( !slot )
-                {
-                    return;
-                }
-
+                // the slot is destroyed *after* the unlock below. The callable is whatever the
+                // caller handed to connect(), and its destructor must not run under our mutex.
+                std::shared_ptr<SlotBase> dropped;
                 {
                     std::lock_guard<std::mutex> lock( mMutex );
-                    if( !slot->mLinked )
+                    if( !aNode->mLinked )
                     {
                         return;   // already removed, by another handle or by disconnectAll()
                     }
 
-                    // Nulled where it stands rather than erased, so every other slot's index stays
-                    // valid and this costs nothing regardless of how many there are. The reference
-                    // dropped here is the list's; ours above is what keeps the slot alive until the
-                    // unlock.
-                    mWorking[slot->mIndex].reset();
-                    slot->mLinked = false;
+                    // Taken where it stands rather than erased, so every other slot's index stays
+                    // valid and this costs nothing regardless of how many there are.
+                    dropped = std::move( mWorking[aNode->mIndex] );
+                    aNode->mLinked = false;
                     ++mTombstones;
                     discardSnapshot();
                     compactIfMostlyDead();
                 }
+                aNode->pruneReceiver();
             }
 
         private:
@@ -434,7 +501,7 @@ namespace QtMimic
                 {
                     if( slot )
                     {
-                        slot->mIndex = live.size();
+                        slot->mNode->mIndex = live.size();
                         live.push_back( std::move( slot ) );
                     }
                 }
@@ -503,6 +570,10 @@ namespace QtMimic
         //! The view handed out by view(). Mutable because handing one out does not modify the
         //! signal, but the view it returns has to be usable for subscribing.
         mutable SignalView<Args...> mView;
+
+        //! Grants Object the receiver-aware connect() above, and the view the right to forward it.
+        friend class Object;
+        friend class SignalView<Args...>;
     };
 
     //! Specialization of IsSignal matching any Signal<Args...>, so IsSignal<T>::value is
@@ -522,12 +593,27 @@ namespace QtMimic
     //! Subscribes a slot to the viewed signal. Defined out of line because it needs Signal to be
     //! complete. Thread-safe.
     template<typename ... Args>
+    template<typename Callable>
     Connection SignalView<Args...>::connect
         (
-        std::function<void( Args... )> aSlot  //!< The callable slot function.
+        Callable&& aSlot  //!< The callable slot function.
         )
     {
-        return mSignal.connect( std::move( aSlot ) );
+        return mSignal.connect( std::forward<Callable>( aSlot ) );
+    }
+
+    //! Subscribes a slot that belongs to a receiver Object. Defined out of line because it needs
+    //! Signal to be complete. Thread-safe.
+    template<typename ... Args>
+    template<typename Callable>
+    Connection SignalView<Args...>::connect
+        (
+        Callable&& aSlot,          //!< The callable slot function.
+        Object* aOwner,            //!< Receiver whose incoming list to keep.
+        std::weak_ptr<int> aLife   //!< That receiver's life token.
+        )
+    {
+        return mSignal.connect( std::forward<Callable>( aSlot ), aOwner, std::move( aLife ) );
     }
 }
 

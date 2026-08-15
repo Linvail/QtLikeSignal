@@ -911,24 +911,48 @@ namespace QtLikeSignal
         return false;
     }
 
-    //! Removes this connection from its receiver's mIncoming as the connection is destroyed.
+    //! Records @p aHandle in the receiver's mIncoming. See ConnectionNode.
     //!
-    //! Runs when the Signal destroys the slot holding this token -- a manual disconnect(), the
-    //! sender Signal being destroyed, or ~Object()'s own disconnect loop. Without it mIncoming would
-    //! only ever grow for an object that outlives connections made to it, and would eventually hold
-    //! stale handles.
-    Object::Cleanup::~Cleanup()
+    //! Defined here rather than in Connection.hpp because it is the receiver's list it touches, and
+    //! that needs Object to be complete.
+    void Private::ConnectionNode::registerWithReceiver
+        (
+        const Connection& aHandle
+        )
     {
-        // The receiver is gone or already being destroyed; ~Object() has taken mIncoming over and
-        // touching mOwner here would be a use-after-free. This is also what makes ~Object()'s own
-        // disconnect loop non-re-entrant, since it resets the token before disconnecting.
-        if( mLife.expired() )
+        // No receiver, or one already being destroyed. Signal::connect() takes the first branch:
+        // a slot subscribed without an Object has no incoming list to appear in.
+        if( mOwner == nullptr || mLife.expired() )
         {
             return;
         }
 
         std::lock_guard<std::mutex> lock( mOwner->mIncomingMutex );
+        if( !mPruned )
+        {
+            mOwner->mIncoming.push_back( aHandle );
+        }
+    }
+
+    //! Removes this connection's handle from the receiver's mIncoming. See ConnectionNode.
+    void Private::ConnectionNode::pruneReceiver()
+    {
+        // The receiver is gone or already being destroyed; ~Object() has taken mIncoming over and
+        // touching mOwner here would be a use-after-free. This is also what makes ~Object()'s own
+        // disconnect loop non-re-entrant, since it resets the life token before disconnecting.
+        if( mOwner == nullptr || mLife.expired() )
+        {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock( mOwner->mIncomingMutex );
+        mPruned = true;
+
         auto& handles = mOwner->mIncoming;
-        handles.erase( std::remove( handles.begin(), handles.end(), mHandle ), handles.end() );
+        handles.erase( std::remove_if( handles.begin(), handles.end(),
+            [this]( const Connection& aHandle )
+            {
+                return aHandle.mNode.get() == this;
+            } ), handles.end() );
     }
 }

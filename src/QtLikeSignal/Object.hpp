@@ -726,49 +726,6 @@ namespace QtLikeSignal
             std::function<void()> aSlot
             );
 
-        //! Prunes one connection from its receiver's mIncoming when that connection ends.
-        //!
-        //! Held by shared_ptr inside the connection's own slot closure, so it is destroyed exactly
-        //! when the Signal destroys the slot -- whether that is a manual disconnect(), the sender
-        //! Signal being destroyed, or ~Object() below. Without it mIncoming would only ever grow: an
-        //! object that outlives a connection it received would keep a handle to a connection that
-        //! no longer exists, and eventually disconnect() a recycled one.
-        struct Cleanup
-        {
-            Cleanup
-                (
-                Object* aOwner,
-                std::weak_ptr<int> aLife
-                )
-                : mOwner( aOwner )
-                , mLife( std::move( aLife ) )
-            {
-            }
-
-            ~Cleanup();
-
-            Cleanup
-                (
-                const Cleanup&
-                ) = delete;
-
-            Cleanup& operator=
-                (
-                const Cleanup&
-                ) = delete;
-
-            Object* mOwner;                //!< Receiver owning the mIncoming entry.
-            std::weak_ptr<int> mLife;      //!< Receiver's life token; expired means it is gone.
-
-            //! The entry to prune; set by connectImpl() once the handle exists.
-            //!
-            //! Unguarded, and does not need to be. connectImpl() holds its own shared_ptr to this
-            //! token across the whole of its body, so ~Cleanup() cannot start until connectImpl()
-            //! has finished writing this and registering it -- a disconnect racing that window drops
-            //! the *slot's* reference, which is not the last one. See connectImpl().
-            Connection mHandle;
-        };
-
         //! The one body shared by all ten connect() overloads.
         //!
         //! The overloads above differ only in what the compiler needs in order to *name* the slot:
@@ -776,8 +733,8 @@ namespace QtLikeSignal
         //! what the resulting connection does. So each one binds the receiver and the slot into a
         //! small adapter and hands it here, exactly as QtMimic's overloads hand theirs to its
         //! connectImpl(); everything that is actually a connection -- the life token, the affinity
-        //! box, the cleanup token, the emit-time wrapper and the incoming-connection bookkeeping --
-        //! is written once, here.
+        //! box, the emit-time wrapper and the incoming-connection bookkeeping -- is written once,
+        //! here.
         //!
         //! @p aSlot is a template parameter rather than a std::function on purpose. The adapter
         //! captures only a receiver pointer and a member-function pointer, and keeping its concrete
@@ -797,10 +754,11 @@ namespace QtLikeSignal
         {
             // No context, no connection. Everything that makes a connection safe hangs off the
             // context: the life token that lets a queued invocation be dropped when the receiver
-            // dies, the affinity that decides which thread it runs on, and the cleanup token that
-            // prunes it on disconnect. A connection without one has none of that -- it would fire
-            // forever, on whichever thread emitted, with nothing able to stop it. Qt refuses the
-            // same call for the same reason, returning an invalid QMetaObject::Connection.
+            // dies, the affinity that decides which thread it runs on, and the receiver whose
+            // incoming list is pruned on disconnect. A connection without one has none of that --
+            // it would fire forever, on whichever thread emitted, with nothing able to stop it. Qt
+            // refuses the same call for the same reason, returning an invalid
+            // QMetaObject::Connection.
             if( !aContext )
             {
                 return {};
@@ -815,11 +773,6 @@ namespace QtLikeSignal
             // before it, and it stays readable after the Object is destroyed.
             std::shared_ptr<Affinity> ctxAffinity = aContext->mAffinity;
 
-            // Cleanup token captured by the slot: when the connection ends, the Signal destroys the
-            // slot, which prunes the handle from the receiver immediately. The weak life token
-            // stops it touching a receiver that is already gone.
-            std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aContext, weakLife );
-
             // Generic in its arguments so one wrapper serves every signal signature. Taking them by
             // forwarding reference rather than by the signal's declared value types also stops a
             // by-value signal argument being reconstructed at the wrapper boundary before anything
@@ -830,7 +783,7 @@ namespace QtLikeSignal
             // matches on. ~Object() strips every event still queued for it before it goes away, so
             // the dispatcher never delivers to a dead receiver.
             auto wrapper = [weakLife, aContext, slot = std::forward<Callable>( aSlot ), aType,
-                ctxAffinity, cleanup]( auto&&... aArgs )
+                ctxAffinity]( auto&&... aArgs )
                 {
                     if( aType == ConnectionType::Direct )
                     {
@@ -892,28 +845,28 @@ namespace QtLikeSignal
             // Moved, not copied: connect() takes the slot by value, so passing the named local
             // built a second closure -- two shared_ptrs, a weak_ptr and the slot itself -- and
             // threw the first away.
-            Connection handle = aSignal.connect( std::move( wrapper ) );
+            // The receiver and its life token go into the connection node, so ending the connection
+            // prunes the receiver's incoming list in the same step, whichever route ends it.
+            Connection handle = aSignal.connect( std::move( wrapper ), aContext, weakLife );
 
-            // Written without a lock, which is safe for a reason worth stating: `cleanup` is a
-            // local shared_ptr, so this function holds a reference for its whole body. ~Cleanup()
-            // cannot run while we are here, however fast another thread disconnects -- disconnecting
-            // drops the slot's reference, not ours, and the token outlives the slot. So this write
-            // and the destructor's read of the same member cannot overlap, and the push below
-            // completes before the destructor can look for it.
-            //
-            // A lock here was added on 2026-08-13 for a race that a TSan probe then failed to
-            // reproduce, and reverted; see R29 in history/OPEN-RISKS-20260813.md.
-            cleanup->mHandle = handle;
-
-            {
-                std::lock_guard<std::mutex> lock( aContext->mIncomingMutex );
-                aContext->mIncoming.push_back( handle );
-            }
+            // Records the handle in aContext->mIncoming, and does nothing if a concurrent
+            // disconnectAll() pruned the connection while we were between the two lines. Both this
+            // and the prune take aContext->mIncomingMutex, so one of the two orders always holds and
+            // no entry is left behind for a prune that already ran.
+            // The Cleanup token this replaced got the same result from its own lifetime, and needed
+            // a paragraph to say why; see R29 in history/OPEN-RISKS-20260813.md for the lock that was
+            // added for a race a TSan probe then failed to reproduce, and reverted.
+            handle.registerWithReceiver();
             return handle;
         }
 
         //! Grants the event queue access to event(), which it alone invokes.
         friend class EventDispatcherDefault;
+
+        //! Grants a connection node the two members that are its half of the bookkeeping: it
+        //! registers itself in mIncoming when the connection is made, and prunes itself when the
+        //! connection ends.
+        friend struct Private::ConnectionNode;
 
         //! Grants the callLater pending-call registry (defined in Object.cpp) the ability to
         //! name the private CallLaterKey/CallLaterKeyHash types its map is keyed on.

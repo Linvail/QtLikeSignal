@@ -19,7 +19,6 @@
 
 namespace QtMimic
 {
-
     //! One pending deferred call: the invoker to run, guarded by its own mutex.
     struct CallLaterNode
     {
@@ -97,29 +96,21 @@ namespace QtMimic
                 sFree.push_back( aTimerId );
             }
 
-            static std::mutex sMutex;      //!< Guards both members below.
-            static std::deque<int> sFree;  //!< Freed ids, oldest first.
-            static int sNextFresh;         //!< Next never-yet-issued id.
+            static std::mutex sMutex;        //!< Guards both members below.
+            static std::deque<int> sFree;    //!< Freed ids, oldest first.
+            static int sNextFresh;           //!< Next never-yet-issued id.
         };
 
         std::mutex TimerIdPool::sMutex;
         std::deque<int> TimerIdPool::sFree;
         int TimerIdPool::sNextFresh = 1;
-    }  // namespace
-
-    //================================================================
-    // Object
-    //================================================================
+    }
 
     //! Constructs an object living in the given thread, or in the calling thread if none is given.
     Object::Object
         (
-        Thread* aThread
+        Thread* aThread  //!< Thread this object lives in; null means the calling thread.
         )
-    // Store the thread's ThreadData, not the Thread itself: it outlives the Thread, so this
-    // object's affinity can never become a dangling pointer. currentData() auto-adopts the
-    // calling thread exactly as current() does when no thread is given. Held in an Affinity
-    // box read at emit time, so a later moveToThread() redirects existing connections too.
         : Object( aThread ? aThread->threadData()
             : ( Thread::currentThread() ? Thread::currentThread()->threadData()
             : std::shared_ptr<ThreadData>() ) )
@@ -129,7 +120,7 @@ namespace QtMimic
     //! Constructs an object directly on the given thread data. See the declaration.
     Object::Object
         (
-        std::shared_ptr<ThreadData> aThreadData
+        std::shared_ptr<ThreadData> aThreadData  //!< Affinity to start with; may be null.
         )
         : mLife( std::make_shared<int>( 0 ) )
         , mAffinity( std::make_shared<Affinity>( std::move( aThreadData ) ) )
@@ -310,7 +301,7 @@ namespace QtMimic
     //! did); false if the move was refused, in which case the affinity is unchanged.
     bool Object::moveToThread
         (
-        Thread* aThread
+        Thread* aThread  //!< The new thread this object will live in; nullptr clears the affinity.
         )
     {
         Thread* const currentAffinity = thread();
@@ -485,7 +476,7 @@ namespace QtMimic
     //! Called when one of this object's timers comes due. Does nothing by default.
     void Object::timerEvent
         (
-        TimerEvent* aEvent
+        TimerEvent* aEvent  //!< The timer event containing the timer ID.
         )
     {
         ( void )aEvent;
@@ -505,7 +496,7 @@ namespace QtMimic
     //! An interval of 0 means "fire on every pass of the event loop", as in Qt.
     int Object::startTimer
         (
-        int aIntervalMs  //!< Interval in milliseconds; 0 fires on every loop pass.
+        int aIntervalMs  //!< Interval in milliseconds.
         )
     {
         if( aIntervalMs < 0 )
@@ -561,14 +552,9 @@ namespace QtMimic
         return timerId;
     }
 
-    //! Stops the timer with id @p aTimerId.
-    //!
-    //! **Not thread-safe: must be called from this object's own thread**, for the same reason as
-    //! startTimer(). Calls from another thread are rejected with a warning and do nothing. An id
-    //! this object does not own is ignored.
     void Object::killTimer
         (
-        int aTimerId  //!< Id returned by startTimer().
+        int aTimerId  //!< The timer ID to stop.
         )
     {
         // Thread-confined for the same reason as startTimer().
@@ -599,6 +585,11 @@ namespace QtMimic
         }
     }
 
+    //! Stops the timer with id @p aTimerId.
+    //!
+    //! **Not thread-safe: must be called from this object's own thread**, for the same reason as
+    //! startTimer(). Calls from another thread are rejected with a warning and do nothing. An id
+    //! this object does not own is ignored.
     //! Drops @p aTimerId from this object's record of running timers. Returns whether it was there.
     //!
     //! The id is *not* returned to the pool here. Both callers have to unregister the timer with
@@ -606,7 +597,7 @@ namespace QtMimic
     //! TimerEvent still names.
     bool Object::forgetTimerId
         (
-        int aTimerId
+        int aTimerId  //!< The timer ID to forget.
         )
     {
         std::lock_guard<std::mutex> lock( mRunningTimerIdsMutex );
@@ -624,7 +615,7 @@ namespace QtMimic
         (
         Object* aContext,               //!< Target context object.
         const CallLaterKey& aKey,       //!< Key identifying the deferred call.
-        std::function<void()> aInvoker  //!< Callback executing the call.
+        std::function<void()> aInvoker   //!< Callback executing the call.
         )
     {
         if( !aContext )
@@ -745,8 +736,8 @@ namespace QtMimic
     //! QObjectPrivate::setThreadData_helper().
     void Object::migratePostedEvents
         (
-        const std::shared_ptr<ThreadData>& aOldData,  //!< Thread being left; may be null.
-        const std::shared_ptr<ThreadData>& aNewData   //!< Thread now lived on; may be null.
+        const std::shared_ptr<ThreadData>& aOldData,  //!< Thread the object is leaving; may be null.
+        const std::shared_ptr<ThreadData>& aNewData   //!< Thread it now lives on; may be null.
         )
     {
         if( aOldData == aNewData )
@@ -845,9 +836,9 @@ namespace QtMimic
     //! event dispatcher yet. Callers that track pending state must undo it when this returns false.
     bool Object::dispatchMetaCall
         (
-        Object* aTarget,              //!< Target Object.
-        std::function<void()> aSlot,  //!< Callback function.
-        ConnectionType aType          //!< Connection type.
+        Object* aTarget,               //!< Target Object.
+        std::function<void()> aSlot,    //!< Callback function.
+        ConnectionType aType         //!< Connection type.
         )
     {
         if( !aTarget )
@@ -914,29 +905,48 @@ namespace QtMimic
         return false;
     }
 
-    //================================================================
-    // Object::Cleanup
-    //================================================================
-
-
-    //! Removes this connection from its receiver's mIncoming as the connection is destroyed.
+    //! Records @p aHandle in the receiver's mIncoming. See ConnectionNode.
     //!
-    //! Runs when the Signal destroys the slot holding this token -- a manual disconnect(), the
-    //! sender Signal being destroyed, or ~Object()'s own disconnect loop. Without it mIncoming would
-    //! only ever grow for an object that outlives connections made to it, and would eventually hold
-    //! stale handles.
-    Object::Cleanup::~Cleanup()
+    //! Defined here rather than in Connection.hpp because it is the receiver's list it touches, and
+    //! that needs Object to be complete.
+    void Private::ConnectionNode::registerWithReceiver
+        (
+        const Connection& aHandle
+        )
     {
-        // The receiver is gone or already being destroyed; ~Object() has taken mIncoming over and
-        // touching mOwner here would be a use-after-free. This is also what makes ~Object()'s own
-        // disconnect loop non-re-entrant, since it resets the token before disconnecting.
-        if( mLife.expired() )
+        // No receiver, or one already being destroyed. Signal::connect() takes the first branch:
+        // a slot subscribed without an Object has no incoming list to appear in.
+        if( mOwner == nullptr || mLife.expired() )
         {
             return;
         }
 
         std::lock_guard<std::mutex> lock( mOwner->mIncomingMutex );
-        auto& handles = mOwner->mIncoming;
-        handles.erase( std::remove( handles.begin(), handles.end(), mHandle ), handles.end() );
+        if( !mPruned )
+        {
+            mOwner->mIncoming.push_back( aHandle );
+        }
     }
-} // namespace QtMimic
+
+    //! Removes this connection's handle from the receiver's mIncoming. See ConnectionNode.
+    void Private::ConnectionNode::pruneReceiver()
+    {
+        // The receiver is gone or already being destroyed; ~Object() has taken mIncoming over and
+        // touching mOwner here would be a use-after-free. This is also what makes ~Object()'s own
+        // disconnect loop non-re-entrant, since it resets the life token before disconnecting.
+        if( mOwner == nullptr || mLife.expired() )
+        {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock( mOwner->mIncomingMutex );
+        mPruned = true;
+
+        auto& handles = mOwner->mIncoming;
+        handles.erase( std::remove_if( handles.begin(), handles.end(),
+            [this]( const Connection& aHandle )
+            {
+                return aHandle.mNode.get() == this;
+            } ), handles.end() );
+    }
+}

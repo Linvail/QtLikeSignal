@@ -37,7 +37,7 @@ same names and semantics:
 
 ```
 Signal<Args...>
-    connect( std::function<void(Args...)> )   -> Connection
+    connect( callable )                       -> Connection   template, not std::function -- see 1c
     connectReflective( callable )             -> Connection   (QtMimic only, see below)
     emit( args... )                           perfect-forwarding, NOT by value -- see 1a
     operator()( args... )
@@ -52,8 +52,8 @@ SignalView<Args...>                           subscription-only window onto a Si
 
 Connection
     disconnect(), connected(), operator==, default-construct, copy.
-    Copies must refer to the same connection: Object::mIncoming stores copies and later
-    std::remove()s by value against the handle held inside the slot's Cleanup token.
+    Copies must refer to the same connection: Object::mIncoming stores copies and the
+    connection node later std::remove_if()s the one that points back at itself.
 ```
 
 **1a.** `emit()` must forward, never take `Args...` by value. Taking by value cost one copy of every
@@ -65,16 +65,29 @@ whether it is still needed before reimplementing it — QtLikeSignal does the sa
 it is not needed, delete it and let the two Signal implementations converge, which is worth more
 than the feature.
 
+**1c.** `connect()` takes the callable as a template parameter, not as a
+`std::function<void(Args...)>`. Keeping its concrete type lets the slot hold it by value inside its
+own allocation, which is one heap block rather than two — the emit-time wrapper `Object::connect()`
+builds is far past any small-object buffer. If you type-erase at this boundary you put that block
+back. See P10 in `history/PERFORMANCE-20260813.md`.
+
 ### 2. The four guarantees boost is silently providing
 
 These are the reason to be careful. Each one has a comment in the tree explaining it; go and read
 the comment before deciding your implementation satisfies it.
 
 **2a. A slot stays alive for the whole of its invocation, even if it is disconnected mid-call.**
-boost does this with `connection_body`'s `m_slot_refcount`. We depend on it twice over: the slot
-owns the `Cleanup` token whose destructor prunes `Object::mIncoming`, and it owns the captured
+boost does this with `connection_body`'s `m_slot_refcount`. We do it by holding the emit snapshot's
+`shared_ptr` to the slot across the call. It matters because the slot owns the captured
 `shared_ptr<Affinity>` that the queued path dereferences on every emit.
 Test: `ObjectTest.KamikazeSlot_DisconnectsItselfDuringEmissionWithoutCrashing`.
+
+**This is why the slot cannot live in the same allocation as the connection node.** The node is what
+a `Connection` handle holds, so it outlives the slot; the slot must be released the moment the
+connection ends, or a caller keeping a handle in order to disconnect later pins everything the slot
+captured. Two lifetimes, two allocations — Qt splits them the same way, into
+`QObjectPrivate::Connection` and `QSlotObjectBase`.
+Test: `SignalTest.SlotSurvivesDisconnectingItselfMidCall`.
 
 **2b. Emission does NOT hold the signal's lock while calling slots.**
 boost copies the connection list and releases the signal mutex before invoking anything.

@@ -20,10 +20,10 @@ How every figure below was produced is at the end of this document, under
 | P7 | **Fixed** | `disconnect()` is O(slots on the signal), so tearing down N receivers of one signal is O(N²) | High | 671.2 ms → **3.98 ms** for 16 000 receivers, and flat |
 | P8 | **In progress** | A connect makes the next emit rebuild the whole slot list | Medium | Churn 16.8 → **13.1 µs** per cycle; the rebuild itself remains |
 | P9 | **By Design** | The R28 correctness fix costs one mutex per dispatched event | Low | **+3.3 ns** per event |
-| P10 | **Queue** | `connect()` spreads one connection over five heap blocks where Qt uses one node | Low-Med | Measured — **5 allocations / 364 B** against Qt's 2 / 104 B |
+| P10 | **In progress** | `connect()` spreads one connection over five heap blocks where Qt uses two | Low-Med | 5 blocks / 364 B → **3 blocks / 260 B** against Qt's 2 / 104 B; stage 2 queued |
 
-**Everything here is measured.** Four items are fixed, four are accepted costs, one is partly done
-and deliberately parked, and one is queued with a known shape.
+**Everything here is measured.** Four items are fixed, four are accepted costs, and two are partly
+done: P8 is deliberately parked, P10 has one stage left.
 
 Two things are worth knowing without reading further:
 
@@ -273,11 +273,11 @@ rare.
 snapshot rebuild then chases pointers instead of copying a contiguous block. The
 index-plus-tombstone form keeps the writers' side a vector and wins on both.
 
-**Second-order, same family, not fixed:** `~Cleanup` erases from `Object::mIncoming` with a linear
-`std::remove` ([Object.cpp](src/Object.cpp#L244-L246)), so an object holding K incoming connections
+**Second-order, same family, not fixed:** `ConnectionNode::pruneReceiver()` erases from
+`Object::mIncoming` with a linear `std::remove_if`, so an object holding K incoming connections
 disconnected one by one pays O(K²). K is normally small, and `~Object()` swaps the vector out first
-so the destructor path skips it entirely. Worth fixing only if the handle bookkeeping is touched
-anyway.
+so the destructor path skips it entirely. P10 stage 2 is what removes it, by making `mIncoming`
+intrusive; until then it is worth fixing only if the handle bookkeeping is touched anyway.
 
 ## P8 — a connect makes the next emit rebuild the whole slot list *(In progress)*
 
@@ -330,9 +330,15 @@ is why it is By Design rather than queued.
 The R30 fix adds a second lock of the same kind and is not worth measuring: one acquire per *ready
 descriptor per poll round*, not per event, on a path that has just returned from a syscall.
 
-## P10 — one connection costs five heap blocks *(Queue)*
+## P10 — one connection costs five heap blocks *(Stage 1 done, stage 2 queued)*
 
-`connect()` is ~320 ns against Qt 6's ~110 ns (P6). Counted with an instrumented `operator new`,
+**Stage 1 landed on 2026-08-15: five blocks and 364 B became three blocks and 260 B.** The original
+finding and the reasoning behind it are kept below, followed by what was actually built — which is
+not what the plan said, because the plan was wrong in one place and a test caught it.
+
+### The finding, as measured on 2026-08-13
+
+`connect()` was ~320 ns against Qt 6's ~110 ns (P6). Counted with an instrumented `operator new`,
 20 000 connections, sizes attributed by their footprint:
 
 | block | ours | what it is | Qt's equivalent |
@@ -351,109 +357,129 @@ because there is no generated per-class dispatcher to look them up. Qt's slot ob
 moc supplies that dispatcher, and the receiver, connection type and list links live in the
 `Connection` node it was going to allocate anyway.
 
-The other three are fragmentation, not function. Qt gets **the same guarantees we do** — two-sided
-teardown, a handle that outlives the signal, O(1) removal from both sides — out of one intrusive,
-refcounted node. We spread them across `Cleanup`, `ConnectionState` and an `mIncoming` vector entry.
+The other three were fragmentation, not function. Qt gets **the same guarantees we do** — two-sided
+teardown, a handle that outlives the signal, O(1) removal from both sides — out of two allocations.
+We spread them across `Cleanup`, `ConnectionState` and an `mIncoming` vector entry.
 
-**What fusing them would give.** Merge `Cleanup`, `ConnectionState` and `Slot` into one node, and
-make `mIncoming` intrusive — the node is already reachable from both sides, which is what made P7's
-O(1) removal possible. That is 5 allocations to 2 and ~364 B to ~170 B, which by the observed
-proportionality puts `connect()` near Qt's. It would also remove **P7's second-order O(K²)**: the
-linear `std::remove` in `~Cleanup` becomes an unlink.
-
-**Why it is queued and not scheduled.** `connect()` is not a hot path, and the counterweight is
+**Why it was queued rather than scheduled.** `connect()` is not a hot path, and the counterweight is
 real: intrusive lifetime management is exactly what this `Signal` was written to avoid, and its
 comments are long because those rules are already subtle. The argument for doing it is **memory, not
-time** — 3.5x per connection, which matters for the embedded-ish target
-`ForAI/mission-signal-code-generator.md` argues for, where per-object footprint was already the
-stronger case.
+time** — which matters for the embedded-ish target `ForAI/mission-signal-code-generator.md` argues
+for, where per-object footprint was already the stronger case.
 
-### The plan
+### What stage 1 actually built
 
-Three stages, each independently verifiable and each leaving the tree green. The allocation guard
-`PerformanceRegression.OneConnectionCostsAtMostFiveHeapBlocks` measures the result exactly, so every
-stage has a number to hit rather than an impression to argue about — tighten its bar as each lands.
+Two changes, both in `Signal.hpp` and `Connection.hpp`:
 
-**Stage 1 — fuse `Slot`, `ConnectionState` and `Cleanup` into one node. 5 blocks → 3.**
+**`Cleanup` and `ConnectionState` merged into one `Private::ConnectionNode`.** The node is what a
+`Connection` holds, so it carries everything a handle can ask about — the live flag, the index in
+the sender's list, the `mLinked` bit — plus what the old `Cleanup` token carried: the receiver and
+its life token. `Cleanup` is gone, and so is the `weak_ptr<void>` back-pointer P7 added, because
+`removeConnection()` now receives the node itself and reads its index directly.
 
-The obstacle is that `ConnectionState` must stay untemplated: a `Connection` answers `connected()`
-and compares equal without knowing `Args...`. Split the node by what actually needs the types:
+**The callable is stored by its own type instead of behind a `std::function`.** `SlotBase` declares
+one virtual `invoke(Args...)`; `SlotImpl<Callable>` holds the callable by value. One `make_shared`
+puts the emit-time wrapper closure *inside* the slot's allocation, so the block `std::function`
+needed for it is gone. This is what Qt does with `QSlotObjectBase` / `QCallableObject`.
 
-```cpp
-struct ConnectionNode                    // untemplated: what a Connection can name
-{
-    std::atomic<bool> mConnected { true };
-    std::size_t       mIndex { 0 };      // place in the Signal's working list
-    bool              mLinked { false };
-    Object*           mOwner { nullptr };   // receiver, for the mIncoming prune
-    std::weak_ptr<int> mLife;               // its life token
-    virtual ~ConnectionNode();              // the prune that ~Cleanup does today
-};
+`Signal::connect()` is a template now rather than taking `std::function<void(Args...)>`, which is
+what keeps the caller's concrete type all the way into the slot.
 
-template <typename... Args>
-struct Slot : ConnectionNode             // templated: the callable
-{
-    std::function<void( Args... )> mSlot;
-};
-```
+Measured the same way as the original, 20 000 connections:
 
-One `make_shared<Slot<Args...>>` allocates the whole thing, and `shared_ptr<Slot>` converts to
-`shared_ptr<ConnectionNode>` free of charge, sharing the one control block. `Connection` holds the
-base pointer. The `weak_ptr<void>` back-pointer P7 added disappears — the state *is* the slot.
+| block | ours | what it is |
+|---|---|---|
+| 112 B | ×1 | `SlotImpl` — the wrapper closure inside it, plus a vtable and the node pointer |
+| 64 B | ×1 | `ConnectionNode` — live flag, list index, receiver, life token |
+| 32 B | ×1 | the receiver's `mIncoming` entry |
+| **total** | **3 blocks, 260 B** | against five blocks and 364 B |
 
-No behaviour changes, so the existing suites are the check. Expected: 3 blocks, ~220 B.
+**40% fewer blocks and 29% less memory per connection.** `connect()` went from 254.8 ns to 225.7 ns
+against Qt 6's 131.3 ns — an 11% saving, far less than the block count suggests, so **whatever
+remains in `connect()` is not allocation.** Finding it is its own investigation. QtMimic was the
+control: it measured 254.8 ns in the same run, before the same change landed there.
 
-**Stage 2 — make `Object::mIncoming` intrusive. 3 blocks → 2, and P7's residual goes with it.**
+### The plan was wrong about fusing the slot in
+
+The 2026-08-13 plan proposed one node holding the callable as well — `Slot<Args...> :
+ConnectionNode` — for three blocks in a different arrangement. **That is a defect, and
+`SignalTest.SlotSurvivesDisconnectingItselfMidCall` fails on it within a minute of building.**
+
+The node and the callable are two lifetimes, not one:
+
+- the callable must be released **the moment the connection ends**, or a caller who keeps a
+  `Connection` in order to disconnect with it later pins everything the slot captured;
+- the node must outlive the callable, because a handle can still be asked `connected()` afterwards;
+- and the callable must nevertheless survive **its own invocation**, even if the slot disconnects
+  itself mid-call, which is guarantee 2.
+
+Fusing them gives the union of the three, which satisfies the last and breaks the first. Clearing
+the callable eagerly on removal satisfies the first and breaks the last. Qt has exactly this problem
+and answers it with two refcounted allocations, `QObjectPrivate::Connection` and `QSlotObjectBase` —
+which is why Qt's own figure in the table above is two blocks and not one. **The two-block floor is
+structural, not a Qt inefficiency**, and the plan read it as one.
+
+So the corrected shape is: node and callable stay separate; the *third* allocation, the
+`std::function` box, is the one that goes. Same block count as the plan promised, reached the other
+way round.
+
+### Stage 2 — make `Object::mIncoming` intrusive. 3 blocks → 2
 
 `mIncoming` is a `std::vector<Connection>`, so each incoming connection costs a 32 B entry plus the
-vector's growth, and `~Cleanup` finds its entry with a linear `std::remove`. Give the node two
-sibling pointers and the Object a head pointer instead: registering becomes an O(1) link, and
+vector's growth, and `pruneReceiver()` finds its entry with a linear `std::remove_if`. Give the node
+two sibling pointers and the Object a head pointer instead: registering becomes an O(1) link, and
 pruning an O(1) unlink. That removes the **O(K²)** noted at the end of P7 for an object whose K
 incoming connections are disconnected one at a time.
 
 This is the stage with real risk, and it is all lifetime. The links are raw, so the node must unlink
-itself when it dies, which is what `~Cleanup` already does — the ordering rules carry over intact:
+itself when it dies, which is what `pruneReceiver()` already does — the ordering rules carry over
+intact:
 
-- `~Object()` resets the life token *before* walking the list, so a node's destructor sees an expired
-  token and does not try to prune a receiver already tearing itself down.
+- `~Object()` resets the life token *before* walking the list, so a node's prune sees an expired
+  token and does not try to touch a receiver already tearing itself down.
 - The unlink must happen with the receiver's mutex held and the Signal's released, which is the lock
   order the current code takes pains to preserve.
 
-Expected: 2 blocks, ~190 B.
+Stage 1 makes this easier than it was: the node is already the thing both sides name, and the
+registration/prune pair already sits behind two functions on it rather than being spread across a
+`Cleanup` destructor and an inline push in `connectImpl()`.
 
-**Stage 3 — slim the wrapper closure. Bytes, probably not blocks.**
+Expected: 2 blocks, ~228 B.
 
-The 88 B closure captures five things the node will own by then: the life token, the receiver, the
-affinity box, the connection type, and the cleanup token. Pass the node to the invoker instead of
-capturing them, and the closure shrinks to the slot adapter alone — around 24 B. That is still over
-libstdc++'s 16 B small-object buffer, so it will very likely still allocate; the win is footprint,
-not block count. Do it only if per-connection memory is the reason for the whole exercise.
+### Stage 3 — slim the wrapper closure. Bytes, not blocks
 
-Expected: 2 blocks, ~130 B.
+The closure is 72 B after stage 1 — it lost the `shared_ptr<Cleanup>` capture when `Cleanup` went
+away. It still captures the life token, the receiver, the affinity box and the connection type, all
+of which the node owns. Pass the node to the invoker instead of capturing them and it shrinks to the
+slot adapter alone, around 24 B. Since stage 1 stores the closure inline, this one is now purely a
+size win with no block to save at all.
+
+Expected: 2 blocks, ~180 B. Do it only if per-connection memory is the reason for the whole exercise.
 
 ### How each stage is checked
 
-- **Counts** — the allocation guard, tightened to 3.5 then 2.5. Exact and machine-independent.
+- **Counts** — `PerformanceRegression.OneConnectionCostsAtMostThreeHeapBlocks`, tightened from 5.5
+  to 3.5 as stage 1 landed and to 2.5 when stage 2 does. Exact and machine-independent.
 - **Shape** — `TeardownStaysLinearInTheNumberOfReceivers` must stay near 4x. Stage 2 should improve
   it, since the O(K²) prune is what it does not currently isolate.
-- **Guarantees** — the four in `ForAI/mission-signal.md` section 2. Stage 2 moves lifetime rules
-  around, so this is the stage that needs both sanitizers, not just a green suite.
-- **Both libraries** — QtMimic now shares this implementation, so each stage lands in both and both
+- **Guarantees** — the four in `ForAI/mission-signal.md` section 2. Both stages move lifetime rules
+  around, so both need ASan and TSan, not just a green suite. Stage 1 was run under both: 180 tests
+  pass in each library, and the only TSan warning is a pre-existing race in a *test*
+  (`ObjectDefectTest.MoveToThreadCarriesAlreadyPostedEventsToTheNewThread` shares a bare `Thread*`
+  between the worker and `waitFor`), which reproduces unchanged on the commit before stage 1.
+- **Both libraries** — QtMimic shares this implementation, so each stage lands in both and both
   suites must pass.
 
 ### Recommendation
 
-**Do stages 1 and 2; leave stage 3 unless memory is the goal.** Together they take a connection from
-five blocks to two and 364 B to ~190 B, put `connect()` within reach of Qt's, and delete the last
-quadratic term left anywhere in the library. Stage 1 is mechanical. Stage 2 is the one to review
-carefully.
+**Stage 1 is done. Do stage 2; leave stage 3 unless memory is the goal.** Stage 2 takes a connection
+to two blocks and ~228 B, matching Qt's block count, and deletes the last quadratic term left
+anywhere in the library.
 
-The counterweight from the original entry still stands and should be weighed before starting:
-intrusive lifetime management is what this `Signal` was written to avoid. What has changed since is
-that the same code now serves both libraries, so the work is paid for once and collected twice.
+The counterweight from the original entry still stands and should be weighed before starting stage
+2: intrusive lifetime management is what this `Signal` was written to avoid. What has changed since
+is that the same code now serves both libraries, so the work is paid for once and collected twice.
 
-
----
 
 # How these were measured
 

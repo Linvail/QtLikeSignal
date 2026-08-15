@@ -182,9 +182,12 @@ then compares against the current thread. It is item P2/R25 in `history/PERFORMA
 it has been open a while. An atomic load in place of the mutex is the obvious move; the reason it
 has not been done is that `moveToThread()` has to publish safely against it.
 
-**3c. `connect()` at ~343 ns against Qt's ~109.** Three heap allocations per connect (`Slot`,
-`ConnectionState`, and the vector growth), plus `Object::connectImpl` building a `Cleanup` token and
-taking `mIncomingMutex`. Worth a look only after 3a and 3b; connect is not a hot path.
+**3c. `connect()` at ~226 ns against Qt's ~131.** Three heap allocations per connect: the slot with
+the emit-time wrapper closure stored inside it, the connection node, and the receiver's `mIncoming`
+entry. It was five and ~343 ns until 2026-08-15; see P10 in `history/PERFORMANCE-20260813.md`, which
+also has the stage that takes it to two. Removing two of the five bought only 11% of the time, so
+**most of what is left in `connect()` is not allocation** and nobody has yet found what it is. Worth
+a look only after 3a and 3b; connect is not a hot path.
 
 ### 4. If the generator is built anyway, build it for these reasons
 
