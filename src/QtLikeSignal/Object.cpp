@@ -71,10 +71,9 @@ namespace QtLikeSignal
                     sFree.pop_front();
                     return id;
                 }
-                // Never hand out 0 or a negative value: -1 is startTimer()'s failure sentinel and the
-                // value Timer::stop() tests against, so an id colliding with it would be indisguishable
-                // from "no timer". The old monotonic counter would eventually have wrapped onto exactly
-                // that.
+                // Never hand out 0 or a negative value: -1 is startTimer()'s failure sentinel and
+                // the value Timer::stop() tests against, so an id colliding with it would be
+                // indistinguishable from "no timer".
                 if( sNextFresh <= 0 )
                 {
                     return -1;
@@ -336,7 +335,8 @@ namespace QtLikeSignal
         // this behaviour ("all active timers for the object will be reset ... stopped in the current
         // thread and restarted, with the same interval, in the targetThread"); without it the timers
         // would keep firing on the thread the object just left, delivering timerEvent() somewhere it
-        // no longer lives.
+        // no longer lives. The caller is on that outgoing thread (push-only, checked above), so
+        // this cannot race its loop's own delivery pass.
         std::vector<AbstractEventDispatcher::TimerRegistration> timersToMove;
         {
             std::shared_ptr<ThreadData> oldData = mAffinity->data();
@@ -454,9 +454,9 @@ namespace QtLikeSignal
             // ThreadData -- and that ThreadData's still-working dispatcher -- behind, so without
             // this check the event is accepted by a queue nothing will ever drain and the object is
             // leaked outright rather than deleted. Falling through to the synchronous delete below
-            // is the lesser evil, and the same trade QtMimic makes when its post() refuses the task:
-            // "Doing nothing here would leak self forever, which is strictly worse than the
-            // thread-affinity violation of deleting it synchronously."
+            // is the lesser evil: leaking self forever is strictly worse than the thread-affinity
+            // violation of deleting it here, on whichever thread called deleteLater(). Not the
+            // normal path -- it only triggers for a thread that has already finished or gone away.
             if( tData->thread() != nullptr )
             {
                 if( auto disp = tData->dispatcher() )
@@ -827,9 +827,9 @@ namespace QtLikeSignal
             return true;
 
         default:
-            // The only events that reach this queue are the three above, all posted by Object's
-            // own internals. Nothing can inject an arbitrary event for an arbitrary receiver, so
-            // any other type is unreachable rather than something to hand to a user hook.
+            // The only events that reach this queue are the three above, all posted by Object's own
+            // internals. Nothing can inject an arbitrary event for an arbitrary receiver, so any
+            // other type is unreachable rather than something to hand to a user hook.
             return false;
         }
     }
@@ -862,7 +862,7 @@ namespace QtLikeSignal
         if( activeType == ConnectionType::Queued )
         {
             // Moved, not copied: aSlot is a by-value parameter and is dead after this line, and
-            // MetaCallEvent's constructor also takes by value and moves, so copying here bought a
+            // MetaCallEvent's constructor also takes by value and moves, so copying here would buy a
             // second heap allocation on every queued emit for nothing.
             return dispatchMetaCallTo( aTarget->threadData(), aTarget, std::move( aSlot ) );
         }

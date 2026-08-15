@@ -140,18 +140,36 @@ namespace QtMimic
     //! token, so a queued slot invocation that has not yet run does not run afterwards.
     Object::~Object()
     {
-        // Qt does not guarantee this is safe either: deleting an Object directly from a thread
-        // other than the one it lives in, while that thread's own loop may still be dispatching to
-        // it, is documented in Qt's own source as a malformed program. This states the same
-        // contract rather than engineering around it. Diagnostic only; it changes nothing below.
+        // Qt does not guarantee this is safe either: deleting a QObject directly from a thread
+        // other than the one it lives in, while that thread's own event loop may still be
+        // dispatching to it, is documented in Qt's own source as a malformed program ("QObject:
+        // shared QObject was deleted directly. The program is malformed and may crash." --
+        // qobject.cpp). We make the same contract explicit instead of trying to engineer around
+        // it: destruction is only safe from this object's own thread, or via deleteLater() (which
+        // defers the actual delete onto that thread, where it is safe by construction). This is a
+        // diagnostic only; it changes no behavior below.
         //
-        // Gated on the owning thread still running, not merely on it being a different thread: the
-        // ordinary "quit(); wait(); delete" teardown destroys a moved-to object from another
-        // thread and is perfectly safe, because no loop is left to race.
+        // Gated on the owning thread still running, not just "a different thread": destroying an
+        // object from another thread AFTER its affinity thread's loop has already stopped (the
+        // ordinary "workerThread.quit(); workerThread.wait();" teardown idiom used all over the
+        // test suite, where a moved-to object is then destroyed by the test's own thread) is
+        // completely safe -- there is no loop left to race. That also naturally covers a Thread
+        // destroying itself (it self-adopts via moveToThread(this)): ~Thread() calls quit()+wait()
+        // before this base destructor runs, so the flag is already clear by the time we get here
+        // regardless of which thread ends up calling delete on it.
+        //
+        // Everything here is read through the ThreadData, which this scope keeps alive, and the
+        // Thread* is only ever *compared*, never dereferenced. Asking the Thread itself
+        // (owner->isRunning()) would have reintroduced exactly the dangling-pointer hazard the
+        // Affinity indirection exists to remove: thread() can hand back a pointer that a
+        // concurrent ~Thread() frees before the call lands.
         //
         // Asked with currentThreadOrNull(), never currentThread(): the latter adopts the calling
-        // thread when it has none, and this runs during thread_local teardown, where adopting
-        // re-enters the unique_ptr already being destroyed. A diagnostic must not allocate.
+        // thread when it has no Thread yet, and this runs during thread_local teardown -- an
+        // adopted Thread being destroyed as its native thread exits -- where adopting re-enters
+        // the unique_ptr already being destroyed. A diagnostic must not allocate. A null answer
+        // means the caller is not registered, in which case there is nothing to compare and
+        // nothing to warn about.
         const std::shared_ptr<ThreadData> ownerData = mAffinity->data();
         Thread* const callerThread = Thread::currentThreadOrNull();
         if( ownerData && callerThread && ownerData->isThreadRunning()
@@ -163,9 +181,16 @@ namespace QtMimic
                 "deleteLater() to destroy an object from another thread.\n" );
         }
 
-        // Invalidate the life token first, so a queued slot that checks it skips. It also makes
-        // each connection's Cleanup destructor a no-op, which is what keeps the disconnect loop
-        // below from re-entering mIncomingMutex while it is already tearing mIncoming down.
+        // Invalidate the life token first. connect()/callLater() wrappers running on other threads
+        // check objectLife().lock() before posting a call to this object; resetting mLife up front
+        // shrinks the window in which such a wrapper can still observe this object as "alive" to
+        // the check-then-post race itself, instead of the whole destructor body (which below runs
+        // arbitrary user cleanup-callback code).
+        //
+        // Doing it before the disconnect loop below is also what keeps that loop re-entrancy-free:
+        // disconnect() destroys the slot, which destroys its captured Cleanup, whose destructor
+        // checks this very token and bails out rather than trying to prune mIncoming while we are
+        // already tearing it down.
         mLife.reset();
 
         // Disconnect every connection where this object is the receiver, so the sender stops
@@ -188,13 +213,17 @@ namespace QtMimic
             handle.disconnect();
         }
 
-        // Drop any callLater() invocations still pending for this object. Their closures check the
-        // life token before running, so they are already inert; erasing the entries is what stops
-        // the registry growing a dead key for every object that ever scheduled one.
+        // Only objects that have actually used callLater() can have entries to drop.
         //
-        // Only objects that have actually used callLater() can have entries to drop. The scan is
-        // O(every pending callLater in the process) and takes a lock shared by every thread, so
-        // running it for the majority that never touched the feature was pure cost.
+        // The scan below is O(every pending callLater in the process) and takes a lock shared by
+        // every thread, so running it unconditionally made destroying an unrelated Object cost
+        // 24 us against a backlog of 4000 -- 324x the 75 ns it costs otherwise, and worse as
+        // unrelated work queues up elsewhere. Most objects never call callLater() at all, and one
+        // flag takes all of them out of that path. See PERFORMANCE-20260813.md (P1).
+        //
+        // The flag is only ever set, never cleared: an object that used the feature once keeps
+        // paying the scan, which is the honest trade. Making it exact would mean counting entries
+        // per object, which is the deeper fix P1 describes and is not worth it for a bool.
         if( mUsedCallLater.load( std::memory_order_acquire ) )
         {
             std::lock_guard<std::mutex> lock( CallLaterRegistry::sMutex );
@@ -220,14 +249,11 @@ namespace QtMimic
             outstandingTimerIds.swap( mRunningTimerIds );
         }
 
-        // Strips this object's queued events AND its timers in one step: a timer carries no life
-        // token to check -- the dispatcher holds a raw Object* and calls timerEvent() on it
-        // directly -- so this is the only thing standing between a still-running timer and a call
-        // into freed memory. It cancels anything already collected for delivery, too.
-        //
-        // Skipped entirely for an object that never received queued work and owns no timer: the
-        // strip is O(queue + timers) under the dispatcher's lock, and most objects have nothing
-        // there. Qt guards the same call the same way, with `if (d->postedEvents)` in ~QObject().
+        // The other O(backlog) scan the destructor used to run for every object, whether or not it
+        // could possibly have anything queued: removeEventsForReceiver() walks the whole event
+        // queue and the whole timer list under the dispatcher's lock. An object that never received
+        // a queued call and never started a timer -- which is most of them -- has nothing there.
+        // Qt guards the same call the same way, with `if (d->postedEvents)` in ~QObject().
         if( mMayHaveQueuedWork.load( std::memory_order_acquire ) || !outstandingTimerIds.empty() )
         {
             std::shared_ptr<ThreadData> threadDataCopy = mAffinity->data();
@@ -238,8 +264,8 @@ namespace QtMimic
                     dispatcher->removeEventsForReceiver( this );
                 }
 
-                // Events moved here before this thread had a dispatcher are in no queue yet, so the
-                // strip above cannot see them. See ThreadData::mParkedEvents.
+                // Events moved here before this thread had a dispatcher are not in any queue yet,
+                // so the strip above cannot see them. See ThreadData::mParkedEvents.
                 threadDataCopy->removeParkedEventsFor( this );
             }
         }
@@ -290,10 +316,15 @@ namespace QtMimic
         Thread* const currentAffinity = thread();
         if( currentAffinity == aThread )
         {
-            return true; // already there -- a successful no-op, exactly as Qt returns true
+            // Already there; nothing to do and nothing to refuse.
+            return true;
         }
 
-        // Push-only, with Qt's one exception: a thread-less object may be pulled to the caller.
+        // Transcribed from Qt's QObject::moveToThread(). The general rule is that only the thread that
+        // owns an object may re-home it, with one exception: an object that has no affinity yet may be
+        // adopted by the calling thread. That exception is what makes the two normal idioms work --
+        // moving a freshly constructed object onto a worker, and Thread adopting itself once its run
+        // loop starts -- while still rejecting one thread yanking another thread's live object away.
         Thread* const callerThread = Thread::currentThread();
         const bool adoptingUnownedObject = ( currentAffinity == nullptr )
             && ( aThread == callerThread );
@@ -305,12 +336,12 @@ namespace QtMimic
             return false;
         }
 
-        // Take any running timers off the outgoing thread before the affinity changes. Qt documents
+        // Take any active timers off the outgoing dispatcher before the affinity changes. Qt documents
         // this behaviour ("all active timers for the object will be reset ... stopped in the current
         // thread and restarted, with the same interval, in the targetThread"); without it the timers
         // would keep firing on the thread the object just left, delivering timerEvent() somewhere it
-        // must not run. The caller is on that outgoing thread (push-only, checked above), so this
-        // cannot race its loop's own delivery pass.
+        // no longer lives. The caller is on that outgoing thread (push-only, checked above), so
+        // this cannot race its loop's own delivery pass.
         std::vector<AbstractEventDispatcher::TimerRegistration> timersToMove;
         {
             std::shared_ptr<ThreadData> oldData = mAffinity->data();
@@ -323,6 +354,9 @@ namespace QtMimic
             }
         }
 
+        // Resolve the new thread's data and store it in the Affinity box in one step, so concurrent
+        // readers of thread()/threadData() (notably a connect() wrapper resolving affinity at emit
+        // time) never see a half-updated pairing of thread and dispatcher.
         const std::shared_ptr<ThreadData> oldData = mAffinity->data();
         std::shared_ptr<ThreadData> newData = aThread ? aThread->threadData() : nullptr;
         mAffinity->setData( newData );
@@ -346,12 +380,11 @@ namespace QtMimic
                 return true;
             }
 
-            // Re-register on the destination thread rather than from here: registerTimer() must
-            // run where the timer will be serviced. Qt solves it the same way, queueing the
-            // re-registration with invokeMethod(..., Qt::QueuedConnection) so it lands on the
-            // new thread. If this object is destroyed before the queued call runs, ~Object()
-            // strips its pending events from the dispatcher, so the call is dropped rather than
-            // dangling.
+            // Re-register on the destination thread rather than from here: registerTimer() must run
+            // where the timer will be serviced. Qt solves it the same way, queueing the
+            // re-registration with invokeMethod(..., Qt::QueuedConnection) so it lands on the new
+            // thread. If this object is destroyed before the queued call runs, ~Object() strips its
+            // pending events from the dispatcher, so the call is dropped rather than dangling.
             dispatchMetaCall(
                 this,
                 [this, timersToMove]()
@@ -403,7 +436,16 @@ namespace QtMimic
     //! preferable to a deferred delete that would never run and would leak the object.
     void Object::deleteLater()
     {
-        // Qt-like behavior: multiple deleteLater() calls coalesce into one.
+        // De-bounce repeated calls: only the first ever posts a DeferredDeleteEvent, matching Qt's
+        // own guard ("De-bounce QDeferredDeleteEvents" over QObjectPrivate::deleteLaterCalled,
+        // qobject.cpp).
+        //
+        // This is Qt parity and defense-in-depth, not a fix for a reachable bug: a duplicate event
+        // is already harmless, since the deletedReceivers set in processEvents() covers the case
+        // where both land in one batch, and ~Object()'s removeEventsForReceiver() strips any that
+        // are still queued. What the guard adds is that the invariant "at most one deferred delete
+        // exists per object" holds at the source, rather than depending on two separate downstream
+        // mechanisms to keep covering every interleaving -- plus it skips a redundant allocation.
         if( mDeleteLaterPosted.exchange( true ) )
         {
             return;
@@ -472,6 +514,11 @@ namespace QtMimic
             return -1;
         }
 
+        // Thread-confined, as in Qt. The timer lives in the dispatcher belonging to this object's
+        // thread, and only that thread's event loop can ever deliver the resulting timerEvent().
+        // Registering from elsewhere would either race that dispatcher's lifetime or quietly install
+        // a timer whose events the caller is not positioned to receive, so refuse it outright rather
+        // than doing something surprising.
         if( thread() != Thread::currentThread() )
         {
             std::fprintf( stderr,
@@ -482,8 +529,6 @@ namespace QtMimic
         const std::shared_ptr<ThreadData> data = threadData();
         if( !data )
         {
-            // Detached by moveToThread(nullptr): there is no mailbox to schedule against, and no
-            // loop that would ever drain one.
             std::fprintf( stderr,
                 "Object::startTimer: object has no thread, so the timer cannot be started\n" );
             return -1;
@@ -526,6 +571,7 @@ namespace QtMimic
         int aTimerId  //!< Id returned by startTimer().
         )
     {
+        // Thread-confined for the same reason as startTimer().
         if( thread() != Thread::currentThread() )
         {
             std::fprintf( stderr,
@@ -543,10 +589,10 @@ namespace QtMimic
             }
         }
 
-        // Released only after unregisterTimer() has both dropped the timer and cancelled anything
-        // it had already collected for delivery, so the id cannot be reissued while something still
-        // naming it is in flight. Only ids this object actually owns go back, so a bogus or
-        // repeated killTimer() cannot inject a duplicate into the pool.
+        // Released only after unregisterTimer() has both dropped the timer and purged any event it
+        // had already queued, so the id cannot be reissued while something still referring to it is
+        // in the queue. Only ids this object actually owns are returned, so a bogus or double
+        // killTimer() cannot inject a duplicate into the pool.
         if( wasOurs )
         {
             TimerIdPool::release( aTimerId );
@@ -587,6 +633,7 @@ namespace QtMimic
         }
 
         // Marked before the entry exists, so ~Object() can never see the entry without the flag.
+        // The reverse -- flag set, entry already gone -- costs one wasted scan and nothing else.
         aContext->mUsedCallLater.store( true, std::memory_order_release );
 
         std::shared_ptr<CallLaterNode> node;
@@ -629,8 +676,8 @@ namespace QtMimic
                     }
                     if( fnToRun )
                     {
-                        // expired(), not lock(): see objectLife(). Equally safe, and a plain load
-                        // rather than an atomic read-modify-write.
+                        // expired(), not lock(): see objectLife(). Equally safe, and a plain
+                        // load rather than an atomic read-modify-write.
                         if( !weakLife.expired() )
                         {
                             fnToRun();
@@ -641,12 +688,12 @@ namespace QtMimic
             if( !dispatchMetaCall( aContext, metaCall, ConnectionType::Queued ) )
             {
                 // The target has no dispatcher yet, so this call can never run. Drop the registry
-                // entry we just created: leaving it behind would make the failure permanent, since
+                // entry we just created: leaving it behind is what made this failure permanent, since
                 // every later callLater() for the same target would find it, take the "already
                 // scheduled" branch above, and never dispatch again -- silently disabling that
                 // (context, slot) pair for the rest of the object's life, even once a dispatcher
-                // existed. Erasing lets the next call re-arm. This call is still lost; only a retry
-                // queue could save it, which would need its own ownership rules.
+                // existed. Erasing lets the next call re-arm. This call is still lost; only a
+                // retry queue could save it, which would need its own ownership rules.
                 std::lock_guard<std::mutex> lock( CallLaterRegistry::sMutex );
                 CallLaterRegistry::sPending.erase( aKey );
             }
@@ -662,6 +709,9 @@ namespace QtMimic
         const std::shared_ptr<ThreadData>& aData
         )
     {
+        // Compared as bare pointers. Asking for the shared_ptr instead cost an atomic increment and
+        // decrement on every Auto emit, to answer a question that never needed ownership: the
+        // caller already holds aData alive, and the other side is this very thread's own data.
         return aData.get() == Thread::currentThread()->threadDataPtr();
     }
 
@@ -711,9 +761,11 @@ namespace QtMimic
             return;
         }
 
-        // Swept more than once: a thread that resolved this object's affinity before the swap can
-        // still be inside postEvent() on the old dispatcher. Every such poster is already in flight,
-        // so the set drains; the cap bounds a caller that never stops posting to a moving object.
+        // Swept more than once. A thread that resolved this object's affinity before the swap can
+        // still be inside postEvent() on the old dispatcher, and its event would be stranded by a
+        // single pass. Every such poster is already in flight, so the set drains; the cap is there
+        // because a caller that never stops posting to a moving object is misusing it, and a bounded
+        // loop is better than one that can be kept spinning.
         constexpr int kMaxSweeps = 8;
         for( int sweep = 0; sweep < kMaxSweeps; ++sweep )
         {
@@ -727,15 +779,17 @@ namespace QtMimic
             {
                 if( !aNewData )
                 {
-                    // moveToThread(nullptr) means this object stops processing events, so there is
-                    // no later at which these could run.
+                    // moveToThread(nullptr) means "this object stops processing events", so there
+                    // is no later at which these could run. Qt parks them on an orphan QThreadData
+                    // whose loop never runs, which comes to the same thing without the bookkeeping.
                     delete event;
                     continue;
                 }
 
                 // Asked in one step, so the destination cannot gain or lose its dispatcher between
                 // the question and the answer. A null return means the event is parked and now
-                // belongs to the destination's ThreadData.
+                // belongs to the destination's ThreadData -- see ThreadData::mParkedEvents, which
+                // is what makes "moveToThread() before start()" work.
                 const std::shared_ptr<AbstractEventDispatcher> newDispatcher
                     = aNewData->dispatcherOrPark( this, event );
                 if( newDispatcher )
@@ -811,6 +865,9 @@ namespace QtMimic
 
         if( activeType == ConnectionType::Queued )
         {
+            // Moved, not copied: aSlot is a by-value parameter and is dead after this line, and
+            // MetaCallEvent's constructor also takes by value and moves, so copying here would buy a
+            // second heap allocation on every queued emit for nothing.
             return dispatchMetaCallTo( aTarget->threadData(), aTarget, std::move( aSlot ) );
         }
 
@@ -842,11 +899,11 @@ namespace QtMimic
         std::function<void()> aSlot                 //!< Callback function.
         )
     {
+        // Moved, not copied: aSlot is a by-value parameter and is dead after this line, and
+        // MetaCallEvent's constructor also takes by value and moves, so copying here bought a
+        // second heap allocation on every queued emit for nothing.
         if( auto disp = aData ? aData->dispatcher() : nullptr )
         {
-            // Moved, not copied: aSlot is a by-value parameter and is dead after this line, and
-            // MetaCallEvent's constructor also takes by value and moves, so copying here would buy a
-            // second heap allocation on every queued emit for nothing.
             auto* event = new MetaCallEvent( std::move( aSlot ) );
             if( aReceiver )
             {
@@ -870,10 +927,14 @@ namespace QtMimic
     //! stale handles.
     Object::Cleanup::~Cleanup()
     {
+        // The receiver is gone or already being destroyed; ~Object() has taken mIncoming over and
+        // touching mOwner here would be a use-after-free. This is also what makes ~Object()'s own
+        // disconnect loop non-re-entrant, since it resets the token before disconnecting.
         if( mLife.expired() )
         {
-            return; // receiver gone (or being destroyed) - it clears mIncoming.
+            return;
         }
+
         std::lock_guard<std::mutex> lock( mOwner->mIncomingMutex );
         auto& handles = mOwner->mIncoming;
         handles.erase( std::remove( handles.begin(), handles.end(), mHandle ), handles.end() );
