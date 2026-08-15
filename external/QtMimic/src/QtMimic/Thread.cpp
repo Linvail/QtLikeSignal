@@ -22,8 +22,7 @@ namespace QtMimic
     thread_local std::unique_ptr<Thread> Thread::sAdoptedThread;
     thread_local bool Thread::sAdopting = false;
 
-    //! @brief Constructor - initialize a Thread with an optional name.
-    //! The thread is not started until start() or exec() is called.
+    //! Constructs a new thread object with an optional descriptive name.
     Thread::Thread
         (
         const std::string& aName
@@ -35,9 +34,10 @@ namespace QtMimic
         mData->setThread( this );
     }
 
-    //! @brief Destructor - stops the event loop (draining any pending tasks) and joins the thread.
-    //! Also nulls the ThreadData back-pointer so any surviving Object still holding this
-    //! thread's data sees thread() == nullptr instead of a dangling pointer.
+    //! Destroys the thread, waiting for it to finish if running.
+    //!
+    //! Also nulls the ThreadData back-pointer, so any surviving Object still holding this thread's
+    //! data sees thread() == nullptr instead of a dangling pointer.
     Thread::~Thread()
     {
         quit();
@@ -78,10 +78,10 @@ namespace QtMimic
         mData->setThread( nullptr );
     }
 
-    //! @brief Start the event loop on a new native OS thread, running at @p aPriority.
+    //! Starts execution of the thread by invoking run(). Thread-safe.
     //!
-    //! If already running or previously started without wait(), this is a no-op or waits for the
-    //! previous run first. Safe to call multiple times.
+    //! If the thread is already running this is a no-op; if a previous run finished without anyone
+    //! calling wait(), it is reaped first. Safe to call more than once.
     //!
     //! The thread is already at aPriority before it executes its first instruction, as in Qt: on
     //! Windows it is created suspended, given the priority, then resumed; on UNIX the priority
@@ -91,11 +91,12 @@ namespace QtMimic
     //! The one exception is a UNIX kernel that refuses the scheduling attributes outright, where
     //! the thread is created inheriting the caller's priority and applies the requested one to
     //! itself as its first action -- still before mStarted is emitted. Qt falls back the same way.
-    //! @param aPriority Priority for the new thread. InheritPriority, the default, keeps the
-    //!        creating thread's priority and preserves the behaviour of the no-argument call.
+
     void Thread::start
         (
-        Priority aPriority
+        Priority aPriority  //!< Priority for the new thread. InheritPriority, the default, keeps the
+                            //!< creating thread's priority and preserves the behaviour of the
+                            //!< no-argument call.
         )
     {
         if( mAdopted.load() )
@@ -135,10 +136,9 @@ namespace QtMimic
         startPlatformSpecific();
     }
 
-    //! @brief Everything the new thread must do whether or not run() is overridden: publish the
-    //! thread id, take affinity for itself, create the dispatcher, apply a priority the kernel
-    //! refused at creation, then hand over to run().
-    //! @private
+    //! Everything the new thread must do whether or not run() is overridden: publish the thread id,
+    //! take affinity for itself, create the dispatcher, apply a priority the kernel refused at
+    //! creation, then hand over to run(). Called only by threadEntry().
     void Thread::threadBody()
     {
         mId.store( std::this_thread::get_id() );
@@ -236,15 +236,15 @@ namespace QtMimic
         sCurrentThread = nullptr;
     }
 
-    //! @brief The body the new thread executes. The default runs the event loop until quit()/exit();
+    //! The body the new thread executes. The default runs the event loop until quit()/exit();
     //! override to do something else, as with QThread::run().
     void Thread::run()
     {
         exec();
     }
 
-    //! @brief Enter the event loop and block until exit()/quit() is called.
-    //! @return The exit code passed to exit() (0 if quit() was used).
+    //! Enters the event loop and blocks until exit()/quit() is called. Returns the exit code passed
+    //! to exit(), or 0 if quit() was used.
     //!
     //! Deliberately does NOT clear mExiting on entry. start() already cleared it, and clearing it
     //! again here loses a quit() issued in the window between start() returning and this thread
@@ -265,15 +265,15 @@ namespace QtMimic
         return mExitCode.load();
     }
 
-    //! @brief Request the event loop to stop.
-    //! Already-queued tasks are still drained before the loop exits. Thread-safe.
+    //! Requests the thread's event loop to quit with return code 0. Thread-safe.
+    //!
+    //! Already-queued tasks are still drained before the loop exits.
     void Thread::quit()
     {
         exit( 0 );
     }
 
-    //! @brief Stop the loop and set the exec() return code. Thread-safe.
-    //! @param aReturnCode The exit code to return from exec().
+    //! Requests the thread's event loop to exit with the specified return code. Thread-safe.
     void Thread::exit
         (
         int aReturnCode
@@ -288,17 +288,16 @@ namespace QtMimic
         }
     }
 
-    //! @brief Queue an arbitrary task to run on this thread's event loop.
+    //! Queues an arbitrary task to run on this thread's event loop.
     //!
     //! Always deferred to a later iteration of this thread's loop -- never run inline, even when
     //! post() is called from this thread itself. Implemented as a thin wrapper over
     //! Object::dispatchMetaCallTo() targeting this Thread as receiver, so it goes through the exact
     //! same queue, MetaCallEvent and lifetime handling as every other queued call in this library
     //! (removeEventsForReceiver() on destruction, processDeferredDeletes() on shutdown) rather than
-    //! a second, parallel task queue. Thread-safe.
-    //! @return true if the task was queued; false if this thread has no dispatcher yet (before
-    //!         start()/exec(), or after it has fully finished and released it), in which case the
-    //!         task is dropped rather than run.
+    //! a second, parallel task queue. Returns true if the task was queued; false if this thread has
+    //! no dispatcher yet (before start()/exec(), or after it has fully finished and released it), in
+    //! which case the task is dropped rather than run. Thread-safe.
     bool Thread::post
         (
         std::function<void()> aTask
@@ -312,7 +311,7 @@ namespace QtMimic
         return dispatchMetaCallTo( mData, this, std::move( aTask ) );
     }
 
-    //! @brief Run one pass of this thread's event loop, then return.
+    //! Runs one pass of this thread's event loop, then returns.
     //!
     //! For a thread that has its own native loop and therefore never calls exec(): call this from
     //! that loop to deliver queued slot invocations, deferred deletes and timer events. Combine it
@@ -336,14 +335,16 @@ namespace QtMimic
         }
     }
 
-    //! @brief Install a callback invoked whenever work is queued for this thread. Thread-safe.
+    //! Installs a callback invoked whenever work is queued for this thread. Thread-safe.
     //!
     //! The other half of the adopted-thread story: it runs on whichever thread posted the work, and
     //! its job is to nudge this thread's own native loop -- typically by sending it a private event
     //! -- so that the loop knows to call processEvents(). Pass nullptr to remove it.
     //!
-    //! May be called with the dispatcher's internals locked, so it must not block or re-enter the
-    //! dispatcher; post to the native loop and return.
+    //! Runs on the posting thread with no dispatcher lock held, so it may call back into this
+    //! thread's dispatcher. It should still not block: it is on the critical path of every post,
+    //! and blocking there stalls the poster rather than this thread. Nudge the native loop and
+    //! return.
     void Thread::setWakeCallback
         (
         std::function<void()> aCallback
@@ -355,7 +356,7 @@ namespace QtMimic
         }
     }
 
-    //! @brief Get the event dispatcher for this thread. Thread-safe.
+    //! Gets the event dispatcher for this thread. Thread-safe.
     //!
     //! Read-only by design. There is deliberately no setter: swapping a running thread's dispatcher
     //! races that thread's own start/finish lifecycle, and could delete a dispatcher an active
@@ -363,14 +364,14 @@ namespace QtMimic
     //! in threadBody(); CoreApplication supplies the main thread's.
     //!
     //! Returns a strong reference rather than a raw pointer, so the dispatcher cannot be destroyed
-    //! by its owning thread finishing while the caller is still using it.
-    //! @return the dispatcher, or nullptr before start().
+    //! by its owning thread finishing while the caller is still using it. Returns nullptr before
+    //! start().
     std::shared_ptr<AbstractEventDispatcher> Thread::eventDispatcher() const
     {
         return mData->dispatcher();
     }
 
-    //! @brief Set the scheduling priority of the running OS thread. Thread-safe.
+    //! Sets the scheduling priority of this thread. Thread-safe.
     //!
     //! Only meaningful while the thread is running: there is no OS thread to act on before
     //! start(), and the value is deliberately not remembered for a later start() either -- pass
@@ -382,8 +383,7 @@ namespace QtMimic
     //! priority range of exactly one value, so every priority maps onto the same number and the
     //! call is accepted but has no effect; real prioritisation there needs a realtime policy and
     //! the privileges to select it. Qt behaves the same way. Windows applies all seven levels.
-    //! @param aPriority The priority to apply. InheritPriority is not accepted; rejected with a
-    //!        warning.
+
     void Thread::setPriority
         (
         Priority aPriority
@@ -416,9 +416,9 @@ namespace QtMimic
         applyPriority( aPriority );
     }
 
-    //! @brief Get the scheduling priority of the running OS thread. Thread-safe.
-    //! @return The priority last set on the running thread, or InheritPriority if there is no OS
-    //!         thread running or no priority has been set on this run.
+    //! Gets the scheduling priority of this thread. Thread-safe. Returns the priority last set on
+    //! the running thread, or InheritPriority if the thread is not running or no priority has been
+    //! set on this run.
     Thread::Priority Thread::priority() const
     {
         std::lock_guard<std::mutex> lock( mPriorityMutex );
@@ -429,17 +429,19 @@ namespace QtMimic
         return mPriority;
     }
 
-    //! @return true if this thread is running: start()ed and not yet finished, or adopted.
+    //! Checks whether the thread is running: start()ed and not yet finished, or adopted.
     //!
     //! Matches Qt's isRunning(), which reads threadState == Running and which an adopted QThread
-    //! sits in for its whole life. Thread-safe.
+    //! sits in for its whole life. Thread-safe, and stale on return: the thread may start or finish
+    //! before you act on the answer. To synchronise with a thread's end, call wait(). See Global.hpp.
     bool Thread::isRunning() const
     {
         return mData->isThreadRunning();
     }
 
-    //! @return true once this thread's body has begun winding down. Always false for an adopted
-    //! thread, which never leaves the running state -- again matching Qt. Thread-safe.
+    //! Checks whether this thread's body has begun winding down. Always false for an adopted
+    //! thread, which never leaves the running state -- again matching Qt. Thread-safe, and stale on
+    //! return; see isRunning() above and Global.hpp.
     //!
     //! Reports mFinishing, not the later flag wait() blocks on: Qt's isFinished() tests
     //! threadState >= Finishing, so it is already true inside a finished() handler.
@@ -448,41 +450,41 @@ namespace QtMimic
         return mFinishing.load();
     }
 
-    //! @brief Whether this Thread wraps a pre-existing native thread rather than one it started.
+    //! Whether this Thread wraps a pre-existing native thread rather than one it started.
     bool Thread::isAdopted() const
     {
         return mAdopted.load();
     }
 
-    //! @return the id of the OS thread this Thread runs on, valid once start() has published it.
+    //! Gets the id of the OS thread this Thread runs on, valid once start() has published it.
     //! Useful mainly for asserting which thread a slot ran on.
     std::thread::id Thread::id() const
     {
         return mId.load();
     }
 
-    //! @return this thread's descriptive name, empty if it was not given one. Thread-safe: the
-    //! name is set at construction and never changes.
+    //! Gets this thread's descriptive name, empty if it was not given one. Thread-safe: the name
+    //! is set at construction and never changes.
     const std::string& Thread::name() const
     {
         return mName;
     }
 
-    //! @return a subscription-only view of the signal emitted when this thread's event loop starts
+    //! Gets a subscription-only view of the signal emitted when this thread's event loop starts
     //! running (Qt-like QThread::started()). Thread-safe.
     SignalView<>& Thread::getStarted() const
     {
         return mStarted.view();
     }
 
-    //! @return a subscription-only view of the signal emitted when this thread's event loop has
+    //! Gets a subscription-only view of the signal emitted when this thread's event loop has
     //! exited (Qt-like QThread::finished()). Thread-safe.
     SignalView<>& Thread::getFinished() const
     {
         return mFinished.view();
     }
 
-    //! @brief Get the Thread the calling thread is running as, never nullptr.
+    //! Gets the Thread the calling thread is running as, never nullptr.
     //!
     //! If the caller was not started through this class -- the process's main thread, or a raw
     //! std::thread -- it is *adopted* on the spot: a Thread is created to represent it, given a
@@ -491,14 +493,16 @@ namespace QtMimic
     //! affinity. Without it, an Object created off-thread had none, and a queued connection whose
     //! emitter was also affinity-less compared nullptr == nullptr, decided "same thread", and ran
     //! the slot directly on the emitting thread -- an unsynchronised cross-thread call that Qt
-    //! explicitly does not perform.
+    //! explicitly does not perform ("if a QObject has no thread affinity ... it cannot receive
+    //! queued signals or posted events").
     //!
     //! An adopted thread has a queue but no loop running on it, so queued work accumulates until
     //! the thread drains it with processEvents() (or runs exec()). That matches Qt, where posted
     //! events sit in the thread's list until something dispatches them.
     //!
     //! @note Do not store the returned pointer anywhere that may outlive the thread. For an adopted
-    //! thread that is only until the native thread exits.
+    //! thread that is only until the native thread exits. Hold the ThreadData instead, which stays
+    //! valid and reports thread() == nullptr once its Thread is gone.
     Thread* Thread::currentThread()
     {
         // sAdopting breaks the recursion: constructing the Thread below runs Object's constructor,
@@ -516,7 +520,7 @@ namespace QtMimic
         return sCurrentThread;
     }
 
-    //! @brief Make this Thread represent the calling native thread.
+    //! Makes this Thread represent the calling native thread.
     //!
     //! Used only for auto-adoption. Registers as the current thread, records the OS thread id, and
     //! installs a plain cross-platform dispatcher -- not the platform one, which would allocate an
@@ -547,7 +551,7 @@ namespace QtMimic
         }
     }
 
-    //! @brief Point this Thread's own Object affinity at the thread it represents.
+    //! Points this Thread's own Object affinity at the thread it represents.
     //!
     //! Deliberately bypasses moveToThread(), which would refuse. moveToThread() enforces that only
     //! the thread currently owning an object may re-home it, with an exception for objects that

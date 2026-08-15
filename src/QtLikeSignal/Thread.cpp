@@ -36,6 +36,9 @@ namespace QtLikeSignal
     }
 
     //! Destroys the thread, waiting for it to finish if running.
+    //!
+    //! Also nulls the ThreadData back-pointer, so any surviving Object still holding this thread's
+    //! data sees thread() == nullptr instead of a dangling pointer.
     Thread::~Thread()
     {
         quit();
@@ -78,6 +81,9 @@ namespace QtLikeSignal
 
     //! Starts execution of the thread by invoking run(). Thread-safe.
     //!
+    //! If the thread is already running this is a no-op; if a previous run finished without anyone
+    //! calling wait(), it is reaped first. Safe to call more than once.
+    //!
     //! The thread is already at aPriority before it executes its first instruction, as in Qt: on
     //! Windows it is created suspended, given the priority, then resumed; on UNIX the priority
     //! travels in the pthread attributes handed to pthread_create(). Nothing runs at the wrong
@@ -85,8 +91,7 @@ namespace QtLikeSignal
     //!
     //! The one exception is a UNIX kernel that refuses the scheduling attributes outright, where
     //! the thread is created inheriting the caller's priority and applies the requested one to
-    //! itself as its first action -- still before started() is emitted and before run() is
-    //! entered. Qt falls back the same way.
+    //! itself as its first action -- still before mStarted is emitted. Qt falls back the same way.
     void Thread::start
         (
         Priority aPriority  //!< Priority for the new thread. InheritPriority, the default, keeps the
@@ -128,10 +133,9 @@ namespace QtLikeSignal
         startPlatformSpecific();
     }
 
-    //! Body the OS thread runs: dispatcher setup, run(), then teardown.
-    //!
-    //! Everything between the OS entry point and the end of the thread's life. Called only by
-    //! threadEntry().
+    //! Everything the new thread must do whether or not run() is overridden: publish the thread id,
+    //! take affinity for itself, create the dispatcher, apply a priority the kernel refused at
+    //! creation, then hand over to run(). Called only by threadEntry().
     void Thread::threadBody()
     {
         mId.store( std::this_thread::get_id() );
@@ -226,13 +230,22 @@ namespace QtLikeSignal
         sCurrentThread = nullptr;
     }
 
-    //! Starting point for thread execution. Can be overridden. Default calls exec().
+    //! The body the new thread executes. The default runs the event loop until quit()/exit();
+    //! override to do something else, as with QThread::run().
     void Thread::run()
     {
         exec();
     }
 
-    //! Enters the event loop and waits until exit() is called. Returns the exit code.
+    //! Enters the event loop and blocks until exit()/quit() is called. Returns the exit code passed
+    //! to exit(), or 0 if quit() was used.
+    //!
+    //! Deliberately does NOT clear mExiting on entry. start() already cleared it, and clearing it
+    //! again here loses a quit() issued in the window between start() returning and this thread
+    //! reaching exec() -- the loop would then run forever with nothing left to stop it. An adopted
+    //! thread has no start() to do the clearing, so CoreApplication::exec() does it instead, which
+    //! also makes an exit()/quit() issued *before* exec() discarded rather than honoured. Qt makes
+    //! the same choice in the same place (`threadData->quitNow = false`).
     int Thread::exec()
     {
         // Re-fetched each iteration, and held as a strong reference across processEvents() so the
@@ -247,12 +260,14 @@ namespace QtLikeSignal
     }
 
     //! Requests the thread's event loop to quit with return code 0. Thread-safe.
+    //!
+    //! Already-queued tasks are still drained before the loop exits.
     void Thread::quit()
     {
         exit( 0 );
     }
 
-    //! Requests the thread's event loop to exit with specified return code. Thread-safe.
+    //! Requests the thread's event loop to exit with the specified return code. Thread-safe.
     void Thread::exit
         (
         int aReturnCode  //!< Exit return code.
@@ -271,12 +286,12 @@ namespace QtLikeSignal
     //!
     //! Always deferred to a later iteration of this thread's loop -- never run inline, even when
     //! post() is called from this thread itself. Implemented as a thin wrapper over
-    //! Object::dispatchMetaCall() targeting this Thread as both context and receiver, so it goes
-    //! through the exact same queue, MetaCallEvent, and lifetime handling as every other queued
-    //! call in this library (removeEventsForReceiver() on destruction, processDeferredDeletes() on
-    //! shutdown, etc.) rather than a second, parallel task queue. Returns true if the task was
-    //! queued; false if this thread has no dispatcher yet (before start()/exec(), or after it has
-    //! fully finished and released it), in which case the task is dropped rather than run.
+    //! Object::dispatchMetaCallTo() targeting this Thread as receiver, so it goes through the exact
+    //! same queue, MetaCallEvent and lifetime handling as every other queued call in this library
+    //! (removeEventsForReceiver() on destruction, processDeferredDeletes() on shutdown) rather than
+    //! a second, parallel task queue. Returns true if the task was queued; false if this thread has
+    //! no dispatcher yet (before start()/exec(), or after it has fully finished and released it), in
+    //! which case the task is dropped rather than run. Thread-safe.
     bool Thread::post
         (
         std::function<void()> aTask  //!< The callable to run on this thread. Ignored (returns false) if empty.
@@ -337,10 +352,10 @@ namespace QtLikeSignal
 
     //! Gets the event dispatcher for this thread. Thread-safe.
     //!
-    //! Read-only by design. There is deliberately no setter: swapping a running thread's
-    //! dispatcher raced against that thread's own start/finish lifecycle, which could delete a
-    //! dispatcher an active exec()/processEvents() loop was still calling into. A thread creates
-    //! and owns its dispatcher in start(); CoreApplication supplies the main thread's.
+    //! Read-only by design. There is deliberately no setter: swapping a running thread's dispatcher
+    //! races that thread's own start/finish lifecycle, and could delete a dispatcher an active
+    //! exec()/processEvents() loop was still calling into. A thread creates and owns its dispatcher
+    //! in threadBody(); CoreApplication supplies the main thread's.
     //!
     //! Returns a strong reference rather than a raw pointer, so the dispatcher cannot be destroyed
     //! by its owning thread finishing while the caller is still using it. Returns nullptr before
@@ -352,11 +367,10 @@ namespace QtLikeSignal
 
     //! Sets the scheduling priority of this thread. Thread-safe.
     //!
-    //! Only meaningful while the thread is running, as in Qt: there is no OS thread to act on
-    //! before start(), and the value is deliberately not remembered for a later start() either.
-    //! A call made when the thread is not running is rejected with a warning and changes nothing,
-    //! so priority() will still report InheritPriority afterwards. To give a thread a priority
-    //! from the outset, pass one to start() instead.
+    //! Only meaningful while the thread is running: there is no OS thread to act on before
+    //! start(), and the value is deliberately not remembered for a later start() either -- pass
+    //! a priority to start() instead. A call made when there is no OS thread is rejected with a
+    //! warning and changes nothing, so priority() will still report InheritPriority afterwards.
     //!
     //! What the OS does with the request varies, and a successful call does not promise the
     //! thread's scheduling actually changed. On Linux the default SCHED_OTHER policy reports a
@@ -408,17 +422,22 @@ namespace QtLikeSignal
         return mPriority;
     }
 
-    //! Checks if the thread is currently running. Thread-safe, and stale on return: the thread may
-    //! start or finish before you act on the answer, so this reports an instant that has passed. To
-    //! synchronise with a thread's end, call wait(). Qt attaches the same warning to
-    //! QThread::isRunning(). See Global.hpp.
+    //! Checks whether the thread is running: start()ed and not yet finished, or adopted.
+    //!
+    //! Matches Qt's isRunning(), which reads threadState == Running and which an adopted QThread
+    //! sits in for its whole life. Thread-safe, and stale on return: the thread may start or finish
+    //! before you act on the answer. To synchronise with a thread's end, call wait(). See Global.hpp.
     bool Thread::isRunning() const
     {
         return mData->isThreadRunning();
     }
 
-    //! Checks if the thread has finished execution. Thread-safe, and stale on return; see
-    //! isRunning() above and Global.hpp.
+    //! Checks whether this thread's body has begun winding down. Always false for an adopted
+    //! thread, which never leaves the running state -- again matching Qt. Thread-safe, and stale on
+    //! return; see isRunning() above and Global.hpp.
+    //!
+    //! Reports mFinishing, not the later flag wait() blocks on: Qt's isFinished() tests
+    //! threadState >= Finishing, so it is already true inside a finished() handler.
     bool Thread::isFinished() const
     {
         return mFinishing.load();
@@ -430,8 +449,8 @@ namespace QtLikeSignal
         return mAdopted.load();
     }
 
-    //! Gets the underlying OS thread's id, valid once start() has published it. Useful mainly for
-    //! asserting which thread a slot ran on.
+    //! Gets the id of the OS thread this Thread runs on, valid once start() has published it.
+    //! Useful mainly for asserting which thread a slot ran on.
     std::thread::id Thread::id() const
     {
         return mId.load();
@@ -530,16 +549,16 @@ namespace QtLikeSignal
     //! Points this Thread's own Object affinity at the thread it represents.
     //!
     //! Deliberately bypasses moveToThread(), which would refuse. moveToThread() enforces that only
-    //! the thread currently owning an object may re-home it, with an exception for objects that have
-    //! no affinity yet -- and once every thread is adopted, a Thread constructed on thread A always
-    //! *does* have affinity (to A), so a worker starting up would be refused permission to adopt
-    //! itself. That rule exists to stop one thread yanking another thread's live object away, which
-    //! is not what is happening here: this is the thread in question taking ownership of the object
-    //! that represents it, at the only moment that can possibly be correct.
+    //! the thread currently owning an object may re-home it, with an exception for objects that
+    //! have no affinity yet -- and once every thread is adopted, a Thread constructed on thread A
+    //! always *does* have affinity (to A), so a worker starting up would be refused permission to
+    //! adopt itself. That rule exists to stop one thread yanking another thread's live object away,
+    //! which is not what is happening here: this is the thread in question taking ownership of the
+    //! object that represents it, at the only moment that can possibly be correct.
     //!
-    //! Skips moveToThread()'s timer migration too. A Thread object with timers registered against it
-    //! before its loop starts would keep them on the creating thread's dispatcher, which is a corner
-    //! case not worth the confinement violation of migrating them from here.
+    //! Skips moveToThread()'s timer migration too. A Thread object with timers registered against
+    //! it before its loop starts would keep them on the creating thread's dispatcher, which is a
+    //! corner case not worth the confinement violation of migrating them from here.
     void Thread::bindAffinityToSelf()
     {
         mAffinity->setData( mData );
