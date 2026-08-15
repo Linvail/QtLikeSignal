@@ -777,10 +777,10 @@ namespace QtMimic
         template <typename SignalType, typename Callable>
         static Connection connectImpl
             (
-            SignalType& aSignal,
-            Object* aContext,
-            Callable&& aSlot,
-            ConnectionType aType
+            SignalType& aSignal,     //!< Signal to connect to.
+            Object* aContext,        //!< Receiver/context supplying thread affinity and lifetime.
+            Callable&& aSlot,        //!< Performs the call, given the emitted arguments.
+            ConnectionType aType     //!< Requested connection type.
             )
         {
             // No context, no connection. Everything that makes a connection safe hangs off the
@@ -794,21 +794,25 @@ namespace QtMimic
                 return {};
             }
 
-            // Capture a weak reference to the context's life token so queued
-            // invocations can be safely dropped if the receiver is destroyed before
-            // they run. (Only used on the queued path, which requires a context.)
+            // A weak reference to the context's life token, so a queued invocation can be dropped
+            // if the receiver is destroyed before it runs.
             std::weak_ptr<int> weakLife = aContext->objectLife();
 
-            // Capture the receiver's Affinity box, not a Thread* and not a snapshot of its
-            // ThreadData. The box is resolved at emit time, so moveToThread() redirects even a
-            // connection made before it, and it stays readable after the Object is destroyed.
+            // The receiver's Affinity box, not a Thread* and not a snapshot of its ThreadData. The
+            // box is resolved at emit time, so moveToThread() redirects even a connection made
+            // before it, and it stays readable after the Object is destroyed.
             std::shared_ptr<Affinity> ctxAffinity = aContext->mAffinity;
 
-            // Cleanup token captured by the slot: when the connection ends, the Signal destroys
-            // the slot, which prunes the handle from the receiver immediately. The weak life token
+            // Cleanup token captured by the slot: when the connection ends, the Signal destroys the
+            // slot, which prunes the handle from the receiver immediately. The weak life token
             // stops it touching a receiver that is already gone.
             std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aContext, weakLife );
 
+            // Generic in its arguments so one wrapper serves every signal signature. Taking them by
+            // forwarding reference rather than by the signal's declared value types also stops a
+            // by-value signal argument being reconstructed at the wrapper boundary before anything
+            // has even decided whether the call is inline.
+            //
             // aContext is captured as a raw pointer, but never dereferenced here: it is handed to
             // dispatchMetaCallTo() purely as the queue key that removeEventsForReceiver() later
             // matches on. ~Object() strips every event still queued for it before it goes away, so
@@ -825,8 +829,8 @@ namespace QtMimic
                     }
 
                     // Resolve the receiver's CURRENT affinity on every emit, like Qt reading
-                    // QObjectPrivate::threadData at activate time. This is what makes moveToThread()
-                    // affect connections made before it.
+                    // QObjectPrivate::threadData at activate time. This is what makes
+                    // moveToThread() affect connections made before it.
                     const auto ctxData = ctxAffinity ? ctxAffinity->data() : std::shared_ptr<
                             ThreadData>();
 
@@ -850,19 +854,18 @@ namespace QtMimic
                         return;
                     }
 
-                    // Queued connection: copy the arguments and run later in the receiver's
-                    // event loop. Dispatched through the ThreadData (kept alive by the captured
-                    // ctxData shared_ptr), NEVER a raw Thread* -- so a concurrent ~Thread()
-                    // cannot turn this into a use-after-free. If the target thread has no
-                    // dispatcher, dispatchMetaCallTo() returns false and the invocation is safely
-                    // dropped, exactly as Qt leaves events undelivered once the thread is gone.
-                    // Skip too if the receiver itself is gone by the time the call runs (the life
-                    // token), which is only known then and not at emit time.
+                    // Queued: the arguments have to outlive this call, so copy them once into a
+                    // tuple the closure owns. Re-check the life token when it finally runs, since it
+                    // was only checked at emit time and the receiver may be destroyed before the
+                    // loop reaches it. Dispatched through the ThreadData, never a raw Thread*, so a
+                    // concurrent ~Thread() cannot turn this into a use-after-free; if the target
+                    // has no dispatcher the invocation is dropped, as Qt leaves events undelivered
+                    // once the thread is gone.
                     //
-                    // The argument tuple lives in the closure itself rather than behind a
-                    // make_shared box: dispatchMetaCallTo() takes the std::function by value and
-                    // moves it into the MetaCallEvent, so the tuple is built once and never
-                    // copied, and the second heap allocation the box cost is gone.
+                    // The tuple lives in the closure itself rather than behind a make_shared box:
+                    // dispatchMetaCallTo() takes the std::function by value and moves it into the
+                    // MetaCallEvent, so the tuple is built once and never copied, and the second
+                    // heap allocation the box cost is gone.
                     dispatchMetaCallTo( ctxData, aContext,
                         [weakLife, slot,
                         argTuple = std::make_tuple( std::forward<decltype( aArgs )>( aArgs )... )]()
@@ -879,7 +882,17 @@ namespace QtMimic
             // threw the first away.
             Connection handle = aSignal.connect( std::move( wrapper ) );
 
+            // Written without a lock, which is safe for a reason worth stating: `cleanup` is a
+            // local shared_ptr, so this function holds a reference for its whole body. ~Cleanup()
+            // cannot run while we are here, however fast another thread disconnects -- disconnecting
+            // drops the slot's reference, not ours, and the token outlives the slot. So this write
+            // and the destructor's read of the same member cannot overlap, and the push below
+            // completes before the destructor can look for it.
+            //
+            // A lock here was added on 2026-08-13 for a race that a TSan probe then failed to
+            // reproduce, and reverted; see R29 in history/OPEN-RISKS-20260813.md.
             cleanup->mHandle = handle;
+
             {
                 std::lock_guard<std::mutex> lock( aContext->mIncomingMutex );
                 aContext->mIncoming.push_back( handle );

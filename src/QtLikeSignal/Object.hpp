@@ -795,19 +795,40 @@ namespace QtLikeSignal
             ConnectionType aType     //!< Requested connection type.
             )
         {
+            // No context, no connection. Everything that makes a connection safe hangs off the
+            // context: the life token that lets a queued invocation be dropped when the receiver
+            // dies, the affinity that decides which thread it runs on, and the cleanup token that
+            // prunes it on disconnect. A connection without one has none of that -- it would fire
+            // forever, on whichever thread emitted, with nothing able to stop it. Qt refuses the
+            // same call for the same reason, returning an invalid QMetaObject::Connection.
             if( !aContext )
             {
                 return {};
             }
 
+            // A weak reference to the context's life token, so a queued invocation can be dropped
+            // if the receiver is destroyed before it runs.
             std::weak_ptr<int> weakLife = aContext->objectLife();
+
+            // The receiver's Affinity box, not a Thread* and not a snapshot of its ThreadData. The
+            // box is resolved at emit time, so moveToThread() redirects even a connection made
+            // before it, and it stays readable after the Object is destroyed.
             std::shared_ptr<Affinity> ctxAffinity = aContext->mAffinity;
+
+            // Cleanup token captured by the slot: when the connection ends, the Signal destroys the
+            // slot, which prunes the handle from the receiver immediately. The weak life token
+            // stops it touching a receiver that is already gone.
             std::shared_ptr<Cleanup> cleanup = std::make_shared<Cleanup>( aContext, weakLife );
 
             // Generic in its arguments so one wrapper serves every signal signature. Taking them by
             // forwarding reference rather than by the signal's declared value types also stops a
             // by-value signal argument being reconstructed at the wrapper boundary before anything
             // has even decided whether the call is inline.
+            //
+            // aContext is captured as a raw pointer, but never dereferenced here: it is handed to
+            // dispatchMetaCallTo() purely as the queue key that removeEventsForReceiver() later
+            // matches on. ~Object() strips every event still queued for it before it goes away, so
+            // the dispatcher never delivers to a dead receiver.
             auto wrapper = [weakLife, aContext, slot = std::forward<Callable>( aSlot ), aType,
                 ctxAffinity, cleanup]( auto&&... aArgs )
                 {
@@ -819,6 +840,9 @@ namespace QtLikeSignal
                         return;
                     }
 
+                    // Resolve the receiver's CURRENT affinity on every emit, like Qt reading
+                    // QObjectPrivate::threadData at activate time. This is what makes
+                    // moveToThread() affect connections made before it.
                     const auto ctxData = ctxAffinity ? ctxAffinity->data() : std::shared_ptr<
                             ThreadData>();
 
@@ -843,16 +867,17 @@ namespace QtLikeSignal
                     }
 
                     // Queued: the arguments have to outlive this call, so copy them once into a
-                    // tuple the closure owns. Re-check the life token when it finally runs, since
-                    // it was only checked at emit time and the receiver may be destroyed before the
-                    // loop reaches it.
+                    // tuple the closure owns. Re-check the life token when it finally runs, since it
+                    // was only checked at emit time and the receiver may be destroyed before the
+                    // loop reaches it. Dispatched through the ThreadData, never a raw Thread*, so a
+                    // concurrent ~Thread() cannot turn this into a use-after-free; if the target
+                    // has no dispatcher the invocation is dropped, as Qt leaves events undelivered
+                    // once the thread is gone.
                     //
-                    // Held in the closure itself, not boxed behind a make_shared tuple the way
-                    // QtMimic does it. The shared_ptr costs a second heap allocation on each queued
-                    // emit and buys nothing here: dispatchMetaCallTo() takes the std::function by
-                    // value and moves it into the MetaCallEvent, so the tuple is built once and
-                    // never copied. Measured at -O2: 3.90 -> 2.86 allocations and ~1030 -> ~850 ns
-                    // per queued emit.
+                    // The tuple lives in the closure itself rather than behind a make_shared box:
+                    // dispatchMetaCallTo() takes the std::function by value and moves it into the
+                    // MetaCallEvent, so the tuple is built once and never copied, and the second
+                    // heap allocation the box cost is gone.
                     dispatchMetaCallTo( ctxData, aContext,
                         [weakLife, slot,
                         argTuple = std::make_tuple( std::forward<decltype( aArgs )>( aArgs )... )]()

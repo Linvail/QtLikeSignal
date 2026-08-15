@@ -67,6 +67,11 @@ namespace QtMimic
                 "is kept and this one will not be reachable through instance()\n" );
         }
 
+        // The calling thread is already adopted -- this object's own Object base asked for
+        // currentThread() a moment ago, which adopted it if nobody had. So there is no second
+        // Thread to create and no moveToThread() dance: this application already lives in the
+        // thread it is about to run the loop for, and mMainThread is a non-owning pointer to the
+        // Thread that the thread_local in Thread owns.
         mMainThread = Thread::currentThread();
 
         // Swap the adopted thread's plain dispatcher for the platform one. Auto-adoption installs
@@ -113,7 +118,8 @@ namespace QtMimic
         mDispatcher.reset();
         mMainThread = nullptr;
 
-        // Clears the pointer only if it is still ours.
+        // Clears the pointer only if it is still ours, which is what a second application object
+        // being destroyed first must not do.
         CoreApplication* self = this;
         sInstance.compare_exchange_strong( self, nullptr );
     }
@@ -132,6 +138,7 @@ namespace QtMimic
     //! same two ("Must be called from the main thread" / "The event loop is already running").
     int CoreApplication::exec()
     {
+        // No main thread means the application never adopted one, so there is no loop to run.
         if( !mMainThread )
         {
             return 0;
@@ -140,7 +147,6 @@ namespace QtMimic
         // The loop belongs to the thread that constructed the application. Running it anywhere else
         // would drain the main thread's queue on a foreign thread -- see Thread::processEvents(),
         // which refuses the same thing for the same reason.
-        //
         if( Thread::currentThread() != mMainThread )
         {
             std::fprintf( stderr, "CoreApplication::exec: must be called from the main thread\n" );

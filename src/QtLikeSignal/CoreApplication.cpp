@@ -56,9 +56,8 @@ namespace QtLikeSignal
         // Qt asserts here ("there should be only one application object"). Warn rather than abort:
         // a diagnostic is more useful than killing the process, and the first instance stays the
         // one instance() reports so the damage is contained and visible.
-        //
-        // One compare-exchange rather than a test and a store, so that "the first one wins" stays
-        // true even for the misuse this branch exists to report.
+        // One compare-exchange rather than a test and a store, so "the first one wins" holds even
+        // under the misuse this branch exists to report.
         CoreApplication* noInstanceYet = nullptr;
         if( !sInstance.compare_exchange_strong( noInstanceYet, this ) )
         {
@@ -106,11 +105,11 @@ namespace QtLikeSignal
             mDispatcher->processDeferredDeletes();
         }
 
-        // Hand the thread back the plain dispatcher auto-adoption would have given it, rather
-        // than leaving it with the platform one (whose eventfd or message window should not outlive
-        // the application) or with none at all (which would silently break every Object still
-        // living on this thread). The thread itself stays adopted: it is owned by a thread_local in
-        // Thread and released when the native thread exits, not by us.
+        // Hand the thread back the plain dispatcher auto-adoption would have given it, rather than
+        // leaving it with the platform one (whose eventfd or message window should not outlive the
+        // application) or with none at all (which would silently break every Object still living on
+        // this thread). The thread itself stays adopted: it is owned by a thread_local in Thread and
+        // released when the native thread exits, not by us.
         if( mMainThread )
         {
             mMainThread->mData->setDispatcher( std::make_shared<EventDispatcherDefault>() );
@@ -144,12 +143,19 @@ namespace QtLikeSignal
             return 0;
         }
 
+        // The loop belongs to the thread that constructed the application. Running it anywhere else
+        // would drain the main thread's queue on a foreign thread -- see Thread::processEvents(),
+        // which refuses the same thing for the same reason.
         if( Thread::currentThread() != mMainThread )
         {
             std::fprintf( stderr, "CoreApplication::exec: must be called from the main thread\n" );
             return -1;
         }
 
+        // Re-entering exec() from inside the running loop -- typically from a slot -- would nest a
+        // second loop inside the first. The inner one then owns the quit: quit() ends it and
+        // returns control to the outer loop, which keeps running, so the program does not stop when
+        // it was told to. Refused rather than honoured, as Qt refuses it.
         if( mInExec.exchange( true ) )
         {
             std::fprintf( stderr, "CoreApplication::exec: the event loop is already running\n" );
@@ -157,9 +163,9 @@ namespace QtLikeSignal
         }
 
         // Clear any exit request left over from a previous run, so exec() can be entered again
-        // after a quit(). Qt does the same at this point (`threadData->quitNow = false`). An
-        // exit()/quit() issued *before* exec() starts is therefore discarded rather than honoured,
-        // which is also what Qt does.
+        // after a quit(). The main thread is adopted and so never went through Thread::start(),
+        // which is where a worker's flag gets cleared. An exit()/quit() issued *before* exec()
+        // starts is therefore discarded rather than honoured, which is what Qt does too.
         mMainThread->mExiting.store( false );
 
         const int returnCode = mMainThread->exec();
