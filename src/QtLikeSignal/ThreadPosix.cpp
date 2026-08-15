@@ -124,9 +124,9 @@ namespace QtLikeSignal
                         pthread_attr_setschedpolicy( &attr, schedPolicy ) != 0 ||
                         pthread_attr_setschedparam( &attr, &sp ) != 0 )
                     {
-                        // The attributes were refused. Go back to inheriting and let the
-                        // thread apply the priority to itself once it is running, which is
-                        // Qt's fallback for exactly this case.
+                        // The attributes were refused. Go back to inheriting and let the thread
+                        // apply the priority to itself once it is running, which is Qt's
+                        // fallback for exactly this case.
                         pthread_attr_setinheritsched( &attr, PTHREAD_INHERIT_SCHED );
                         mPriorityNeedsReset = true;
                     }
@@ -264,10 +264,7 @@ namespace QtLikeSignal
             }
         }
 
-        // pthread_join() has no portable timed form -- pthread_timedjoin_np() is a glibc
-        // extension Qt guards with a configure test -- so the timeout is served by the same
-        // condition variable the thread ends by notifying, and the join that follows is only
-        // ever the already-finished kind.
+
         {
             std::unique_lock<std::mutex> lock( mWaitMutex );
             const auto hasFinished = [this]
@@ -275,9 +272,8 @@ namespace QtLikeSignal
                     return mHasFinished.load();
                 };
 
-            // The untimed overload rather than wait_for() with a huge duration: what a
-            // wait_for() has to do with it is add it to the clock's current time, which
-            // overflows.
+            // The untimed overload rather than wait_for() with a huge duration: what a wait_for()
+            // has to do with it is add it to the clock's current time, which overflows.
             if( aTime == ULONG_MAX )
             {
                 mWaitCv.wait( lock, hasFinished );
@@ -291,8 +287,8 @@ namespace QtLikeSignal
         std::lock_guard<std::mutex> lock( mPriorityMutex );
         if( mJoinable )
         {
-            // Under the lock and gated on the flag because two threads joining the same
-            // thread is undefined; whichever gets here second finds nothing left to reap.
+            // Under the lock and gated on the flag because two threads joining the same thread is
+            // undefined; whichever gets here second finds nothing left to reap.
             pthread_join( mThreadId, nullptr );
             mJoinable = false;
         }

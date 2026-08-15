@@ -26,11 +26,7 @@ namespace QtLikeSignal
     //! Called by start() with mPriorityMutex held.
     void Thread::startPlatformSpecific()
     {
-        // Created suspended, given its priority, then resumed. Qt does this and explains why:
-        // a new thread starts at normal priority, so a low-priority thread that starts
-        // another low-priority thread would otherwise be preempted by its own child for the
-        // window between creation and the priority landing. The zero is the stack size,
-        // meaning the default the image was linked with.
+        // The zero is the stack size, meaning the default the image was linked with.
         const unsigned int flags = CREATE_SUSPENDED;
         const auto handle = _beginthreadex( nullptr, 0, &threadEntry, this, flags, nullptr );
         if( handle == 0 )
@@ -42,9 +38,9 @@ namespace QtLikeSignal
 
         mHandle = reinterpret_cast<void*>( handle );
 
-        // Unconditional, InheritPriority included: the OS hands out NormalPriority regardless
-        // of what the creating thread is running at, so inheriting is something that has to
-        // be done rather than something that happens.
+        // Unconditional, InheritPriority included: the OS hands out NormalPriority regardless of
+        // what the creating thread is running at, so inheriting is something that has to be done
+        // rather than something that happens.
         applyPriority( mPriority );
 
         if( ResumeThread( static_cast<HANDLE>( mHandle ) ) == static_cast<DWORD>( -1 ) )
@@ -109,8 +105,8 @@ namespace QtLikeSignal
 
         case InheritPriority:
         default:
-            // Only reachable from start(), where the calling thread is the creating thread,
-            // so this really is the priority being inherited. Qt resolves it the same way.
+            // Only reachable from start(), where the calling thread is the creating thread, so
+            // this really is the priority being inherited. Qt resolves it the same way.
             prio = GetThreadPriority( GetCurrentThread() );
             break;
         }
@@ -147,7 +143,7 @@ namespace QtLikeSignal
                 // Never started, or already reaped by an earlier wait().
                 return true;
             }
-            // Registered before the lock is dropped so no other waiter can close the handle
+            // Registered before the lock is dropped so no other caller can close the handle
             // while this call is inside WaitForSingleObject() on it.
             ++mWaiters;
         }
@@ -166,6 +162,8 @@ namespace QtLikeSignal
         {
             std::lock_guard<std::mutex> lock( mPriorityMutex );
             --mWaiters;
+            // Only once the thread has actually ended: a timed-out waiter must leave the handle
+            // for the run that is still using it.
             if( completed && mWaiters == 0 )
             {
                 CloseHandle( handle );

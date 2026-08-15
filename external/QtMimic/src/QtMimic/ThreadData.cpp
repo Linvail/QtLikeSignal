@@ -83,8 +83,9 @@ namespace QtMimic
             }
         }
 
-        // Posted with mDispatcherMutex released: postEvent() ends in wakeWaiter(), which may run
-        // the thread's wake callback. postEvent() deletes an event it refuses, so nothing leaks.
+        // Posted with mDispatcherMutex released: postEvent() ends in wakeWaiter(), which may run the
+        // thread's wake callback -- user code, free to call back in here. postEvent() deletes an event
+        // it refuses, so nothing leaks either way.
         for( const ParkedEvent& event : parked )
         {
             installed->postEvent( event.mReceiver, event.mEvent );

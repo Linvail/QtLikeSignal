@@ -85,12 +85,11 @@ namespace QtLikeSignal
             }
         }
 
-        // Posted with mDispatcherMutex released. postEvent() ends in wakeWaiter(), which may run
-        // the thread's wake callback -- user code, which is free to call back in here.
+        // Posted with mDispatcherMutex released: postEvent() ends in wakeWaiter(), which may run the
+        // thread's wake callback -- user code, free to call back in here. postEvent() deletes an event
+        // it refuses, so nothing leaks either way.
         for( const ParkedEvent& event : parked )
         {
-            // postEvent() deletes the event itself when it refuses, so a dispatcher that is already
-            // closing loses nothing and leaks nothing.
             installed->postEvent( event.mReceiver, event.mEvent );
         }
     }

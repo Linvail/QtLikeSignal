@@ -153,8 +153,9 @@ namespace QtMimic
         }
 
         // Snapshot the descriptor set while we still hold the lock. Only each source's identity is
-        // taken, not its callback: the callback is looked up again, under the lock, at the moment it
-        // is about to be invoked, so unregistering one takes effect immediately.
+        // taken, not its callback: the callback is looked up again, under the lock, at the moment it is
+        // about to be invoked. Copying them out here would pin a callback unregisterEventSource() has
+        // since removed, and deliver to it anyway.
         std::vector<pollfd> pollSet;
         std::vector<unsigned long long> generations;
         pollSet.reserve( mSources.size() + 1 );
@@ -191,8 +192,10 @@ namespace QtMimic
                     continue;
                 }
 
-                // Resolved immediately before it is called, so a source unregistered by an earlier
-                // callback in this same round is not then called itself.
+                // Resolved immediately before it is called, so a source unregistered by an earlier callback in
+                // this same round is not then called itself. That is what makes unregisterEventSource()
+                // synchronous on this thread, and it is the rule the dispatch batches follow too: re-check
+                // under the lock, act outside it.
                 const EventSourceCallback callback
                     = callbackIfStillRegistered( pollSet[i].fd, generations[i] );
                 if( callback )

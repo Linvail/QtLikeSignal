@@ -29,11 +29,6 @@ namespace QtLikeSignal
     //! because ~Object() strips this object's timer registrations regardless.
     Timer::~Timer()
     {
-        // Matches QTimer::~QTimer(), which likewise stops a still-running timer. Note the consequence
-        // Qt shares: killTimer() is thread-confined, so destroying an *active* timer from a thread
-        // other than its own warns. That is a genuine misuse signal, not noise -- destroy the timer on
-        // the thread it lives in. Nothing leaks either way: ~Object() calls removeEventsForReceiver(),
-        // which strips this object's timer registrations from the dispatcher regardless.
         if( mActive )
         {
             stop();
@@ -149,10 +144,10 @@ namespace QtLikeSignal
         // across a restart lets an expiry belonging to the timer we just killed be accepted as the
         // new one's first fire.
         //
-        // Deliberately stricter than Qt, which kills before it starts (QTimer::setInterval()) and
-        // whose QFreeList commonly does return the same id. Qt promises nothing about ids across a
-        // restart; we promise a fresh one, because that is what makes timerEvent()'s id check sound
-        // rather than merely usually right.
+        // This is deliberately stricter than Qt, which kills before it starts
+        // (QTimer::setInterval()) and whose QFreeList commonly does return the same id. Qt promises
+        // nothing about ids across a restart; we promise a fresh one, because that is what makes
+        // timerEvent()'s id check sound rather than merely usually right.
         if( oldTimerId != -1 )
         {
             killTimer( oldTimerId );
@@ -188,8 +183,8 @@ namespace QtLikeSignal
         }
 
         // Stop before emitting, matching QTimer::timerEvent()'s ordering: a slot must not observe a
-        // single-shot timer as still active, and emitting last means none of our own code touches this
-        // object after user code has run.
+        // single-shot timer as still active, and emitting last means none of our own code touches
+        // this object after user code has run.
         //
         // Note this narrows -- but does not eliminate -- the hazard of a directly-connected slot
         // deleting the timer: emit() is still executing inside the Signal member of the object being

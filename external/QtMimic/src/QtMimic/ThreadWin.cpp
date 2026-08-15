@@ -26,6 +26,7 @@ namespace QtMimic
     //! Called by start() with mPriorityMutex held.
     void Thread::startPlatformSpecific()
     {
+        // The zero is the stack size, meaning the default the image was linked with.
         const unsigned int flags = CREATE_SUSPENDED;
         const auto handle = _beginthreadex( nullptr, 0, &threadEntry, this, flags, nullptr );
         if( handle == 0 )
