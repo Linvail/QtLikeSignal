@@ -76,7 +76,7 @@ namespace QtLikeSignal
     //! assignment.
     void Timer::setInterval
         (
-        int aMsec  //!< Interval in milliseconds.
+        int aMsec  //!< Interval in milliseconds. Negative values become 1 ms, with a warning.
         )
     {
         mInterval = checkInterval( "Timer::setInterval", aMsec );
@@ -101,7 +101,7 @@ namespace QtLikeSignal
     //! Sets whether the timer stops itself after firing once.
     void Timer::setSingleShot
         (
-        bool aSingleShot  //!< True for single-shot, false for periodic.
+        bool aSingleShot  //!< True for single-shot, false for repeating.
         )
     {
         mSingleShot = aSingleShot;
@@ -174,7 +174,7 @@ namespace QtLikeSignal
     //! Delivers one expiry: emits timeout, having first stopped a single-shot timer.
     void Timer::timerEvent
         (
-        TimerEvent* aEvent  //!< Timer event.
+        TimerEvent* aEvent  //!< The expiry being delivered.
         )
     {
         if( !aEvent || aEvent->timerId() != mTimerId )

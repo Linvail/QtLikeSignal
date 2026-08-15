@@ -25,7 +25,7 @@ namespace QtMimic
     //! Constructs a new thread object with an optional descriptive name.
     Thread::Thread
         (
-        const std::string& aName
+        const std::string& aName  //!< Descriptive name; empty by default.
         )
         : Object()
         , mName( aName )
@@ -276,7 +276,7 @@ namespace QtMimic
     //! Requests the thread's event loop to exit with the specified return code. Thread-safe.
     void Thread::exit
         (
-        int aReturnCode
+        int aReturnCode  //!< Exit return code.
         )
     {
         mExitCode.store( aReturnCode );
@@ -300,7 +300,7 @@ namespace QtMimic
     //! which case the task is dropped rather than run. Thread-safe.
     bool Thread::post
         (
-        std::function<void()> aTask
+        std::function<void()> aTask  //!< The callable to run on this thread. Ignored (returns false) if empty.
         )
     {
         // Basic sanity check. Usually ThreadData should outlive Thread.
@@ -347,7 +347,7 @@ namespace QtMimic
     //! return.
     void Thread::setWakeCallback
         (
-        std::function<void()> aCallback
+        std::function<void()> aCallback  //!< Invoked on post; nullptr clears.
         )
     {
         if( auto dispatcher = mData->dispatcher() )
@@ -386,7 +386,7 @@ namespace QtMimic
 
     void Thread::setPriority
         (
-        Priority aPriority
+        Priority aPriority  //!< The priority to apply. InheritPriority is not accepted; rejected with a warning.
         )
     {
         if( aPriority == InheritPriority )

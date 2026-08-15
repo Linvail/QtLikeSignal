@@ -72,13 +72,13 @@ namespace QtMimic
         {
             int mFd;                          //!< The descriptor to poll.
             short mEvents;                    //!< poll(2) event mask to wait for.
-            EventSourceCallback mCallback;
+            EventSourceCallback mCallback;    //!< Invoked with the revents when ready.
 
             //! Distinguishes this registration from any later one reusing the same descriptor.
             //!
             //! A descriptor number is not an identity: unregister it, close it, and the next open()
             //! may hand the same number back.
-            unsigned long long mGeneration;    //!< Invoked with the revents when ready.
+            unsigned long long mGeneration;
         };
 
         //! Looks up a still-registered source by descriptor and generation, and copies its callback.

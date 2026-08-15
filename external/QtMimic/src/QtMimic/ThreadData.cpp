@@ -67,7 +67,7 @@ namespace QtMimic
     //! Installs or clears this thread's dispatcher, and hands it anything parked. Thread-safe.
     void ThreadData::setDispatcher
         (
-        std::shared_ptr<AbstractEventDispatcher> aDispatcher  //!< Dispatcher to install; nullptr clears.
+        std::shared_ptr<AbstractEventDispatcher> aDispatcher  //!< Dispatcher to install; nullptr clears it.
         )
     {
         std::vector<ParkedEvent> parked;

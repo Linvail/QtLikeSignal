@@ -33,8 +33,8 @@ namespace QtMimic
     //! Constructs the application, capturing the command line, and adopts the calling thread.
     CoreApplication::CoreApplication
         (
-        int aArgc,
-        char** aArgv
+        int aArgc,     //!< Argument count, as handed to main().
+        char** aArgv   //!< Argument vector, as handed to main().
         )
         : Object()
     {
@@ -186,7 +186,7 @@ namespace QtMimic
     //! and it has the same cause: the instance pointer is loaded, and then dereferenced.
     void CoreApplication::exit
         (
-        int aReturnCode
+        int aReturnCode  //!< Value exec() should return.
         )
     {
         CoreApplication* app = sInstance.load();
@@ -216,7 +216,7 @@ namespace QtMimic
     //! CoreApplication object is being destroyed at the same time; see exit() for why.
     void CoreApplication::post
         (
-        std::function<void()> aTask
+        std::function<void()> aTask  //!< The callable to run on the main thread.
         )
     {
         CoreApplication* app = sInstance.load();

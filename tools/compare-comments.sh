@@ -24,12 +24,17 @@
 # QtMimic carries a copyright line in its @file block and QtLikeSignal carries an SPDX tag instead,
 # so that line and the '//!' separator above it are dropped before comparing. Everything else in a
 # '//!' comment is contract and is compared.
+#
+# Two forms, and both are compared. A '//!' block above a declaration describes it; a '//!<' tail on
+# a parameter describes that parameter, and is just as much of the published API. Only the tail's
+# text is taken, so the column it is aligned to does not count as a difference.
+# Comparing only the block form hid drift in eleven parameter descriptions for two days.
 doc() {
   perl -0777 -pe 's{^[ \t]*//!\s*\n[ \t]*//!.*Copyright.*\n}{}mg; s{^[ \t]*//!.*Copyright.*\n}{}mg' "$1" \
-    | grep -E '^[[:space:]]*//!' \
+    | perl -ne 'if (/^\s*\/\/!/) { chomp; s/^\s+//; s/\s+$//; print "$_\n" }
+                elsif (m{(//!<.*?)\s*$}) { print "$1\n" }' \
     | sed -e 's/QtLikeSignal/LIB/g' -e 's/QtMimic/LIB/g' \
-          -e 's/\.hpp/.h/g' \
-          -e 's/^[[:space:]]*//' -e 's/[[:space:]]\+$//'
+          -e 's/\.hpp/.h/g'
 }
 
 STEMS="AbstractEventDispatcher Connection CoreApplication Event EventDispatcherDefault

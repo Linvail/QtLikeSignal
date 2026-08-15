@@ -54,7 +54,7 @@ namespace QtLikeSignal
         //! thread only while the timer is inactive.
         void setInterval
             (
-            int aMsec
+            int aMsec  //!< Interval in milliseconds. Negative values become 1 ms, with a warning.
             );
 
         bool isActive() const;
@@ -91,7 +91,7 @@ namespace QtLikeSignal
         //! @tparam Functor Any callable taking no arguments.
         template <typename Functor> static void singleShot
             (
-            int aMsec,
+            int aMsec,       //!< Delay in ms. Negative values become 1 ms, with a warning.
             Functor aFunctor
             );
 
@@ -102,7 +102,7 @@ namespace QtLikeSignal
         //! @tparam Functor Any callable taking no arguments.
         template <typename Functor> static void singleShot
             (
-            int aMsec,
+            int aMsec,               //!< Delay in ms. Negative values become 1 ms, with a warning.
             const Object* aContext,
             Functor aFunctor
             );
@@ -116,7 +116,7 @@ namespace QtLikeSignal
         //! @tparam MemberFunc Pointer to a member function taking no arguments.
         template <typename Receiver, typename MemberFunc> static void singleShot
             (
-            int aMsec,
+            int aMsec,                  //!< Delay in ms. Negative values become 1 ms, with a warning.
             const Receiver* aReceiver,
             MemberFunc aMethod
             );
@@ -337,8 +337,8 @@ namespace QtLikeSignal
     template <typename Receiver, typename MemberFunc> void Timer::singleShot
         (
         int aMsec,                    //!< Delay in milliseconds.
-        const Receiver* aReceiver,    //!< Target receiver object.
-        MemberFunc aMethod            //!< Member function pointer to execute.
+        const Receiver* aReceiver,    //!< Object to call the member function on.
+        MemberFunc aMethod            //!< Member function taking no arguments.
         )
     {
         if( !aReceiver )

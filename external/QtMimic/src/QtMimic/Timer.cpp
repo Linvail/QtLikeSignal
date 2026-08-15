@@ -15,7 +15,7 @@ namespace QtMimic
     //! given. See Object's constructor.
     Timer::Timer
         (
-        Thread* aThread
+        Thread* aThread  //!< Thread this timer lives in; null means the calling thread.
         )
         : Object( aThread )
     {
