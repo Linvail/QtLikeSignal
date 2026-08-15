@@ -213,8 +213,9 @@ namespace QtMimic
         //! The same data as a bare pointer, for callers that only want to *compare* it.
         //!
         //! Safe because it is not an ownership handle: mData is assigned once in the constructor and
-        //! never reassigned, and the only caller asks it of Thread::currentThread(). Anything that
-        //! needs the data to stay alive must use threadData() above.
+        //! never reassigned, and the only caller asks it of Thread::currentThread(), which is by
+        //! definition the calling thread and so cannot be destroyed underneath the comparison.
+        //! Anything that needs the data to stay alive must use threadData() above.
         ThreadData* threadDataPtr() const
         {
             return mData.get();
@@ -333,10 +334,15 @@ namespace QtMimic
         //! Guards mPriority, mPriorityNeedsReset, and the native handle members above, including
         //! every use of that handle (creation, priority application, wait()).
         //!
-        //! start() holds it across thread creation, so a UNIX priority fix-up inside run() can
-        //! never run before the priority meant for THIS run has been decided, and
-        //! setPriority()/priority() can never observe a handle published for a run whose
-        //! priority is still being set up.
+        //! Not merely protecting the enum. The run body clears the running flag while holding this
+        //! mutex, so a setPriority() that has observed it true under the same lock is guaranteed the
+        //! OS thread has not yet reached the end of its body -- without that, the handle could be
+        //! touched after the thread had exited. start() holds it across thread creation for the same
+        //! reason in reverse: nobody may see the flag true before the handle exists, and a UNIX
+        //! priority fix-up inside run() cannot run before the priority meant for THIS run is decided.
+        //!
+        //! It is never held across a blocking wait, so a waiter cannot keep the finishing thread from
+        //! taking it.
         mutable std::mutex mPriorityMutex;
 
         Priority mPriority { InheritPriority };  //!< Priority applied to the current/most recent run.
