@@ -444,7 +444,28 @@ Stage 1 makes this easier than it was: the node is already the thing both sides 
 registration/prune pair already sits behind two functions on it rather than being spread across a
 `Cleanup` destructor and an inline push in `connectImpl()`.
 
-Expected: 2 blocks, ~228 B.
+**The node has to grow to pay for it, and the plan's original estimate did not count that.** Three
+additions: two sibling pointers (16 B), and a `weak_ptr<SignalImplBase>` (16 B) moved down from
+`Connection`, because `~Object()` walking a list of bare nodes still has to reach each one's Signal
+to call `removeConnection()`. That takes the node's block from 64 B to 96 B while removing the
+`mIncoming` entry, which costs ~64 B per connection once the vector's discarded growth buffers are
+counted. `Connection` itself halves, 32 B to 16 B, but it is not heap-allocated once `mIncoming` is
+gone, so that is a stack saving rather than a heap one.
+
+**A fourth addition is avoidable, and checking that is the first thing to do.** Holding the list as
+bare pointers means `~Object()` must be certain every node it walks is still alive, which normally
+argues for `enable_shared_from_this` and another 16 B. It should not be needed: a node reachable
+from `mIncoming` is one whose prune has not run, prune runs immediately after the Signal unlinks the
+slot, and the caller holds a strong reference across that whole window — so an unpruned node always
+has an owner. **That argument is a sketch and has not been tested. Verify it before building on it**;
+if it does not hold, the node grows to 112 B and stage 2 saves bytes only marginally.
+
+Expected, if the argument holds: 2 blocks, ~208 B.
+
+**So the case for stage 2 is weaker than the 2026-08-13 plan claimed, and different in kind.** That
+plan expected ~190 B off the back of a stage 1 that turned out not to be sound. Against what stage
+1 actually produced, stage 2 is worth **one block and about 32 B** — and the O(K²). The block count
+and the quadratic term are the reasons to do it; per-connection memory is no longer much of one.
 
 ### Stage 3 — slim the wrapper closure. Bytes, not blocks
 
@@ -454,7 +475,7 @@ of which the node owns. Pass the node to the invoker instead of capturing them a
 slot adapter alone, around 24 B. Since stage 1 stores the closure inline, this one is now purely a
 size win with no block to save at all.
 
-Expected: 2 blocks, ~180 B. Do it only if per-connection memory is the reason for the whole exercise.
+Expected: 2 blocks, ~160 B. Do it only if per-connection memory is the reason for the whole exercise.
 
 ### How each stage is checked
 
@@ -472,9 +493,11 @@ Expected: 2 blocks, ~180 B. Do it only if per-connection memory is the reason fo
 
 ### Recommendation
 
-**Stage 1 is done. Do stage 2; leave stage 3 unless memory is the goal.** Stage 2 takes a connection
-to two blocks and ~228 B, matching Qt's block count, and deletes the last quadratic term left
-anywhere in the library.
+**Stage 1 is done. Stage 2 is a judgement call now; leave stage 3 unless memory is the goal.** Stage
+2 takes a connection to two blocks and ~208 B, matching Qt's block count, and deletes the last
+quadratic term left anywhere in the library. What it no longer does is save much memory: ~32 B per
+connection, because the node has to grow by most of what the `mIncoming` entry gave back. Weigh the
+quadratic term against the lifetime risk — that, and not the byte count, is the argument.
 
 The counterweight from the original entry still stands and should be weighed before starting stage
 2: intrusive lifetime management is what this `Signal` was written to avoid. What has changed since
