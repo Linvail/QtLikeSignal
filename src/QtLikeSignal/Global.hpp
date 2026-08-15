@@ -10,6 +10,10 @@
 
 //! @file
 //!
+//! Type trait helpers and template utilities: the Overload<> family for resolving overloaded
+//! member function pointers, NonDeduced<> for suppressing template argument deduction, and
+//! MemberFunctionTraits for inspecting a member function pointer's qualifiers.
+//!
 //! @section thread_safety What "Thread-safe" means in this library
 //!
 //! It appears on roughly seventy declarations, so it needs one meaning rather than seventy.
@@ -28,8 +32,10 @@
 //! **"Not thread-safe" means the opposite is documented, not merely absent**, and it always names
 //! the thread that may call: "must be called from this object's own thread". Calling it from
 //! elsewhere is misuse. This library does not treat the consequences of misuse as defects, which is
-//! precisely why the claim has to be accurate -- a false "Thread-safe" moves the fault to us. Two
-//! were found and corrected on 2026-08-13; see history/OPEN-RISKS-20260813.md (R15).
+//! precisely why the claim has to be accurate -- a false "Thread-safe" moves the fault to us.
+//
+// Two false claims were found and corrected on 2026-08-13; see history/OPEN-RISKS-20260813.md
+// (R15).
 //!
 //! Neither claim says anything about *reentrancy* -- calling back into the same object from a slot
 //! it invoked. Where that matters it is documented at the function.

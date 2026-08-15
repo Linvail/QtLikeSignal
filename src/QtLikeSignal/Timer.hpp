@@ -24,9 +24,17 @@ namespace QtLikeSignal
     //!
     //! **No part of this class is thread-safe**, exactly as with Qt's QTimer. A Timer must be used
     //! from the thread it lives in: start()/stop() are thread-confined because they go through
-    //! Object::startTimer()/killTimer(), and timeout is emitted by that thread's event loop. To drive
-    //! a timer that lives in another thread, hop onto it first, e.g.
-    //! `Object::callLater(&timer, &Timer::start, 50)`.
+    //! Object::startTimer()/killTimer(), setInterval() joins them whenever the timer is active
+    //! because it restarts one, and timeout is emitted by that thread's event loop. To drive a
+    //! timer that lives in another thread, hop onto it first -- post a task to that thread that
+    //! calls start().
+    //!
+    //! Usage:
+    //! @code
+    //!   QtLikeSignal::Timer timer;
+    //!   QtLikeSignal::Object::connect( timer.getTimeout(), &receiver, &Receiver::onTick );
+    //!   timer.start( 100 );   // every 100 ms, on the thread the timer lives in
+    //! @endcode
     class Timer : public Object
     {
     public:
@@ -39,6 +47,11 @@ namespace QtLikeSignal
 
         int interval() const;
 
+        //! Sets the interval, restarting the timer if it is already running.
+        //!
+        //! **Must be called from this timer's own thread whenever the timer is active**, since the
+        //! restart goes through Object::startTimer()/killTimer(); see start(int). Safe from any
+        //! thread only while the timer is inactive.
         void setInterval
             (
             int aMsec
@@ -55,13 +68,11 @@ namespace QtLikeSignal
 
         int timerId() const;
 
-        //! Starts or restarts the timer with specified interval in milliseconds.
+        //! Starts or restarts the timer with an interval of @p aMsec milliseconds.
         //!
         //! **Must be called from this timer's own thread**, because it goes through
         //! Object::startTimer(); see that function for why. Same rule as Qt's QTimer, whose start()
-        //! is likewise a plain forward to QObject::startTimer(). To start a timer that lives in
-        //! another thread, hop onto that thread first, e.g.
-        //! `Object::callLater(&timer, &Timer::start, 50)`.
+        //! is likewise a plain forward to QObject::startTimer().
         void start
             (
             int aMsec  //!< Interval in milliseconds.
@@ -73,16 +84,22 @@ namespace QtLikeSignal
 
         SignalView<>& getTimeout() const;
 
-        //! Fires a single-shot timer executing a functor after specified delay. Functor is the
-        //! callable slot type.
+        //! Runs @p aFunctor once, on the calling thread, after @p aMsec milliseconds.
+        //!
+        //! The calling thread must be running an event loop, since that is what will deliver the
+        //! timer; from a thread that is not, this does nothing.
+        //! @tparam Functor Any callable taking no arguments.
         template <typename Functor> static void singleShot
             (
             int aMsec,
             Functor aFunctor
             );
 
-        //! Fires a single-shot timer executing a functor in context object's thread. Functor is
-        //! the callable slot type.
+        //! Runs @p aFunctor once, on @p aContext's thread, after @p aMsec milliseconds.
+        //!
+        //! Safe to call from any thread. A null context, or a context with no thread, does nothing,
+        //! and a context destroyed before the delay elapses cancels the call.
+        //! @tparam Functor Any callable taking no arguments.
         template <typename Functor> static void singleShot
             (
             int aMsec,
@@ -90,8 +107,13 @@ namespace QtLikeSignal
             Functor aFunctor
             );
 
-        //! Fires a single-shot timer executing a member function on receiver object. Receiver is
-        //! the receiver object type and MemberFunc the member function pointer type.
+        //! Calls @p aMethod on @p aReceiver once, on the receiver's thread, after @p aMsec
+        //! milliseconds. A null receiver does nothing.
+        //!
+        //! Forwards to the context overload above with the receiver as the context, so it inherits
+        //! that overload's interval handling and its cancellation on a destroyed receiver.
+        //! @tparam Receiver The receiver's type (must derive from Object).
+        //! @tparam MemberFunc Pointer to a member function taking no arguments.
         template <typename Receiver, typename MemberFunc> static void singleShot
             (
             int aMsec,
@@ -109,10 +131,9 @@ namespace QtLikeSignal
         //! Corrects a caller-supplied interval to one a timer can actually run at.
         //!
         //! Mirrors Qt's checkInterval() in qtimer.cpp, including its choice to correct rather than
-        //! reject: Qt treats a negative interval as a caller mistake worth reporting but not worth
-        //! cancelling the call over, so the timer still runs, just at the shortest interval there
-        //! is. Shared by every entry point that takes one so none of them can drift from the
-        //! others. Returns the interval to use, in milliseconds.
+        //! reject: a negative interval warns and becomes 1 ms. Shared by every entry point that
+        //! takes an interval -- start(), setInterval() and all three singleShot() overloads -- so
+        //! none of them can drift from the others. Returns the interval to use, in milliseconds.
         static int checkInterval
             (
             const char* aCaller,  //!< Name of the calling function, for the warning text.
@@ -124,9 +145,11 @@ namespace QtLikeSignal
         // thread-confined because they go through Object::startTimer()/killTimer(), and timerEvent()
         // is delivered by that same thread's event loop. Adding a mutex would only paper over misuse
         // that the thread-confinement rules already forbid.
-        //! Emitted, on the timer's own thread, each time the interval elapses. Private, handed out
-        //! by getTimeout() as a view: firing a timer's timeout is the timer's job, and a caller
-        //! able to emit it directly would be reporting an expiry that never happened.
+        //! Emitted, on the timer's own thread, each time the interval elapses.
+        //!
+        //! Private, and handed out only as a view: firing a timer's timeout is the timer's job, and
+        //! a caller that could emit it directly would be reporting an expiry that never happened.
+        //! Same reasoning as Thread's mStarted/mFinished.
         Signal<> mTimeout;
 
         int mInterval { 0 };        //!< The configured interval, in milliseconds.
@@ -135,7 +158,7 @@ namespace QtLikeSignal
         bool mActive { false };     //!< True while the timer is running.
     };
 
-    //! Fires a single-shot timer executing a functor after specified delay.
+    //! Runs a functor once on the calling thread after a delay.
     template <typename Functor> void Timer::singleShot
         (
         int aMsec,        //!< Delay in milliseconds.
