@@ -59,7 +59,7 @@ TEST( ThreadAdoptionTest, ObjectsAlwaysHaveAThreadAffinity )
         {
             Object there;
             hadAffinity.store( there.thread() != nullptr
-                && there.thread() == Thread::currentThread() );
+            && there.thread() == Thread::currentThread() );
         } );
     worker.join();
 

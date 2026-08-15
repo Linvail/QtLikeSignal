@@ -148,6 +148,7 @@ namespace QtMimic
                 (
                 ConnectionNode* aNode
                 ) = 0;
+
         };
     }
 

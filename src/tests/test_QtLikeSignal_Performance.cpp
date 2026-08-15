@@ -69,8 +69,8 @@ TEST( Performance, QtLikeSignal_Connect )
     const double ns = timeLoop( kConnectOps, [&]( int )
         {
             Object::connect( sig, &receiver, []( int )
-                {
-                }, ConnectionType::Direct );
+            {
+            }, ConnectionType::Direct );
         } );
     record( "connect()", "QtLikeSignal", ns );
 }
@@ -189,8 +189,8 @@ TEST( Performance, QtMimic_Connect )
     const double ns = timeLoop( kConnectOps, [&]( int )
         {
             QtMimic::Object::connect( sig, &receiver, []( int )
-                {
-                }, QtMimic::ConnectionType::Direct );
+            {
+            }, QtMimic::ConnectionType::Direct );
         } );
     record( "connect()", "QtMimic", ns );
 }
@@ -296,6 +296,7 @@ public:
     {
         PerfHarness::printSummary();
     }
+
 };
 
 //! Entry point. This binary is separate from the correctness suite so its cost is opt-in.

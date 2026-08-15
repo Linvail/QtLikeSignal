@@ -434,7 +434,7 @@ namespace QtMimic
             [aTimerId]( const EventPair& aEp )
             {
                 if( aEp.mEvent && aEp.mEvent->type() == Event::Timer
-                    && static_cast<TimerEvent*>( aEp.mEvent )->timerId() == aTimerId )
+                && static_cast<TimerEvent*>( aEp.mEvent )->timerId() == aTimerId )
                 {
                     delete aEp.mEvent;
                     return true;

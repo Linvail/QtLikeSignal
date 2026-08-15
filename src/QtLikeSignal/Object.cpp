@@ -415,7 +415,7 @@ namespace QtLikeSignal
                             for( const auto& timer : timersToMove )
                             {
                                 dispatcher->registerTimer( timer.mTimerId, timer.mIntervalMs,
-                                    this );
+                                this );
                             }
                         }
                     }

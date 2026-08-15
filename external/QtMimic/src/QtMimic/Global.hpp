@@ -78,6 +78,7 @@ namespace QtMimic
         {
             return aPtr;
         }
+
     };
 
     //! Selects a const overload of a member function by its argument types. Mirrors qConstOverload.
@@ -93,6 +94,7 @@ namespace QtMimic
         {
             return aPtr;
         }
+
     };
 
     //! Selects either overload, const or not, plus free functions. Mirrors Qt's qOverload.
@@ -111,6 +113,7 @@ namespace QtMimic
         {
             return aPtr;
         }
+
     };
 
     template <typename ... Args> constexpr Overload<Args...> overload = {};

@@ -82,6 +82,7 @@ namespace QtLikeSignal
         {
             return aPtr;
         }
+
     };
 
     //! Selects a const overload of a member function by its argument types. Mirrors qConstOverload.
@@ -97,6 +98,7 @@ namespace QtLikeSignal
         {
             return aPtr;
         }
+
     };
 
     //! Selects either overload, const or not, plus free functions. Mirrors Qt's qOverload.
@@ -115,6 +117,7 @@ namespace QtLikeSignal
         {
             return aPtr;
         }
+
     };
 
     template <typename ... Args> constexpr Overload<Args...> overload = {};

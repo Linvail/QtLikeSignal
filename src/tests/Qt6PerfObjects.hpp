@@ -50,7 +50,11 @@ public:
 
 signals:
     //! Emitted by fire().
-    void fired( int aValue );
+    void fired
+        (
+        int aValue
+        );
+
 };
 
 //! Plain receiver, used where a benchmark needs a QObject to own a connection.
@@ -67,6 +71,7 @@ public:
         : QObject( aParent )
     {
     }
+
 };
 
 #endif // QT_LIKE_SIGNAL_QT6_PERF_OBJECTS_HPP

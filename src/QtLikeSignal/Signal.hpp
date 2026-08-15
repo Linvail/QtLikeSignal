@@ -278,9 +278,9 @@ namespace QtLikeSignal
             // Args&... instead would save the conversion, and cannot be used: it rejects
             // sig.emit("literal") on a Signal<std::string>, which the type-erased call accepted.
             virtual void invoke
-                (
+            (
                 Args... aArgs
-                ) = 0;
+            ) = 0;
 
             //! The connection this slot belongs to. Strong, and the only strong reference from a
             //! slot to a node, so the node outlives the slot without either owning the other twice.

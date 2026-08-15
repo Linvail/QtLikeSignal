@@ -45,8 +45,8 @@ namespace QtLikeSignal
                     if( RegisterClassA( &windowClass ) == 0 )
                     {
                         std::fprintf( stderr,
-                            "EventDispatcherWin32: RegisterClass() failed (%lu)\n",
-                            GetLastError() );
+                        "EventDispatcherWin32: RegisterClass() failed (%lu)\n",
+                        GetLastError() );
                     }
                 } );
         }

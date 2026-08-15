@@ -195,8 +195,7 @@ namespace QtMimic
         //! explicit template resolution.
         template <typename Signal, typename Receiver, typename Slot>
         static std::enable_if_t<MemberFunctionTraits<Slot>::is_member_function,
-            Connection>
-        connect
+            Connection>connect
             (
             Signal& aSignal,
             Receiver* aReceiver,
@@ -220,7 +219,6 @@ namespace QtMimic
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-
         //! Connect Overload 2: Connects an overloaded void member function slot inherited from
         //! a base class.
         //!
@@ -230,12 +228,14 @@ namespace QtMimic
         //! inherited overloaded methods seamlessly.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename SlotClass>
-        static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, Connection>
-        connect
+        static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, Connection>connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
-            void ( SlotClass::*aSlot )( SignalArgs... ),
+            void ( SlotClass::*aSlot )
+            (
+            SignalArgs...
+            ),
             ConnectionType aType = ConnectionType::Auto
             )
         {
@@ -247,7 +247,6 @@ namespace QtMimic
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-
         //! Connect Overload 3: Connects an overloaded const void member function slot inherited
         //! from a base class.
         //!
@@ -255,8 +254,7 @@ namespace QtMimic
         //! requires separate template matching for const qualifiers on member function pointers.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename SlotClass>
-        static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, Connection>
-        connect
+        static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, Connection>connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
@@ -272,7 +270,6 @@ namespace QtMimic
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-
         //! Connect Overload 4: Connects an overloaded non-void returning member function slot
         //! inherited from a base class.
         //!
@@ -286,7 +283,10 @@ namespace QtMimic
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
-            Ret ( SlotClass::*aSlot )( SignalArgs... ),
+            Ret ( SlotClass::*aSlot )
+            (
+            SignalArgs...
+            ),
             ConnectionType aType = ConnectionType::Auto
             )
         {
@@ -297,7 +297,6 @@ namespace QtMimic
 
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
-
 
         //! Connect Overload 5: Connects an overloaded non-void returning const member function
         //! slot inherited from a base class.
@@ -322,7 +321,6 @@ namespace QtMimic
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-
         //! Connect Overload 6: Connects an overloaded void member function slot defined
         //! directly on the receiver.
         //!
@@ -333,8 +331,7 @@ namespace QtMimic
         //! signature.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver>
-        static std::enable_if_t<is_obj<Receiver>, Connection>
-        connect
+        static std::enable_if_t<is_obj<Receiver>, Connection>connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
@@ -350,7 +347,6 @@ namespace QtMimic
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-
         //! Connect Overload 7: Connects an overloaded const void member function slot defined
         //! directly on the receiver.
         //!
@@ -358,8 +354,7 @@ namespace QtMimic
         //! signature.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver>
-        static std::enable_if_t<is_obj<Receiver>, Connection>
-        connect
+        static std::enable_if_t<is_obj<Receiver>, Connection>connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
@@ -375,7 +370,6 @@ namespace QtMimic
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-
         //! Connect Overload 8: Connects an overloaded non-void returning member function slot
         //! defined directly on the receiver.
         //!
@@ -385,8 +379,7 @@ namespace QtMimic
         //! signature.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename Ret>
-        static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, Connection>
-        connect
+        static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, Connection>connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
@@ -402,7 +395,6 @@ namespace QtMimic
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-
         //! Connect Overload 9: Connects an overloaded non-void returning const member function
         //! slot defined directly on the receiver.
         //!
@@ -410,8 +402,7 @@ namespace QtMimic
         //! signature.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename Ret>
-        static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, Connection>
-        connect
+        static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, Connection>connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
@@ -445,12 +436,11 @@ namespace QtMimic
         {
             #if __cplusplus >= 201703L
                 static_assert( std::is_invocable_v<Func, Args...>,
-                    "The provided lambda or callable does not match the Signal's arguments." );
+                "The provided lambda or callable does not match the Signal's arguments." );
             #endif
 
             return connectImpl( aSignal, aContext, std::forward<Func>( aSlot ), aType );
         }
-
 
         //! Disconnects a signal connection using a connection handle. Thread-safe.
         //!
@@ -584,6 +574,7 @@ namespace QtMimic
             (
             std::shared_ptr<ThreadData> aThreadData
             );
+
     private:
         //! Key identifying a deduplicated deferred call.
         //!
@@ -781,7 +772,7 @@ namespace QtMimic
             // matches on. ~Object() strips every event still queued for it before it goes away, so
             // the dispatcher never delivers to a dead receiver.
             auto wrapper = [weakLife, aContext, slot = std::forward<Callable>( aSlot ), aType,
-                ctxAffinity]( auto&&... aArgs )
+                    ctxAffinity]( auto&&... aArgs )
                 {
                     if( aType == ConnectionType::Direct )
                     {
@@ -1002,7 +993,10 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<void ( SlotClass::* )( Args... )>( aReceiver, aSlot,
+        dispatchCallLater<void ( SlotClass::* )
+            (
+            Args...
+            )>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1025,7 +1019,10 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<void ( SlotClass::* )( Args... ) const>( aReceiver, aSlot,
+        dispatchCallLater<void ( SlotClass::* )
+            (
+            Args...
+            ) const>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1052,7 +1049,10 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<Ret ( SlotClass::* )( Args... )>( aReceiver, aSlot,
+        dispatchCallLater<Ret ( SlotClass::* )
+            (
+            Args...
+            )>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1075,7 +1075,10 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<Ret ( SlotClass::* )( Args... ) const>( aReceiver, aSlot,
+        dispatchCallLater<Ret ( SlotClass::* )
+            (
+            Args...
+            ) const>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1099,7 +1102,10 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<void ( Receiver::* )( Args... )>( aReceiver, aSlot,
+        dispatchCallLater<void ( Receiver::* )
+            (
+            Args...
+            )>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1122,7 +1128,10 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<void ( Receiver::* )( Args... ) const>( aReceiver, aSlot,
+        dispatchCallLater<void ( Receiver::* )
+            (
+            Args...
+            ) const>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1146,7 +1155,10 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<Ret ( Receiver::* )( Args... )>( aReceiver, aSlot,
+        dispatchCallLater<Ret ( Receiver::* )
+            (
+            Args...
+            )>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1169,7 +1181,10 @@ namespace QtMimic
             return;
         }
 
-        dispatchCallLater<Ret ( Receiver::* )( Args... ) const>( aReceiver, aSlot,
+        dispatchCallLater<Ret ( Receiver::* )
+            (
+            Args...
+            ) const>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1226,7 +1241,7 @@ namespace QtMimic
 
         Signal<SignalArgs...>* sigPtr = &aSignal;
 
-        dispatchCallLater<Signal<SignalArgs...>>( aContext, sigPtr,
+        dispatchCallLater<Signal<SignalArgs...> >( aContext, sigPtr,
             [sigPtr]( auto&&... a )
             {
                 sigPtr->emit( std::forward<decltype( a )>( a )... );

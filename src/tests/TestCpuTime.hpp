@@ -44,7 +44,7 @@ namespace TestSupport
             FILETIME kernelTime {};
             FILETIME userTime {};
             if( GetProcessTimes( GetCurrentProcess(), &creationTime, &exitTime, &kernelTime,
-                &userTime ) == 0 )
+            &userTime ) == 0 )
             {
                 return 0.0;
             }

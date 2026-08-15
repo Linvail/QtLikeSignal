@@ -78,6 +78,7 @@ namespace QtMimic
             ) = delete;
 
         static CoreApplication* instance();
+
         //! Gets the command-line arguments, or an empty list if the default constructor was used.
         const std::vector<std::string>& arguments() const
         {
