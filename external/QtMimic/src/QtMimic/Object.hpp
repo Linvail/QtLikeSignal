@@ -54,27 +54,32 @@ namespace QtMimic
     class EventDispatcherDefault;
     class CoreApplication;
 
-    //! Return true if child is the same as or derived from Object.
+    //! Shorthand for the constraints the connect()/callLater() overload sets are selected on.
+    //!
+    //! These appear in around thirty enable_if_t chains. Spelled out, each is three or four
+    //! std::is_base_of/std::is_same terms, the chain no longer fits on a line, and two overloads
+    //! that must agree can drift apart without it being visible. Named once, they cannot.
     template <typename Child> constexpr bool is_obj = std::is_base_of<Object, Child>::value;
 
-    //! Return true if child object is the same as or derived from parent.
+    //! Child is an Object and derives from Parent, which is also an Object. Same type qualifies.
     template <typename Child, typename Parent>
     constexpr bool obj_is_base_of = std::is_base_of<Parent, Child>::value && is_obj<Parent>;
 
-    //! Return true if child object is derived from parent.
+    //! Child is an Object and derives from a *different* Object type Parent. This is what
+    //! separates "the slot is declared in the receiver itself" from "the slot is inherited".
     template <typename Child, typename Parent>
     constexpr bool obj_is_child_of = std::is_base_of<Parent, Child>::value
         && !std::is_same<Parent, Child>::value && is_obj<Parent>;
 
-    //! Return true if T is void type.
+    //! True when T is void.
     template <typename T> constexpr bool is_void = std::is_same<void, T>::value;
 
     //----------------------------------------------------------------
-    //! @class Object
+    //! Base class for all objects participating in the signal-slot and event system.
     //!
-    //! Base class carrying thread affinity. Derive from it and declare signals as
-    //! public QtMimic::Signal<Args...> members. Connect them to member-function
-    //! slots of other Objects with Object::connect().
+    //! Derive from it and declare signals as public Signal<Args...> members, then connect them to
+    //! member-function slots of other Objects with Object::connect(). An Object carries thread
+    //! affinity, which is what lets a queued connection know where to deliver.
     //----------------------------------------------------------------
     class Object
     {
@@ -171,19 +176,11 @@ namespace QtMimic
         }
 
 
-        //! [Connect Overload 1]: Connects a signal to a non-overloaded member function slot.
+        //! Connect Overload 1: Connects a signal to a non-overloaded member function slot.
         //!
-        //! Why it exists: This is the primary overload for standard member functions. Because the target
+        //! This is the primary overload for standard member functions. Because the target
         //! slot is not overloaded, the compiler can directly deduce the `Slot` type without needing
         //! explicit template resolution.
-        //! @tparam Signal The signal type.
-        //! @tparam Receiver The receiver object type (must derive from Object).
-        //! @tparam Slot The member function pointer type.
-        //! @param aSignal The signal to connect.
-        //! @param aReceiver The object receiving the signal.
-        //! @param aSlot The member function to call when the signal is emitted.
-        //! @param aType The type of connection.
-        //! @return A handle representing the connection. Thread-safe.
         template <typename Signal, typename Receiver, typename Slot>
         static std::enable_if_t<MemberFunctionTraits<Slot>::is_member_function,
             Connection>
@@ -211,21 +208,13 @@ namespace QtMimic
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-        //! [Connect Overload 2]: Connects an overloaded void member function slot inherited from
+        //! Connect Overload 2: Connects an overloaded void member function slot inherited from
         //! a base class.
         //!
-        //! Why it exists: If the target slot is overloaded, the compiler cannot deduce `Slot` in
+        //! If the target slot is overloaded, the compiler cannot deduce `Slot` in
         //! Overload 1. When the overloaded slot is defined in a base class of the receiver, type
         //! deduction fails. This overload explicitly resolves the base class pointer so you can connect
         //! inherited overloaded methods seamlessly.
-        //! @tparam SignalArgs Parameter types of the signal used to select the slot overload.
-        //! @tparam Receiver Receiver object type (must derive from Object).
-        //! @tparam SlotClass Base class owning the member function slot.
-        //! @param aSignal The signal to connect.
-        //! @param aReceiver The object receiving the signal.
-        //! @param aSlot The member function pointer matching SignalArgs.
-        //! @param aType The type of connection.
-        //! @return A handle representing the connection. Thread-safe.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename SlotClass>
         static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, Connection>
@@ -244,19 +233,11 @@ namespace QtMimic
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-        //! [Connect Overload 3]: Connects an overloaded const void member function slot inherited
+        //! Connect Overload 3: Connects an overloaded const void member function slot inherited
         //! from a base class.
         //!
-        //! Why it exists: Similar to Overload 2, but specifically for const member functions. C++
+        //! Similar to Overload 2, but specifically for const member functions. C++
         //! requires separate template matching for const qualifiers on member function pointers.
-        //! @tparam SignalArgs Parameter types of the signal used to select the slot overload.
-        //! @tparam Receiver Receiver object type (must derive from Object).
-        //! @tparam SlotClass Base class owning the member function slot.
-        //! @param aSignal The signal to connect.
-        //! @param aReceiver The object receiving the signal.
-        //! @param aSlot The const member function pointer matching SignalArgs.
-        //! @param aType The type of connection.
-        //! @return A handle representing the connection. Thread-safe.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename SlotClass>
         static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, Connection>
@@ -275,21 +256,12 @@ namespace QtMimic
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-        //! [Connect Overload 4]: Connects an overloaded non-void returning member function slot
+        //! Connect Overload 4: Connects an overloaded non-void returning member function slot
         //! inherited from a base class.
         //!
-        //! Why it exists: If an overloaded inherited slot returns a value (e.g. `bool`), it won't match
+        //! If an overloaded inherited slot returns a value (e.g. `bool`), it won't match
         //! the void-returning Overloads 2 and 3. This overload explicitly catches non-void slots from
         //! base classes (the return value is safely discarded during emission).
-        //! @tparam SignalArgs Parameter types of the signal used to select the slot overload.
-        //! @tparam Receiver Receiver object type (must derive from Object).
-        //! @tparam SlotClass Base class owning the member function slot.
-        //! @tparam Ret Return type of the slot (discarded upon invocation).
-        //! @param aSignal The signal to connect.
-        //! @param aReceiver The object receiving the signal.
-        //! @param aSlot The member function pointer matching SignalArgs and returning Ret.
-        //! @param aType The type of connection.
-        //! @return A handle representing the connection. Thread-safe.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename SlotClass, typename Ret>
         static std::enable_if_t<obj_is_child_of<Receiver, SlotClass> && !is_void<Ret>, Connection>
@@ -308,19 +280,10 @@ namespace QtMimic
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-        //! [Connect Overload 5]: Connects an overloaded non-void returning const member function
+        //! Connect Overload 5: Connects an overloaded non-void returning const member function
         //! slot inherited from a base class.
         //!
-        //! Why it exists: Similar to Overload 4, but specifically for const member functions.
-        //! @tparam SignalArgs Parameter types of the signal used to select the slot overload.
-        //! @tparam Receiver Receiver object type (must derive from Object).
-        //! @tparam SlotClass Base class owning the member function slot.
-        //! @tparam Ret Return type of the slot (discarded upon invocation).
-        //! @param aSignal The signal to connect.
-        //! @param aReceiver The object receiving the signal.
-        //! @param aSlot The const member function pointer matching SignalArgs and returning Ret.
-        //! @param aType The type of connection.
-        //! @return A handle representing the connection. Thread-safe.
+        //! Similar to Overload 4, but specifically for const member functions.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename SlotClass, typename Ret>
         static std::enable_if_t<obj_is_child_of<Receiver, SlotClass> && !is_void<Ret>, Connection>
@@ -339,21 +302,14 @@ namespace QtMimic
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-        //! [Connect Overload 6]: Connects an overloaded void member function slot defined
+        //! Connect Overload 6: Connects an overloaded void member function slot defined
         //! directly on the receiver.
         //!
-        //! Why it exists: If the target slot is overloaded (e.g. `onEvent()` and `onEvent(int)`), the
+        //! If the target slot is overloaded (e.g. `onEvent()` and `onEvent(int)`), the
         //! compiler cannot deduce `Slot` in Overload 1. By using `NonDeduced<Receiver>`, this
         //! overload forces the compiler to use `SignalArgs` from the signal to perfectly select the
         //! right overload pointer.
-        //! @tparam SignalArgs Parameter types of the signal used to deduce and select the slot overload
         //! signature.
-        //! @tparam Receiver Receiver object type (must derive from Object).
-        //! @param aSignal The signal to connect.
-        //! @param aReceiver The object receiving the signal.
-        //! @param aSlot The member function pointer matching SignalArgs.
-        //! @param aType The type of connection.
-        //! @return A handle representing the connection. Thread-safe.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver>
         static std::enable_if_t<is_obj<Receiver>, Connection>
@@ -372,18 +328,11 @@ namespace QtMimic
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-        //! [Connect Overload 7]: Connects an overloaded const void member function slot defined
+        //! Connect Overload 7: Connects an overloaded const void member function slot defined
         //! directly on the receiver.
         //!
-        //! Why it exists: Similar to Overload 6, but specifically matches const member functions.
-        //! @tparam SignalArgs Parameter types of the signal used to deduce and select the slot overload
+        //! Similar to Overload 6, but specifically matches const member functions.
         //! signature.
-        //! @tparam Receiver Receiver object type (must derive from Object).
-        //! @param aSignal The signal to connect.
-        //! @param aReceiver The object receiving the signal.
-        //! @param aSlot The const member function pointer matching SignalArgs.
-        //! @param aType The type of connection.
-        //! @return A handle representing the connection. Thread-safe.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver>
         static std::enable_if_t<is_obj<Receiver>, Connection>
@@ -402,21 +351,13 @@ namespace QtMimic
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-        //! [Connect Overload 8]: Connects an overloaded non-void returning member function slot
+        //! Connect Overload 8: Connects an overloaded non-void returning member function slot
         //! defined directly on the receiver.
         //!
-        //! Why it exists: If an overloaded slot returns a value (e.g. `bool`), it won't match the
+        //! If an overloaded slot returns a value (e.g. `bool`), it won't match the
         //! void-returning Overload 6. This overload ensures connecting an overloaded method that returns
         //! `Ret` compiles successfully.
-        //! @tparam SignalArgs Parameter types of the signal used to deduce and select the slot overload
         //! signature.
-        //! @tparam Receiver Receiver object type (must derive from Object).
-        //! @tparam Ret Return type of the slot (discarded upon invocation).
-        //! @param aSignal The signal to connect.
-        //! @param aReceiver The object receiving the signal.
-        //! @param aSlot The member function pointer matching SignalArgs and returning Ret.
-        //! @param aType The type of connection.
-        //! @return A handle representing the connection. Thread-safe.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename Ret>
         static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, Connection>
@@ -435,19 +376,11 @@ namespace QtMimic
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-        //! [Connect Overload 9]: Connects an overloaded non-void returning const member function
+        //! Connect Overload 9: Connects an overloaded non-void returning const member function
         //! slot defined directly on the receiver.
         //!
-        //! Why it exists: Similar to Overload 8, but specifically for const member functions.
-        //! @tparam SignalArgs Parameter types of the signal used to deduce and select the slot overload
+        //! Similar to Overload 8, but specifically for const member functions.
         //! signature.
-        //! @tparam Receiver Receiver object type (must derive from Object).
-        //! @tparam Ret Return type of the slot (discarded upon invocation).
-        //! @param aSignal The signal to connect.
-        //! @param aReceiver The object receiving the signal.
-        //! @param aSlot The const member function pointer matching SignalArgs and returning Ret.
-        //! @param aType The type of connection.
-        //! @return A handle representing the connection. Thread-safe.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename Ret>
         static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, Connection>
@@ -466,17 +399,10 @@ namespace QtMimic
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-        //! [Connect Overload 10]: Connects a signal to an arbitrary callable (e.g. lambda, functor,
+        //! Connect Overload 10: Connects a signal to an arbitrary callable (e.g. lambda, functor,
         //! std::function) with a context object for thread affinity and lifetime management
         //! (like Qt's context-object connect).
-        //! @tparam Func The callable type (lambda, functor, std::function).
-        //! @tparam Args Parameter types of the signal.
-        //! @param aSignal The signal to connect.
-        //! @param aContext The context object (must derive from Object) for thread affinity and
         //!        lifetime management.
-        //! @param aSlot The callable to invoke when the signal is emitted.
-        //! @param aType The type of connection.
-        //! @return A handle representing the connection. Thread-safe.
         //! @note The callable must be invocable with the signal's arguments.
         template <template <typename ...> class SignalSource, typename Func, typename ... Args,
             typename = std::enable_if_t<!std::is_member_function_pointer<std::decay_t<Func> >::
@@ -684,7 +610,6 @@ namespace QtMimic
         //! deduplication key, pack the arguments into a tuple the invoker owns, and hand both to
         //! scheduleCallLater().
         //!
-        //! @tparam KeyType The type hashed into the key. Deliberately separate from Target: the
         //!         inherited-slot overloads hash the *declared* member-pointer signature rather
         //!         than a deduced type, so that naming one slot through a base class and through
         //!         the receiver yields the same key and therefore deduplicates against itself.
@@ -804,14 +729,6 @@ namespace QtMimic
 
         //! Internal implementation of the connect() overloads. Handles thread affinity,
         //! queued/direct invocation, and lifetime management.
-        //! @tparam SignalType The type of the signal being connected.
-        //! @tparam ContextType The type of the context object (must derive from Object).
-        //! @tparam Callable The type of the callable (lambda, functor, std::function).
-        //! @param aSignal The signal to connect.
-        //! @param aContext The context object for thread affinity and lifetime management.
-        //! @param aSlot The callable to invoke when the signal is emitted.
-        //! @param aType The type of connection (Auto, Direct, Queued).
-        //! @return A handle representing the connection. Thread-safe.
         template <typename SignalType, typename Callable>
         static Connection connectImpl
             (

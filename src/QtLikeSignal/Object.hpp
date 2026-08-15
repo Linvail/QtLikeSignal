@@ -68,9 +68,14 @@ namespace QtLikeSignal
     constexpr bool obj_is_child_of = std::is_base_of<Parent, Child>::value
         && !std::is_same<Parent, Child>::value && is_obj<Parent>;
 
+    //! True when T is void.
     template <typename T> constexpr bool is_void = std::is_same<void, T>::value;
 
     //! Base class for all objects participating in the signal-slot and event system.
+    //!
+    //! Derive from it and declare signals as public Signal<Args...> members, then connect them to
+    //! member-function slots of other Objects with Object::connect(). An Object carries thread
+    //! affinity, which is what lets a queued connection know where to deliver.
     class Object
     {
     public:
@@ -152,7 +157,8 @@ namespace QtLikeSignal
         //! Number of live connections where this object is the receiver. Thread-safe.
         //!
         //! A diagnostic, for asserting that a disconnect really pruned the entry rather than
-        //! leaving an inert slot behind -- see ObjectTest.IncomingPrunedOnDisconnect.
+        //! leaving an inert slot behind.
+        // See ObjectTest.IncomingPrunedOnDisconnect.
         std::size_t incomingConnectionCount() const
         {
             std::lock_guard<std::mutex> lock( mIncomingMutex );
@@ -162,10 +168,10 @@ namespace QtLikeSignal
         //! Gets the weak pointer tracking the lifetime of this object. Thread-safe.
         //!
         //! Callers testing whether the object is still alive should use `expired()`, **not**
-        //! `lock()`. The two are equally safe here and `expired()` is around 68x cheaper: measured
-        //! 0.25 ns against 17.1 ns, because `lock()` is an atomic read-modify-write on the control
-        //! block where `expired()` is a plain load. On the emit path that was about 22% of a direct
-        //! emit, spent on nothing.
+        //! `lock()`. The two are equally safe here and `expired()` is far cheaper: it is a plain
+        //! load where `lock()` is an atomic read-modify-write on the control block.
+        // Measured at 0.25 ns against 17.1 ns, about 68x, which on the emit path was some 22% of a
+        // direct emit spent on nothing.
         //!
         //! Equally safe because the token is an `int`, not the Object. Holding the `shared_ptr`
         //! that `lock()` returns keeps that `int` alive; it does nothing whatsoever to stop the
