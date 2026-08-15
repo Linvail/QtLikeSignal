@@ -696,7 +696,7 @@ namespace QtMimic
 
     //! Unregisters the receiver's timers and returns them for re-registration elsewhere. Returns
     //! the removed registrations, empty if the receiver had none. Thread-safe.
-    std::vector<AbstractEventDispatcher::TimerRegistration>EventDispatcherDefault::
+    std::vector<AbstractEventDispatcher::TimerRegistration> EventDispatcherDefault::
     takeTimersForReceiver
         (
         Object* aReceiver  //!< The receiver whose timers should be taken.
