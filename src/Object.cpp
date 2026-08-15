@@ -188,8 +188,8 @@ namespace QtLikeSignal
         // same thing by walking cd->senders in ~QObject().
         //
         // Swap the handles out and disconnect them with mIncomingMutex released. Holding it across
-        // disconnect() would nest our mutex inside boost's signal mutex, the reverse of the order
-        // ~Cleanup takes them in (boost destroys slots with its signal mutex held), and there is no
+        // disconnect() would nest our mutex inside the Signal's, the reverse of the order
+        // ~Cleanup takes them in (a slot is destroyed with the Signal's mutex held), and there is no
         // reason to invite that inversion when a swap avoids it entirely.
         std::vector<Connection> incoming;
         {
@@ -294,8 +294,6 @@ namespace QtLikeSignal
         )
     {
         Thread* const currentAffinity = thread();
-        Thread* const callerThread = Thread::currentThread();
-
         if( currentAffinity == aThread )
         {
             // Already there; nothing to do and nothing to refuse.
@@ -307,8 +305,9 @@ namespace QtLikeSignal
         // adopted by the calling thread. That exception is what makes the two normal idioms work --
         // moving a freshly constructed object onto a worker, and Thread adopting itself once its run
         // loop starts -- while still rejecting one thread yanking another thread's live object away.
-        const bool adoptingUnownedObject = ( currentAffinity == nullptr && aThread == callerThread )
-        ;
+        Thread* const callerThread = Thread::currentThread();
+        const bool adoptingUnownedObject = ( currentAffinity == nullptr )
+            && ( aThread == callerThread );
         if( !adoptingUnownedObject && currentAffinity != callerThread )
         {
             std::fprintf( stderr,
@@ -343,21 +342,23 @@ namespace QtLikeSignal
 
         migratePostedEvents( oldData, newData );
 
-        if( !timersToMove.empty() && newData == nullptr )
+        if( !timersToMove.empty() )
         {
-            // moveToThread(nullptr) leaves nothing to service the timers, so they are gone rather
-            // than merely paused, and their ids go back to the pool at once instead of waiting for
-            // ~Object(). The object's own record has to be cleared too, or a later killTimer()
-            // would release the same id a second time. Queueing the re-registration below would
-            // achieve nothing here: with no affinity there is no dispatcher to deliver it.
-            for( const auto& timer : timersToMove )
+            if( newData == nullptr )
             {
-                forgetTimerId( timer.mTimerId );
-                TimerIdPool::release( timer.mTimerId );
+                // moveToThread(nullptr) leaves nothing to service the timers, so they are gone
+                // rather than merely paused, and their ids go back to the pool at once instead of
+                // waiting for ~Object(). The object's own record has to be cleared too, or a later
+                // killTimer() would release the same id a second time. Queueing the
+                // re-registration below would achieve nothing: there is no dispatcher to run it.
+                for( const auto& timer : timersToMove )
+                {
+                    forgetTimerId( timer.mTimerId );
+                    TimerIdPool::release( timer.mTimerId );
+                }
+                return true;
             }
-        }
-        else if( !timersToMove.empty() )
-        {
+
             // Re-register on the destination thread rather than from here: registerTimer() must run
             // where the timer will be serviced. Qt solves it the same way, queueing the
             // re-registration with invokeMethod(..., Qt::QueuedConnection) so it lands on the new
@@ -367,13 +368,14 @@ namespace QtLikeSignal
                 this,
                 [this, timersToMove]()
                 {
-                    if( auto tData = threadData() )
+                    if( auto data = threadData() )
                     {
-                        if( auto disp = tData->dispatcher() )
+                        if( auto dispatcher = data->dispatcher() )
                         {
                             for( const auto& timer : timersToMove )
                             {
-                                disp->registerTimer( timer.mTimerId, timer.mIntervalMs, this );
+                                dispatcher->registerTimer( timer.mTimerId, timer.mIntervalMs,
+                                    this );
                             }
                         }
                     }
@@ -426,7 +428,7 @@ namespace QtLikeSignal
         }
 
         auto* event = new DeferredDeleteEvent();
-        if( auto tData = threadData() )
+        if( const std::shared_ptr<ThreadData> tData = threadData() )
         {
             // Queue only if there is a live thread to dispatch it. A destroyed Thread leaves its
             // ThreadData -- and that ThreadData's still-working dispatcher -- behind, so without
@@ -479,6 +481,12 @@ namespace QtLikeSignal
         int aIntervalMs  //!< Interval in milliseconds.
         )
     {
+        if( aIntervalMs < 0 )
+        {
+            std::fprintf( stderr, "Object::startTimer: interval cannot be negative\n" );
+            return -1;
+        }
+
         // Thread-confined, as in Qt. The timer lives in the dispatcher belonging to this object's
         // thread, and only that thread's event loop can ever deliver the resulting timerEvent().
         // Registering from elsewhere would either race that dispatcher's lifetime or quietly install
@@ -491,32 +499,39 @@ namespace QtLikeSignal
             return -1;
         }
 
-        if( auto tData = threadData() )
+        const std::shared_ptr<ThreadData> data = threadData();
+        if( !data )
         {
-            if( auto disp = tData->dispatcher() )
-            {
-                // Only consume an id once the timer is actually going to be registered.
-                const int timerId = TimerIdPool::allocate();
-                if( timerId < 0 )
-                {
-                    std::fprintf( stderr,
-                        "Object::startTimer: no timer ids left\n" );
-                    return -1;
-                }
-                disp->registerTimer( timerId, aIntervalMs, this );
-                {
-                    // Recorded so ~Object() can hand the id back even if the timer is never killed.
-                    std::lock_guard<std::mutex> lock( mRunningTimerIdsMutex );
-                    mRunningTimerIds.push_back( timerId );
-                }
-                return timerId;
-            }
+            std::fprintf( stderr,
+                "Object::startTimer: object has no thread, so the timer cannot be started\n" );
+            return -1;
         }
 
-        std::fprintf( stderr,
-            "Object::startTimer: this thread has no event dispatcher, so the timer cannot "
-            "be started\n" );
-        return -1;
+        auto dispatcher = data->dispatcher();
+        if( !dispatcher )
+        {
+            std::fprintf( stderr,
+                "Object::startTimer: this thread has no event dispatcher, so the timer cannot "
+                "be started\n" );
+            return -1;
+        }
+
+        // Consumed only once the timer is certain to be registered, so no failure path above has
+        // an id to give back.
+        const int timerId = TimerIdPool::allocate();
+        if( timerId < 0 )
+        {
+            std::fprintf( stderr, "Object::startTimer: no timer ids left\n" );
+            return -1;
+        }
+
+        dispatcher->registerTimer( timerId, aIntervalMs, this );
+        {
+            // Recorded so ~Object() can hand the id back even if the timer is never killed.
+            std::lock_guard<std::mutex> lock( mRunningTimerIdsMutex );
+            mRunningTimerIds.push_back( timerId );
+        }
+        return timerId;
     }
 
     void Object::killTimer
@@ -534,11 +549,11 @@ namespace QtLikeSignal
 
         const bool wasOurs = forgetTimerId( aTimerId );
 
-        if( auto tData = threadData() )
+        if( const std::shared_ptr<ThreadData> data = threadData() )
         {
-            if( auto disp = tData->dispatcher() )
+            if( auto dispatcher = data->dispatcher() )
             {
-                disp->unregisterTimer( aTimerId );
+                dispatcher->unregisterTimer( aTimerId );
             }
         }
 
@@ -811,19 +826,12 @@ namespace QtLikeSignal
             return false;
         }
 
-        Thread* targetThread = aTarget->thread();
         ConnectionType activeType = aType;
         if( activeType == ConnectionType::Auto )
         {
-            Thread* currentThread = Thread::currentThread();
-            if( currentThread == targetThread )
-            {
-                activeType = ConnectionType::Direct;
-            }
-            else
-            {
-                activeType = ConnectionType::Queued;
-            }
+            activeType = ( Thread::currentThread() == aTarget->thread() )
+                         ? ConnectionType::Direct
+                         : ConnectionType::Queued;
         }
 
         if( activeType == ConnectionType::Queued )
@@ -831,18 +839,7 @@ namespace QtLikeSignal
             // Moved, not copied: aSlot is a by-value parameter and is dead after this line, and
             // MetaCallEvent's constructor also takes by value and moves, so copying here bought a
             // second heap allocation on every queued emit for nothing.
-            auto* event = new MetaCallEvent( std::move( aSlot ) );
-            if( auto tData = aTarget->threadData() )
-            {
-                if( auto disp = tData->dispatcher() )
-                {
-                    aTarget->mMayHaveQueuedWork.store( true, std::memory_order_release );
-                    disp->postEvent( aTarget, static_cast<Event*>( event ) );
-                    return true;
-                }
-            }
-            delete event;
-            return false;
+            return dispatchMetaCallTo( aTarget->threadData(), aTarget, std::move( aSlot ) );
         }
 
         aSlot();
