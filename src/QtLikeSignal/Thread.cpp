@@ -46,9 +46,7 @@ namespace QtLikeSignal
 
         // Drain deferred deletes, then release the dispatcher -- BEFORE clearing the back-pointer
         // below, so there is never a moment where thread() reports nullptr while a working
-        // dispatcher is still reachable through this ThreadData. QtMimic states the same invariant
-        // for its mailbox: "Done BEFORE clearing the back-pointer, so the invariant 'thread() ==
-        // nullptr implies not accepting' holds."
+        // dispatcher is still reachable through this ThreadData.
         //
         // threadBody() already does both for a worker that ran a loop, so this is normally a no-op
         // there. It exists for the case that had no equivalent: an *adopted* thread, whose Thread is
@@ -64,18 +62,20 @@ namespace QtLikeSignal
         }
         mData->setDispatcher( nullptr );
 
-        // An adopted Thread is destroyed by the thread_local that owns it, as the native thread
-        // exits; nothing else clears the registration for it the way threadBody() does for a worker.
-        // Leaving it set would hand out a pointer to freed memory on the way out.
+        // An adopted Thread is destroyed by the thread_local that owns it as the native thread
+        // exits, and a Thread that ran exec() is destroyed by whoever created it; neither path
+        // goes through threadBody(), which is what unregisters a started worker. Leaving the
+        // registration set would hand out a pointer to freed memory -- currentThread() would
+        // return it, and the first caller to follow it reads destroyed storage.
         if( sCurrentThread == this )
         {
             sCurrentThread = nullptr;
         }
 
-        // Clear the back-pointer LAST, once the OS thread is guaranteed stopped. Anything still
-        // holding this ThreadData (an Object living here, an Affinity captured by a connect() made
-        // to one) now sees thread() == nullptr instead of a dangling Thread*, the same thing Qt does
-        // in ~QThread() with `d->data->thread.storeRelease(nullptr)`.
+        // Clear the back-pointer LAST, once the loop is guaranteed stopped and joined. Anything
+        // still holding this ThreadData (an Object living on this thread, a queued connection that
+        // captured it) now sees thread() == nullptr instead of a dangling pointer -- the same thing
+        // Qt does in ~QThread() with `d->data->thread.storeRelease(nullptr)`.
         mData->setThread( nullptr );
     }
 
@@ -115,19 +115,22 @@ namespace QtLikeSignal
         // reap.
         wait();
 
-        // Held across thread creation so setPriority() can never observe the running flag set
-        // while the handle is still the previous run's (or absent). A run body that finishes before
-        // this scope ends simply waits for the lock at its tail.
+        // Held across thread creation so a UNIX priority fix-up inside run() can never run
+        // before the priority meant for THIS run has been decided, and so setPriority()/
+        // priority() can never observe a handle published for a run whose priority is still
+        // being set up.
         std::lock_guard<std::mutex> startLock( mPriorityMutex );
 
+        // Set before the thread exists rather than from inside it, so isRunning() can never report
+        // false for a thread that has already begun executing. Qt publishes Running from start()
+        // for the same reason.
         mData->setThreadRunning( true );
         mHasFinished.store( false );
         mFinishing.store( false );
         mExiting.store( false );
         mPriorityNeedsReset = false;
-        // Each run starts from what start() was given, never from what the previous run ended at: a
-        // priority set on an earlier run said nothing about this one, and reporting the stale value
-        // would be a lie about a thread that never got it.
+        // Each run starts from what start() was given, never from what the previous run ended
+        // at: a priority set on an earlier run said nothing about this one.
         mPriority = aPriority;
 
         startPlatformSpecific();
@@ -147,12 +150,12 @@ namespace QtLikeSignal
         bindAffinityToSelf();
 
         {
-            // Blocks here until start() releases the lock, which is what guarantees the native
-            // handle is published before anything below can use it. There is normally no
-            // priority work left to do -- Windows set it on the suspended thread, UNIX passed it
-            // to pthread_create() -- so this only bites when the UNIX scheduling attributes were
-            // refused, and even then it still lands before started() is emitted and before run()
-            // is entered.
+            // Blocks here until start() releases mPriorityMutex, which is what guarantees the
+            // native handle/id above and mPriority are published before anything below relies on
+            // them. Normally nothing is left to do here -- Windows set the priority on the
+            // suspended thread, UNIX passed it to pthread_create() -- so this only bites when the
+            // UNIX scheduling attributes were refused, and even then it lands before mStarted is
+            // emitted.
             std::lock_guard<std::mutex> priorityLock( mPriorityMutex );
             if( mPriorityNeedsReset )
             {
@@ -227,6 +230,9 @@ namespace QtLikeSignal
             std::lock_guard<std::mutex> lock( mWaitMutex );
             mWaitCv.notify_all();
         }
+
+        // Safe after the release above: this is a thread_local, not a member of the Thread the
+        // waiter may already have destroyed.
         sCurrentThread = nullptr;
     }
 
@@ -529,13 +535,11 @@ namespace QtLikeSignal
         // An adopted thread is running -- it is executing this very call. Qt states the same and
         // for the same reason, setting threadState = Running in the QThread constructor used for
         // adoption with the comment "thread should be running and not finished for the lifetime of
-        // the application". Without this, Thread::currentThread()->isRunning() answered false on
-        // the main thread, which is both wrong and the opposite of Qt.
+        // the application".
         //
-        // It also makes start() on an adopted Thread the no-op it should be: the early-out there
-        // tests this flag, and previously an adopted Thread would have gone on to create a second
-        // OS thread underneath itself. setPriority() still refuses, because it additionally
-        // requires a native handle, which an adopted thread has never had.
+        // It also makes start() on an adopted Thread the no-op it should be. setPriority() still
+        // refuses, because it additionally requires a native handle, which an adopted thread has
+        // never had.
         mData->setThreadRunning( true );
 
         bindAffinityToSelf();
