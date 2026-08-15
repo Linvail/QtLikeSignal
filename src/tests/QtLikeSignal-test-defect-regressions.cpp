@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 // Regression tests for the defects found in the code review of technology/G* (see CHANGES.md /
 // the accompanying patch). Kept separate from test_gobject.cpp / test_gthread.cpp / test_gtimer.cpp
 // since these specifically target crash/UAF/leak/race scenarios rather than day-to-day API

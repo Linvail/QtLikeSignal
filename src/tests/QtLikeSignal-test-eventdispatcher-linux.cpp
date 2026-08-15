@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! Tests for the Linux event dispatcher's platform-event-source integration -- mission stage 5,

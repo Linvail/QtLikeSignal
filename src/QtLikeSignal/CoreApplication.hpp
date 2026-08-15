@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 #ifndef QT_LIKE_SIGNAL_COREAPPLICATION_HPP
 #define QT_LIKE_SIGNAL_COREAPPLICATION_HPP
 

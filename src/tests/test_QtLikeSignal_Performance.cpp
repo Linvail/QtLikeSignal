@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! Dispatch-overhead benchmarks for QtLikeSignal, measured against QtMimic and, where Qt 6 is

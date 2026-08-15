@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 #include "QtLikeSignal/Timer.hpp"
 
 #include <cstdio>

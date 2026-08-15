@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 #include <gtest/gtest.h>
 
 //! Entry point for running GoogleTest unit test suite. Returns 0 if all tests pass, non-zero

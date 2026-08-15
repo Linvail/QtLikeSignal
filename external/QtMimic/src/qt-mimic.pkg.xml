@@ -4,8 +4,8 @@
 
     <headers path="." scope="public" />
 
-    <source path="CoreApplication.cpp" />
-    <source path="Object.cpp" />
-    <source path="Thread.cpp" />
-    <source path="ThreadData.cpp" />
+    <source path="QtMimic/CoreApplication.cpp" />
+    <source path="QtMimic/Object.cpp" />
+    <source path="QtMimic/Thread.cpp" />
+    <source path="QtMimic/ThreadData.cpp" />
 </manifest>
