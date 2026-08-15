@@ -512,6 +512,7 @@ namespace QtMimic
             {
                 return;
             }
+
             for( auto& ep : *aBatch )
             {
                 if( ep.mEvent && aMatches( ep ) )
@@ -540,6 +541,7 @@ namespace QtMimic
             {
                 return;
             }
+
             for( auto& ep : *aBatch )
             {
                 if( ep.mEvent && ep.mReceiver == aReceiver )
@@ -692,7 +694,6 @@ namespace QtMimic
 
         return taken;
     }
-
 
     //! Unregisters the receiver's timers and returns them for re-registration elsewhere. Returns
     //! the removed registrations, empty if the receiver had none. Thread-safe.

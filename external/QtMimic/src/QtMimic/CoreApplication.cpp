@@ -20,7 +20,6 @@
 
 namespace QtMimic
 {
-
     std::atomic<CoreApplication*> CoreApplication::sInstance { nullptr };
 
     //! Constructs the application and adopts the calling thread as the main thread.
@@ -38,7 +37,6 @@ namespace QtMimic
         )
         : Object()
     {
-
         mArgs.reserve( aArgc > 0 ? static_cast<size_t>( aArgc ) : 0 );
         for( int i = 0; i < aArgc; ++i )
         {

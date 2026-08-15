@@ -91,7 +91,6 @@ namespace QtMimic
     //! The one exception is a UNIX kernel that refuses the scheduling attributes outright, where
     //! the thread is created inheriting the caller's priority and applies the requested one to
     //! itself as its first action -- still before mStarted is emitted. Qt falls back the same way.
-
     void Thread::start
         (
         Priority aPriority  //!< Priority for the new thread. InheritPriority, the default, keeps the
@@ -383,7 +382,6 @@ namespace QtMimic
     //! priority range of exactly one value, so every priority maps onto the same number and the
     //! call is accepted but has no effect; real prioritisation there needs a realtime policy and
     //! the privileges to select it. Qt behaves the same way. Windows applies all seven levels.
-
     void Thread::setPriority
         (
         Priority aPriority  //!< The priority to apply. InheritPriority is not accepted; rejected with a warning.

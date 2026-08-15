@@ -1,10 +1,3 @@
-#ifndef QT_MIMIC_GLOBAL_HPP
-#define QT_MIMIC_GLOBAL_HPP
-
-#include "QtMimic/Connection.hpp"
-
-#include <type_traits>
-
 //! @file
 //!
 //! Type trait helpers and template utilities: the Overload<> family for resolving overloaded
@@ -35,6 +28,13 @@
 //! it invoked. Where that matters it is documented at the function.
 //!
 //! Copyright 2026 by Garmin Ltd. or its subsidiaries.
+
+#ifndef QT_MIMIC_GLOBAL_HPP
+#define QT_MIMIC_GLOBAL_HPP
+
+#include "QtMimic/Connection.hpp"
+
+#include <type_traits>
 
 namespace QtMimic
 {

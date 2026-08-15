@@ -10,14 +10,14 @@
 
 #include <windows.h>
 // _beginthreadex() rather than CreateThread(): it is the same OS thread either way, but it
-// also initialises and, on return, releases the CRT's per-thread state. Using it
-// unconditionally is correct for both static and dynamic CRT flavours, and its signature
-// matches the entry point exactly, so no function-pointer cast is needed.
+// also initialises and, on return, releases the CRT's per-thread state. Qt reaches for it
+// only in static-CRT builds and uses CreateThread elsewhere; using it unconditionally costs
+// nothing, is correct for both CRT flavours, and its signature matches the entry point
+// exactly, so no function-pointer cast is needed.
 #include <process.h>
 
 namespace QtMimic
 {
-
     //! Creates the OS thread, already at mPriority when it executes its first instruction.
     //!
     //! Created suspended, given its priority, then resumed. A new thread otherwise starts at
@@ -35,6 +35,7 @@ namespace QtMimic
             mData->setThreadRunning( false );
             return;
         }
+
         mHandle = reinterpret_cast<void*>( handle );
 
         // Unconditional, InheritPriority included: the OS hands out NormalPriority regardless of

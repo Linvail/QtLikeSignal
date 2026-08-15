@@ -10,7 +10,6 @@
 
 namespace QtMimic
 {
-
     //! Constructs an inactive timer living in @p aThread, or in the calling thread if none is
     //! given. See Object's constructor.
     Timer::Timer

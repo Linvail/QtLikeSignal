@@ -152,10 +152,18 @@ namespace QtLikeSignal
         //! Same reasoning as Thread's mStarted/mFinished.
         Signal<> mTimeout;
 
-        int mInterval { 0 };        //!< The configured interval, in milliseconds.
-        int mTimerId { -1 };        //!< The underlying Object timer id, or -1 if inactive.
-        bool mSingleShot { false }; //!< True if the timer stops itself after firing once.
-        bool mActive { false };     //!< True while the timer is running.
+        // Deliberately unsynchronised, matching QTimer, which has no locking of any kind. Every
+        // member here is only ever touched from the timer's own thread: start()/stop() are
+        // thread-confined because they go through Object::startTimer()/killTimer(), and timerEvent()
+        // is delivered by that same thread's event loop. Adding a mutex would only paper over misuse
+        // that the thread-confinement rules already forbid.
+        int mInterval { 0 };         //!< The configured interval, in milliseconds.
+
+        int mTimerId { -1 };         //!< The underlying Object timer id, or -1 if inactive.
+
+        bool mSingleShot { false };  //!< True if the timer stops itself after firing once.
+
+        bool mActive { false };      //!< True while the timer is running.
     };
 
     //! Runs a functor once on the calling thread after a delay.
@@ -345,6 +353,7 @@ namespace QtLikeSignal
         {
             return;
         }
+
         auto bound = [aReceiver, aMethod]()
             {
                 ( const_cast<Receiver*>( aReceiver )->*aMethod )();

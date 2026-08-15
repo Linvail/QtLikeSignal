@@ -70,13 +70,11 @@ namespace QtMimic
     //! True when T is void.
     template <typename T> constexpr bool is_void = std::is_same<void, T>::value;
 
-    //----------------------------------------------------------------
     //! Base class for all objects participating in the signal-slot and event system.
     //!
     //! Derive from it and declare signals as public Signal<Args...> members, then connect them to
     //! member-function slots of other Objects with Object::connect(). An Object carries thread
     //! affinity, which is what lets a queued connection know where to deliver.
-    //----------------------------------------------------------------
     class Object
     {
     public:

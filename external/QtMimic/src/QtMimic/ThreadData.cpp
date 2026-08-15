@@ -20,6 +20,7 @@ namespace QtMimic
             delete parked.mEvent;
         }
     }
+
     //! Gets the Thread this data describes, or nullptr once that Thread has been destroyed.
     //! Safe to call at any time: the ThreadData itself is kept alive by whoever holds it.
     Thread* ThreadData::thread() const
@@ -67,7 +68,7 @@ namespace QtMimic
     //! Installs or clears this thread's dispatcher, and hands it anything parked. Thread-safe.
     void ThreadData::setDispatcher
         (
-        std::shared_ptr<AbstractEventDispatcher> aDispatcher  //!< Dispatcher to install; nullptr clears it.
+        std::shared_ptr<AbstractEventDispatcher> aDispatcher    //!< Dispatcher to install; nullptr clears it.
         )
     {
         std::vector<ParkedEvent> parked;
@@ -91,7 +92,6 @@ namespace QtMimic
             installed->postEvent( event.mReceiver, event.mEvent );
         }
     }
-
 
     //! Hands back the dispatcher to post to, or takes ownership of @p aEvent until one exists.
     std::shared_ptr<AbstractEventDispatcher> ThreadData::dispatcherOrPark

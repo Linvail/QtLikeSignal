@@ -1,13 +1,3 @@
-// SPDX-FileCopyrightText: 2026 Evan
-// SPDX-License-Identifier: MIT
-
-#ifndef QT_LIKE_SIGNAL_GLOBAL_HPP
-#define QT_LIKE_SIGNAL_GLOBAL_HPP
-
-#include "QtLikeSignal/Connection.hpp"
-
-#include <type_traits>
-
 //! @file
 //!
 //! Type trait helpers and template utilities: the Overload<> family for resolving overloaded
@@ -39,6 +29,16 @@
 //!
 //! Neither claim says anything about *reentrancy* -- calling back into the same object from a slot
 //! it invoked. Where that matters it is documented at the function.
+//!
+//! SPDX-FileCopyrightText: 2026 Evan
+//! SPDX-License-Identifier: MIT
+
+#ifndef QT_LIKE_SIGNAL_GLOBAL_HPP
+#define QT_LIKE_SIGNAL_GLOBAL_HPP
+
+#include "QtLikeSignal/Connection.hpp"
+
+#include <type_traits>
 
 namespace QtLikeSignal
 {

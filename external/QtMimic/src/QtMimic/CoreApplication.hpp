@@ -24,7 +24,6 @@ namespace QtMimic
     class AbstractEventDispatcher;
     class Event;
 
-
     //! Owns the main thread's event loop; the base class a real application derives from.
     //!
     //! Construct one instance, on the thread that will run exec(). Constructing it *adopts* that
@@ -106,8 +105,6 @@ namespace QtMimic
             std::function<void()> aTask
             );
 
-
-        // CoreApplication must remain bound to the main thread.
         //! The application is bound to the thread it adopted and cannot be re-homed.
         //!
         //! Deleted rather than merely documented: moving it would leave exec() running a loop on a

@@ -12,9 +12,10 @@
 #include <sched.h>
 #include <unistd.h>
 
-// Priority scheduling is an optional part of POSIX. Where it is absent there is no portable way
-// to ask for a priority at all, so setPriority() records the value and does nothing else, which
-// is what Qt does behind its own QT_HAS_THREAD_PRIORITY_SCHEDULING guard.
+
+// Priority scheduling is an optional part of POSIX. Where it is absent there is no portable
+// way to ask for a priority at all, so setPriority() records the value and does nothing else,
+// which is what Qt does behind its own QT_HAS_THREAD_PRIORITY_SCHEDULING guard.
 #if defined( _POSIX_THREAD_PRIORITY_SCHEDULING )
     #define QT_MIMIC_HAS_THREAD_PRIORITY_SCHEDULING
 #endif
@@ -26,6 +27,7 @@ namespace QtMimic
 
         namespace
         {
+
             //! Maps a Thread priority onto a scheduler policy and priority number.
             //!
             //! This is Qt's mapping from qthread_unix.cpp, including its deliberately coarse scaling: the
@@ -154,7 +156,7 @@ namespace QtMimic
         }
 
         mJoinable = true;
-    }
+    }  // end Thread::startPlatformSpecific()
 
     //! Entry point handed to pthread_create(). Returns nullptr always; nothing is passed back
     //! through pthread_join().

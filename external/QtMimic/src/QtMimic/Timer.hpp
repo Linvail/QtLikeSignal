@@ -19,8 +19,6 @@
 
 namespace QtMimic
 {
-
-    //----------------------------------------------------------------
     //! High-level timer class providing repetitive and single-shot timers.
     //!
     //! **No part of this class is thread-safe**, exactly as with Qt's QTimer. A Timer must be used
@@ -36,7 +34,6 @@ namespace QtMimic
     //!   QtMimic::Object::connect( timer.getTimeout(), &receiver, &Receiver::onTick );
     //!   timer.start( 100 );   // every 100 ms, on the thread the timer lives in
     //! @endcode
-    //----------------------------------------------------------------
     class Timer : public Object
     {
     public:
@@ -341,9 +338,9 @@ namespace QtMimic
     //! Call a member function once on the receiver's thread after a delay.
     template <typename Receiver, typename MemberFunc> void Timer::singleShot
         (
-        int aMsec,                  //!< Delay in milliseconds.
-        const Receiver* aReceiver,  //!< Object to call the member function on.
-        MemberFunc aMethod          //!< Member function taking no arguments.
+        int aMsec,                    //!< Delay in milliseconds.
+        const Receiver* aReceiver,    //!< Object to call the member function on.
+        MemberFunc aMethod            //!< Member function taking no arguments.
         )
     {
         if( !aReceiver )
