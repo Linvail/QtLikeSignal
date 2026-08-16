@@ -1,4 +1,5 @@
 import os
+import shutil
 
 #: Prefixes searched for an X11 development installation, in order.
 #:
@@ -82,15 +83,123 @@ def _build_x11_demo(bld):
     bld(target="QtLikeSignal-Demo-X11", **kw)
 
 
+#: Prefixes searched for the wayland-protocols XML, in order.
+#:
+#: The xdg-shell definition lives there rather than in libwayland: the core protocol has no concept
+#: of a window, and xdg-shell is what gives a surface one.
+WAYLAND_PROTOCOL_PREFIXES = ["/usr/share/wayland-protocols", "/usr/local/share/wayland-protocols"]
+
+
+def _find_wayland(bld):
+    """
+    Locate everything the Wayland demo needs: the client headers, wayland-scanner, and the
+    xdg-shell protocol XML.
+
+    Returns a dict, or None when any piece is missing. All three are needed together -- the XML is
+    useless without the scanner that turns it into code, and the generated code is useless without
+    the client library it calls into -- so this reports one answer rather than three.
+    """
+    if bld.env.DEST_OS != "linux":
+        return None
+
+    if not os.path.exists("/usr/include/wayland-client.h"):
+        return None
+
+    scanner = shutil.which("wayland-scanner")
+    if not scanner:
+        return None
+
+    for prefix in WAYLAND_PROTOCOL_PREFIXES:
+        xml = os.path.join(prefix, "stable", "xdg-shell", "xdg-shell.xml")
+        if os.path.exists(xml):
+            return {"scanner": scanner, "xdg_shell_xml": xml}
+
+    return None
+
+
+def _generate_xdg_shell(bld, wayland):
+    """
+    Run wayland-scanner over xdg-shell.xml, producing the client header and the interface tables.
+
+    Run here, while the build script is being evaluated, rather than as a task. A generated *header*
+    cannot be produced by a task in the same build group as the code that includes it: waf discovers
+    the include by scanning the source, the scan happens before any task runs, and a header that
+    does not exist yet is simply not found -- which is exactly how this failed the first time it was
+    built from clean. The documented alternative is a build-group boundary, but a group here would
+    also push every target declared after this one, QtMimic's test binary included, into the later
+    group and serialise them behind this demo for no reason.
+
+    Doing it directly costs a few milliseconds and side-steps none of the dependency tracking that
+    matters: waf signs the generated files by content, so an unchanged regeneration rebuilds
+    nothing, and a wayland-protocols upgrade that changes them rebuilds everything that reads them.
+
+    Returns the node for the generated C file, or None if the scanner failed.
+    """
+    output = bld.path.get_bld().make_node("wayland")
+    output.mkdir()
+
+    header = output.make_node("xdg-shell-client-protocol.h")
+    code = output.make_node("xdg-shell-protocol.c")
+
+    for mode, node in (("client-header", header), ("private-code", code)):
+        command = [wayland["scanner"], mode, wayland["xdg_shell_xml"], node.abspath()]
+        if bld.exec_command(command) != 0:
+            bld.msg("Wayland demo", "skipped (wayland-scanner %s failed)" % mode, color="YELLOW")
+            return None
+
+    return code
+
+
+def _build_wayland_demo(bld):
+    """
+    Build the Wayland demo program, if libwayland, wayland-scanner and wayland-protocols are all
+    installed.
+
+    Skipped with a message rather than failing the build when they are not, for the same reason the
+    X11 demo is: the library itself does not depend on Wayland at all.
+
+    The xdg-shell glue is generated here rather than checked in. wayland-scanner turns one XML
+    description into a header of inline wrappers and a C file of interface tables, and both are
+    strictly derived from the installed wayland-protocols -- committing a copy would pin the
+    protocol version to whoever ran the scanner last.
+    """
+    wayland = _find_wayland(bld)
+    if not wayland:
+        bld.msg(
+            "Wayland demo",
+            "skipped (needs libwayland-dev, wayland-scanner and wayland-protocols)",
+            color="YELLOW",
+        )
+        return
+
+    code = _generate_xdg_shell(bld, wayland)
+    if code is None:
+        return
+
+    kw = {}
+    # "c" as well as "cxx": the generated interface tables are C, and they have to stay C. They
+    # reference wl_surface_interface and friends, which libwayland-client exports with C linkage,
+    # so compiling that file as C++ would mangle the references and fail to link.
+    kw["features"] = ["c", "cxx", "cxxprogram", "debug-info"]
+    kw["source"] = bld.path.ant_glob("wayland/*.cpp") + [code]
+    kw["includes"] = ["wayland", "common"]
+    kw["use"] = ["QtLikeSignal"]
+    kw["lib"] = ["wayland-client"]
+
+    bld(target="QtLikeSignal-Demo-Wayland", **kw)
+
+
 def build(bld):
     """
-    Build whichever demo the target platform has a window system for.
+    Build the demos the target platform has a window system for.
 
-    One demo per window system, both over the same QtLikeSignal::CoreApplication: the Win32 one
-    shows the dispatcher pumping the OS queue itself, the X11 one shows an application handing its
-    connection to the dispatcher's poll() set.
+    One demo per window system, all three over the same QtLikeSignal::CoreApplication. The Win32 one
+    shows the dispatcher pumping the OS queue itself; the X11 and Wayland ones show an application
+    handing its connection to the dispatcher's poll() set, which is the same seam answered twice by
+    two protocols that read the socket very differently.
     """
     if bld.env.DEST_OS == "win32":
         _build_windows_demo(bld)
     elif bld.env.DEST_OS == "linux":
         _build_x11_demo(bld)
+        _build_wayland_demo(bld)
