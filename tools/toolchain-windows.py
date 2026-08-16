@@ -1,6 +1,9 @@
 from waflib.Configure import conf
 from waflib import Logs
+from waflib.Task import Task
+from waflib.TaskGen import feature, after_method
 import os
+import shutil
 
 
 @conf
@@ -141,3 +144,53 @@ def add_AddressSanitizer_on_Windows(bld):
                 )
 
         bld.install_files("${PREFIX}/bin", asan_nodes)
+        # Also remembered for the build directory itself, see copy_asan_runtime_beside_programs().
+        bld.env.ASAN_RUNTIME_DLLS = [node.abspath() for node in asan_nodes]
+
+
+class copy_asan_runtime(Task):
+    """
+    Copy one AddressSanitizer runtime DLL into a program's own directory.
+    """
+
+    color = "CYAN"
+
+    def run(self):
+        shutil.copy2(self.inputs[0].abspath(), self.outputs[0].abspath())
+
+
+@feature("cxxprogram", "cprogram")
+@after_method("apply_link")
+def copy_asan_runtime_beside_programs(self):
+    """
+    Put the AddressSanitizer runtime DLL next to every program that is built with ASan.
+
+    Windows resolves a DLL from the executable's own directory before it consults PATH, and nothing
+    puts the MSVC bin directory on PATH. Without this copy an ASan build links cleanly and then
+    every binary it produced dies at startup with 0xC0000135 (STATUS_DLL_NOT_FOUND) and no message
+    -- the test suite looks like it crashed rather than like it could not start. ASan is on by
+    default on Windows, so this is the normal path, not a corner of it.
+    """
+    dll_paths = getattr(self.bld.env, "ASAN_RUNTIME_DLLS", [])
+    if not dll_paths or not getattr(self, "link_task", None):
+        return
+
+    # Two programs can share one output directory (src/tests/ builds both the correctness suite and
+    # the benchmarks), and two tasks writing one output is an error in waf rather than a duplicate
+    # copy. Task generators are processed one at a time, so a plain set is enough to keep the first.
+    already_copied = getattr(self.bld, "asan_runtime_copies", None)
+    if already_copied is None:
+        already_copied = self.bld.asan_runtime_copies = set()
+
+    program_dir = self.link_task.outputs[0].parent
+    for dll_path in dll_paths:
+        source = self.bld.root.find_node(dll_path)
+        if source is None:
+            continue
+
+        target = program_dir.make_node(os.path.basename(dll_path))
+        if target.abspath() in already_copied:
+            continue
+        already_copied.add(target.abspath())
+
+        self.create_task("copy_asan_runtime", source, target)

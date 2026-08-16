@@ -14,7 +14,7 @@ How each item was confirmed, and the test baseline, are at the end under
 |----|--------|------|----------|----------------------|
 | R9 | **Fixed** | `CoreApplication`'s singleton is unguarded | Low → **Med** | The filed half is accepted; the half nobody filed was a data race on `sInstance`, now atomic |
 | R15 | **Fixed** | "Thread-safe" doc claims not audited against Qt | Medium | Two false claims corrected, and the term is now defined once in `Global.h` |
-| R22 | **Queue** | Windows OS-message dispatch is untested | Medium | Blocked: needs a real Windows message loop, which WSL cannot exercise |
+| R22 | **Fixed** | Windows OS-message dispatch is untested | Medium → **Low** | Closed on Windows, 2026-08-16. Six regression tests; the risk was a third the size it was filed at, and one comment was wrong |
 | R25 | **By Design** | `Object::thread()` costs a mutex (= P2) | Low | Accepted — the mutex buys a lifetime guarantee Qt does not offer |
 | R28 | **Fixed** | An object destroyed during a dispatch pass still receives the rest of that batch | **High** | Probe — two segfaults, one of them a double free. Three regression tests |
 | R29 | **Withdrawn** | ~~`connectImpl()` publishes the `Connection` handle outside `mIncomingMutex`~~ | — | **Not a defect.** TSan probe, 200 000 racing connects against the pre-"fix" code: silent |
@@ -27,8 +27,8 @@ accepted and is not considered a bug. *Withdrawn* — investigated, and there wa
 *Queue* — not started. Nothing is In progress.
 
 Everything filed in this pass is closed, and so are the two carried items that could be closed here.
-**No confirmed defect is open.** Two items remain: **R22**, which cannot be tested on this machine,
-and **R25**, a deliberate trade.
+**No confirmed defect is open.** One item remains: **R25**, a deliberate trade. R22 was closed on
+2026-08-16, on Windows; see its entry for what that turned out to involve.
 
 ---
 
@@ -82,15 +82,159 @@ thread may still be running afterwards.
 One process lesson worth keeping: both false claims lived in a `.cpp` while the truth lived in the
 `.h`. They were never read side by side. **A thread-safety claim belongs on the declaration.**
 
-## R22 — Windows OS-message dispatch is untested *(Queue)*
+## R22 — Windows OS-message dispatch is untested *(Fixed)*
 
-Unchanged, and deliberately so. Nothing in the suite creates a real window or posts a real `WM_`
-message, so `TranslateMessage`/`DispatchMessage` and the `WM_QUIT` branch of `EventDispatcherWin32`
-have still never executed. Mission stage 5's "I want to receive OS/platform's messages" is proven on
-Linux and only inferred on Windows.
+**Closed 2026-08-16, on Windows 11 with MSVC 2022.** The blocker was never the code; it was that the
+machine this was written on could only reach Windows through WSL. Run natively, the whole item
+changes shape.
 
-**Blocked rather than deferred.** Closing it needs a real Windows message loop, which this
-development machine cannot provide from WSL. It waits for a Windows run.
+### It was a third the size it was filed at
+
+Filed as "Windows OS-message dispatch is untested". That was too broad. `CoreApplication` and
+`Thread` construct `EventDispatcherWin32` unconditionally on Windows, so the first native run of the
+existing suite — **178 tests, 177 passed, 1 skipped, 0 failures**, under AddressSanitizer — had
+already executed the constructor, the destructor, the `MsgWaitForMultipleObjectsEx` wait, the
+`wakeWaiter()` post, the `mWakePending` collapse and the `PeekMessage` drain, several hundred times
+over. None of that was untested. It was unobserved, which is not the same thing.
+
+What had genuinely never executed was the part of `processPlatformEvents()` that handles a message
+the dispatcher did not send itself:
+
+- `TranslateMessage` / `DispatchMessageA`
+- the `WM_QUIT` branch
+- the three `mMessageWindow == nullptr` fallbacks and the failed-`PostMessage` rollback
+
+The first two are now covered. The third is not, and is recorded below rather than quietly counted.
+
+### Three things stood between the repository and a green Windows run
+
+None of them was R22, and all three had to go first, because "the suite passes on Windows" is the
+precondition for everything else here.
+
+1. **`asm volatile` in `test_QtLikeSignal_Regression.cpp`.** GCC syntax, which MSVC will not parse,
+   and the one thing in the tree that stopped a Windows build. It is an optimiser barrier around a
+   construct/destroy benchmark; `PerfHarness::keep()` already existed with an `_MSC_VER` arm doing
+   exactly that job, so the line now goes through it instead of holding a second, less portable copy
+   of the same idea.
+2. **`QtMimic-test` never linked `user32`.** `src/tests/wscript` had always linked it;
+   `external/QtMimic/wscript` had not, so the one Windows target that was not part of the original
+   library was also the one that could not link. Nine unresolved externals, all of them the Win32
+   calls in `EventDispatcherWin32.cpp`.
+3. **Every Windows binary died at startup with `0xC0000135`.** ASan is on by default on Windows
+   here, and Windows resolves a DLL from the executable's own directory before it consults `PATH`,
+   which nothing puts the MSVC bin directory on. The suite looked like it crashed when in fact it
+   could not start. `add_AddressSanitizer_on_Windows()` now copies `clang_rt.asan_dynamic-*.dll`
+   next to every program it builds, so an ASan build runs as built.
+
+A fourth was observed once and did not survive scrutiny: a parallel build failed with
+`C1041: cannot open program database vc140.pdb` on two files. `/FS` is already set for both modes in
+`tools/toolchain-windows.py`, and the failure has not reproduced across two full clean parallel
+rebuilds since. **Not fixed, because there is nothing confirmed to fix** — inventing a second PDB
+mechanism for a failure that reproduces zero times out of two is the mistake R29 is in this document
+to remember. Recorded here so that if it returns, it returns to a note rather than to a surprise.
+
+### The defect it found: a comment that described the wrong pass
+
+Probed, not inferred. `processPlatformEvents()` is called from
+[EventDispatcherDefault.cpp:187](src/QtLikeSignal/EventDispatcherDefault.cpp#L187) — *after* both of
+`processEvents()`'s `mInterrupt.exchange( false )` checks ([:41](src/QtLikeSignal/EventDispatcherDefault.cpp#L41),
+[:139](src/QtLikeSignal/EventDispatcherDefault.cpp#L139)) and after the event batch has been taken.
+So the `interrupt()` raised by the `WM_QUIT` branch cannot affect the pass that saw the message. The
+comment on that branch said it could: *"interrupt() ends the current pass"*.
+
+A probe, posting a task and then `PostQuitMessage(0)`:
+
+```
+posted task A, then WM_QUIT
+    [task A ran]
+pass 0 -> true
+posted task B
+pass 1 -> false
+    [task B ran]
+pass 2 -> true
+```
+
+The pass that saw `WM_QUIT` ran its whole batch and reported success. The pass *after* it returned
+false and ran nothing — including task B, which had been queued in between and which waited one
+further pass. And since `Thread::exec()` loops on its own `mExiting` flag without ever reading what
+`processEvents()` returned, the entire effect of `WM_QUIT` on a running loop is **one idle pass**.
+
+The comment is corrected to say that, and both halves are now pinned by tests. The behaviour itself
+is left alone: it is a deliberate divergence from Qt, which quits the application here
+(`qeventdispatcher_win.cpp` calls `QCoreApplication::instance()->quit()` and returns false —
+verified against the local Qt 5.15.19 source, not from memory). Whether a worker's queue seeing
+`WM_QUIT` *should* end the process is a design question, not a defect, and it is not this item's to
+answer.
+
+### One hypothesis probed and withdrawn
+
+`DestroyWindow()` fails when called from a thread other than the window's creator, and
+`~EventDispatcherWin32()` ignores its return value. Since the dispatcher is held through a
+`shared_ptr` on `ThreadData`, a last reference dropped on the joining thread looked like a silent
+window leak.
+
+It is not one. Counting live message-only windows of the dispatcher's class from outside the
+library, while deliberately holding the worker's dispatcher alive past the worker's exit:
+
+```
+worker running:                             2 window(s)
+worker joined, dispatcher still referenced:  1 window(s)
+still holding the dispatcher:                1 window(s)
+dispatcher released on the main thread:      1 window(s)
+```
+
+The window is already gone at the join, while the dispatcher object is still alive. Windows destroys
+a thread's windows when the thread exits, so the OS is the backstop and the late `DestroyWindow()`
+is a harmless call on a stale handle. **No defect** — filed here so the same reading is not filed
+again.
+
+### Tests
+
+Six, in `src/tests/QtLikeSignal-test-eventdispatcher-win32.cpp`, whole file inside
+`#if defined( _WIN32 )` so the cross-build stays clean. Each was verified against a deliberately
+broken build, and **each is killed by a different mutation** — which is what makes them six tests
+rather than one:
+
+| test | what it pins | mutation that fails it |
+|---|---|---|
+| `PostedWindowMessageIsDispatchedToItsWindowProc` | `DispatchMessageA` — stage 5 on Windows | remove `DispatchMessageA` |
+| `KeyDownIsTranslatedIntoACharacterMessage` | `TranslateMessage`, separately from dispatch | remove `TranslateMessage` |
+| `WmQuitEndsTheFollowingPassAndNotTheProcess` | *which* pass `WM_QUIT` stops | remove `interrupt()` |
+| `WmQuitDoesNotStopAnExecLoop` | the deliberate divergence from Qt | make the branch call `CoreApplication::quit()` |
+| `AWorkerThreadDispatchesTheMessagesOfItsOwnWindow` | a worker services its own message queue | give workers `EventDispatcherDefault` |
+| `IdleLoopWithAWindowDoesNotSpin` | stage 5's "no 100% cpu-spin" | pass `0` as the wait timeout |
+
+The first two matter as a pair. `TranslateMessage` and `DispatchMessage` sit on consecutive lines,
+and removing either leaves the other looking correct; the mutation runs confirm the split, with
+exactly one test failing each time.
+
+`IdleLoopWithAWindowDoesNotSpin` is not a copy of its Linux sibling. `MsgWaitForMultipleObjectsEx`
+is asked for `QS_ALLINPUT` with `MWMO_INPUTAVAILABLE`, which returns for input *already* in the
+queue — so any message the drain fails to remove makes the wait return immediately, forever, at full
+CPU. Under the mutation it burned 0.89 s of CPU over 0.92 s of wall time, a ratio of 0.96 against a
+threshold of 0.1.
+
+**One test had to be rewritten because a mutation exposed a flaw in the test rather than in the
+code.** With `interrupt()` removed, `WmQuitEndsTheFollowingPassAndNotTheProcess` did not fail — it
+*hung*, because a pass that wrongly returned true had already drained the queue, leaving the next
+`processEvents()` to block in `MsgWaitForMultipleObjectsEx` with no deadline and nothing scheduled.
+The two checks that guard that call are now `ASSERT` rather than `EXPECT`, so a broken build stops
+there and reports which expectation broke, in 2 ms. This is the R31 lesson applied to a test that
+was written after it: **a test that hangs reports nothing.**
+
+Suite on Windows: **184 tests, 183 passed, 1 skipped, 0 failures**, in declaration order and under
+`--gtest_shuffle`, with AddressSanitizer on. Up from 178 before this pass.
+
+### What it did not close
+
+- **The `mMessageWindow == nullptr` fallbacks remain uncovered.** Reaching them means making
+  `CreateWindowEx` fail, which needs a seam in the class — a test-only constructor flag or a virtual
+  window-creation hook. That is production code reshaped for testability, and it is a decision
+  rather than an oversight; three lines did not seem worth it. Recorded as a known-uncovered branch.
+- **`external/QtMimic` has the same dispatcher and no such tests.** Its copy is byte-identical apart
+  from namespace, include path and licence header. Its build was fixed here — it now links — but the
+  tests were not ported, because R22 as filed names `src/`.
+- **Only the `win64-msvc` debug variant was run.** Release and `win32-msvc` are untried.
 
 ## R25 — `Object::thread()` costs a mutex *(By Design)*
 
@@ -487,6 +631,14 @@ matters more than it looks — see below.
 `linux64-clang`, debug, no sanitizer). No existing test caught any of these. After the R28 and R30
 fixes, the R31 contract change and their five tests: **169 tests, 0 failures**, in declaration order
 and under `--gtest_shuffle`.
+
+**Windows baseline, added 2026-08-16 by R22.** `.\waf.bat build` succeeds and the suite passes:
+**184 tests, 183 passed, 1 skipped, 0 failures** (`win64-msvc`, debug, AddressSanitizer on), in
+declaration order and under `--gtest_shuffle`. Before R22's six tests it was 178. This is the first
+time any of these numbers came from Windows rather than from Linux; getting there needed three build
+fixes that had nothing to do with any risk in this document, and they are itemised in the R22 entry.
+The Linux numbers above have not been re-measured since, and R22's changes to shared files are a
+guarded test file and one `PerfHarness::keep()` call, neither of which a Linux build should notice.
 
 **Every regression test here was verified against a deliberately broken build**, not merely observed
 to pass. A test that has never failed has not been shown to test anything. Where a fix had several

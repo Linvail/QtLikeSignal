@@ -182,11 +182,22 @@ namespace QtLikeSignal
 
             if( message.message == WM_QUIT )
             {
-                // Stop this loop rather than the whole application. Qt quits the QCoreApplication
-                // here, but this dispatcher may belong to a worker thread, and tearing down the
-                // process because one worker's queue saw WM_QUIT would be a surprising amount of
-                // action at a distance. interrupt() ends the current pass; the owning Thread's own
-                // exit flag still decides whether the loop resumes.
+                // Stop a dispatch pass rather than the whole application. Qt quits the
+                // QCoreApplication here -- qeventdispatcher_win.cpp calls
+                // QCoreApplication::instance()->quit() and returns false -- but this dispatcher may
+                // belong to a worker thread, and tearing down the process because one worker's
+                // queue saw WM_QUIT would be a surprising amount of action at a distance.
+                //
+                // Which pass it stops is not the one this reads like, and the earlier wording here
+                // ("interrupt() ends the current pass") was wrong. processPlatformEvents() runs
+                // from processEvents() *after* both of its interrupt checks and after the event
+                // batch has been taken, so the pass that saw WM_QUIT dispatches its whole batch and
+                // reports success; the pass after it is the one that returns false. Thread::exec()
+                // then loops on its own mExiting flag without consulting that return value, so on a
+                // running loop the whole effect of WM_QUIT is one idle pass.
+                //
+                // Both halves of that are pinned, in QtLikeSignal-test-eventdispatcher-win32.cpp:
+                // WmQuitEndsTheFollowingPassAndNotTheProcess and WmQuitDoesNotStopAnExecLoop.
                 interrupt();
                 return;
             }
