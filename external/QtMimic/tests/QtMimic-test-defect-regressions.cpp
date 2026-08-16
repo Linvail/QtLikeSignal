@@ -1828,10 +1828,17 @@ TEST( EventDispatcherDefaultDefectTest, WakeCallbackMayReEnterTheDispatcherFromE
 // ---------------------------------------------------------------------------------------------
 
 //! Records which thread ran it, through a pointer the test owns so it survives anything.
+//!
+//! The storage is atomic because this is the one member of this helper that is genuinely shared:
+//! onCall() runs on the worker, while the test's waitFor() polls the same variable from the main
+//! thread with no lock between them. As a plain Thread* that was a data race -- reported by
+//! ThreadSanitizer under linux64-clang, and filed as R33 in OPEN-RISKS-20260816.md. The tests still
+//! passed, because gtest checks assertions rather than thread safety, which is exactly why the
+//! sanitizer signal on the test binaries is worth keeping clean.
 class ThreadRecordingReceiver : public Object
 {
 public:
-    Thread** mRanOn { nullptr };  //!< Points at the test's own storage.
+    std::atomic<Thread*>* mRanOn { nullptr };  //!< Points at the test's own storage.
 
     void onCall
         (
@@ -1841,7 +1848,7 @@ public:
         ( void )aValue;
         if( mRanOn )
         {
-            *mRanOn = Thread::currentThread();
+            mRanOn->store( Thread::currentThread() );
         }
     }
 
@@ -1863,7 +1870,7 @@ TEST( ObjectDefectTest, MoveToThreadCarriesAlreadyPostedEventsToTheNewThread )
             return worker.eventDispatcher() != nullptr;
         } ) );
 
-    Thread* ranOn = nullptr;
+    std::atomic<Thread*> ranOn { nullptr };
     Signal<int> signal;
     ThreadRecordingReceiver receiver;   // lives on this thread
     receiver.mRanOn = &ranOn;
@@ -1875,11 +1882,11 @@ TEST( ObjectDefectTest, MoveToThreadCarriesAlreadyPostedEventsToTheNewThread )
 
     ASSERT_TRUE( waitFor( [&ranOn]()
         {
-            return ranOn != nullptr;
+            return ranOn.load() != nullptr;
         } ) )
         << "the queued call never ran at all after the move.";
 
-    EXPECT_EQ( ranOn, &worker )
+    EXPECT_EQ( ranOn.load(), &worker )
         << "the call was posted while the receiver lived on this thread, and ran there even though "
         "the receiver had moved. moveToThread() must carry already-posted events across, as Qt's "
         "setThreadData_helper() does; a queued connection promises the slot runs on the receiver's "
@@ -1956,7 +1963,7 @@ TEST( ObjectDefectTest, EventsMovedToAnUnstartedThreadAreDeliveredWhenItStarts )
 {
     Thread worker( "r32-unstarted-worker" );      // deliberately not started yet
 
-    Thread* ranOn = nullptr;
+    std::atomic<Thread*> ranOn { nullptr };
     Signal<int> signal;
     ThreadRecordingReceiver receiver;
     receiver.mRanOn = &ranOn;
@@ -1965,17 +1972,17 @@ TEST( ObjectDefectTest, EventsMovedToAnUnstartedThreadAreDeliveredWhenItStarts )
 
     signal.emit( 1 );
     ASSERT_TRUE( receiver.moveToThread( &worker ) );
-    EXPECT_EQ( ranOn, nullptr ) << "nothing should have run before the thread exists";
+    EXPECT_EQ( ranOn.load(), nullptr ) << "nothing should have run before the thread exists";
 
     worker.start();
 
     ASSERT_TRUE( waitFor( [&ranOn]()
         {
-            return ranOn != nullptr;
+            return ranOn.load() != nullptr;
         } ) )
         << "the event was posted before the destination had a dispatcher, and was dropped instead "
         "of being held until one existed.";
-    EXPECT_EQ( ranOn, &worker );
+    EXPECT_EQ( ranOn.load(), &worker );
 
     worker.post( [&receiver]()
         {

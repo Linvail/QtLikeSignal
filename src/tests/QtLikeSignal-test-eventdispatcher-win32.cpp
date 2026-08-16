@@ -223,6 +223,13 @@ namespace
     //! Cancelled by its own destructor, and sleeping in short slices rather than one long one, for
     //! two reasons: a test that ends on time pays nothing for the watchdog, and a watchdog left
     //! running past its test cannot quit the *next* test's application out from under it.
+    //!
+    //! It posts a raw thread message as well as calling quit(), and that is not belt and braces.
+    //! quit() wakes the loop through wakeWaiter(), so on a dispatcher whose wake flag has wedged --
+    //! exactly what WakeSurvivesAForeignMessageLoopDrainingTheQueue below tests for -- quit() sets
+    //! the exit flag and the loop never notices. WM_NULL goes straight to the message queue, which
+    //! is the one thing that still ends MsgWaitForMultipleObjectsEx, so a broken build fails here
+    //! instead of hanging the suite.
     class Watchdog
     {
     public:
@@ -230,6 +237,7 @@ namespace
             (
             int aMs   //!< Milliseconds to allow before quitting the application.
             )
+            : mLoopThreadId( GetCurrentThreadId() )
         {
             mThread = std::thread( [this, aMs]()
                 {
@@ -243,6 +251,7 @@ namespace
                     }
                     mFired.store( true );
                     CoreApplication::quit();
+                    PostThreadMessageA( mLoopThreadId, WM_NULL, 0, 0 );
                 } );
         }
 
@@ -272,6 +281,7 @@ namespace
         //! How long each sleep slice is, and so how promptly a cancel is noticed.
         static constexpr int kSliceMs = 5;
 
+        DWORD             mLoopThreadId;            //!< Thread whose message queue to poke on firing.
         std::thread       mThread;                  //!< Runs the deadline.
         std::atomic<bool> mCancelled { false };     //!< Set by the destructor to end mThread early.
         std::atomic<bool> mFired { false };         //!< Set when the deadline expired and quit ran.
@@ -521,6 +531,75 @@ TEST( EventDispatcherWin32Test, AWorkerThreadDispatchesTheMessagesOfItsOwnWindow
 
     worker.quit();
     EXPECT_TRUE( worker.wait( 5000 ) );
+}
+
+//! Verifies the loop can still be woken after a foreign message loop has drained the queue.
+//!
+//! wakeWaiter() posts its wakeup message at most once, and leaves mWakePending set until something
+//! consumes it. processPlatformEvents() is not the only consumer on this thread: MessageBox(), a
+//! modal dialog, a menu or drag loop, a COM modal loop, or any third-party GetMessage loop will
+//! take that message off the queue and dispatch it. If nothing clears the flag on that path, it
+//! stays set forever, every later wakeWaiter() returns early without posting, and the loop can
+//! never be woken again -- including by quit(), which wakes through the same path, so the
+//! application cannot even be shut down. That was R34.
+//!
+//! The fix is the window procedure clearing the flag, so it does not matter who dispatches the
+//! message. This test drives the whole sequence: wake, foreign drain, then a fresh post that only
+//! arrives if the collapse was re-armed.
+TEST( EventDispatcherWin32Test, WakeSurvivesAForeignMessageLoopDrainingTheQueue )
+{
+    CoreApplication app;
+    auto            dispatcher = currentWin32Dispatcher();
+    ASSERT_NE( dispatcher, nullptr );
+
+    // 1. Cause a wakeup, so a wakeup message is queued and the collapse flag is set.
+    std::atomic<bool> firstRan { false };
+    CoreApplication::post( [&firstRan]()
+        {
+            firstRan.store( true );
+        } );
+
+    // 2. The foreign loop. This is the only part of the test that is not our own code's doing, and
+    //    it is deliberately the plainest possible drain -- exactly what a modal dialog runs.
+    MSG message;
+    int drained = 0;
+    while( PeekMessageA( &message, nullptr, 0, 0, PM_REMOVE ) != FALSE )
+    {
+        TranslateMessage( &message );
+        DispatchMessageA( &message );
+        ++drained;
+    }
+    EXPECT_GE( drained, 1 ) << "no wakeup message was queued, so this test proved nothing.";
+
+    // 3. Let the dispatcher run the work it already had. The queue is not empty, so this pass does
+    //    not block and finds no message of its own to clear the flag with.
+    dispatcher->processEvents();
+    EXPECT_TRUE( firstRan.load() );
+
+    // 4. The question: does a new post still reach a blocked loop?
+    std::atomic<bool> secondRan { false };
+    std::thread       poster( [&secondRan]()
+        {
+            std::this_thread::sleep_for( std::chrono::milliseconds( 50 ) );
+            CoreApplication::post( [&secondRan]()
+                {
+                    secondRan.store( true );
+                    CoreApplication::quit();
+                } );
+        } );
+
+    Watchdog watchdog( 5000 );
+
+    EXPECT_EQ( app.exec(), 0 );
+    poster.join();
+
+    EXPECT_TRUE( secondRan.load() )
+        << "a task posted after a foreign message loop drained the queue never ran: the wake "
+        "collapse flag was left set, so wakeWaiter() stopped posting and the loop slept through "
+        "it.";
+    EXPECT_FALSE( watchdog.fired() )
+        << "the loop had to be stopped by the watchdog's raw thread message, which means quit() "
+        "could not wake it either -- the dispatcher was wedged, not merely slow.";
 }
 
 //! Verifies an idle loop with a window consumes essentially no CPU -- stage 5's "no 100% cpu-spin".

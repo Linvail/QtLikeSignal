@@ -1,0 +1,38 @@
+# ThreadSanitizer suppressions for the benchmark binary.
+#
+# Usage:
+#   TSAN_OPTIONS=suppressions=src/tests/tsan-suppressions.txt \
+#       ./out/linux/Tests/linux64-clang/debug/src/tests/QtLikeSignal-Performance-Tests
+#
+# Only QtLikeSignal-Performance-Tests needs this. QtLikeSignal-Tests and QtMimic-test are clean
+# under TSan with no suppressions at all, and must stay that way -- do not point this file at them,
+# because a suppression that is never needed is a place for a real race to hide.
+#
+# WHY THESE EXIST
+#
+# Every entry below is a false positive produced by measuring Qt 6 under ThreadSanitizer, and none
+# of them is a defect in this project's code. Two facts together cause them:
+#
+#   1. The Qt 6 at /usr/local/Qt-6.11.1 is a prebuilt library, not built with -fsanitize=thread.
+#      `nm -D libQt6Core.so.6 | grep -c __tsan` reports 0, against 644 for our own binary.
+#   2. Qt's QBasicMutex does not use pthread_mutex on Linux. It synchronises with raw futex(2)
+#      syscalls (qtbase/src/corelib/thread/qfutex_linux_p.h, used from qmutex.cpp). TSan intercepts
+#      the pthread primitives, so it sees happens-before edges made with them even inside an
+#      uninstrumented library -- but it does not model raw futex syscalls.
+#
+# So the ordering Qt really does establish when it hands a queued call from one thread to another is
+# invisible to TSan. What TSan then sees is the main thread constructing the lambda that
+# QMetaObject::invokeMethod heap-allocates, the worker thread reading that same block to call it,
+# and no edge between the two -- which it reports as a race on our lambda's line, and again as a
+# race in operator delete when Qt frees the block. The reported line numbers point at
+# `loopReady.store( true )` and `received.fetch_add( ... )`, both of which are std::atomic
+# operations that cannot themselves race; the racing memory is Qt's functor block, not our variable.
+#
+# The control for this is in the same binary: QtLikeSignal's own queued cross-thread benchmark has
+# the identical shape and is instrumented end to end, and reports nothing.
+#
+# Filed as R33 in history/OPEN-RISKS-20260816.md. Delete these lines if Qt is ever rebuilt with
+# -fsanitize=thread, which is the real fix and would make the reports meaningful instead of absent.
+
+race:Performance_Qt6_QueuedEmitCrossThread
+race:test_Qt6_Performance.cpp

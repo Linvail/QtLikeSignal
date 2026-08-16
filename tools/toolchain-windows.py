@@ -168,8 +168,11 @@ def copy_asan_runtime_beside_programs(self):
     Windows resolves a DLL from the executable's own directory before it consults PATH, and nothing
     puts the MSVC bin directory on PATH. Without this copy an ASan build links cleanly and then
     every binary it produced dies at startup with 0xC0000135 (STATUS_DLL_NOT_FOUND) and no message
-    -- the test suite looks like it crashed rather than like it could not start. ASan is on by
-    default on Windows, so this is the normal path, not a corner of it.
+    -- the test suite looks like it crashed rather than like it could not start.
+
+    Only reached when --enable-asan=yes was passed, since that is what gates the caller that fills
+    in ASAN_RUNTIME_DLLS. install_files() covers `waf install`; this covers the binaries in the
+    build tree, which is what a test run actually executes.
     """
     dll_paths = getattr(self.bld.env, "ASAN_RUNTIME_DLLS", [])
     if not dll_paths or not getattr(self, "link_task", None):

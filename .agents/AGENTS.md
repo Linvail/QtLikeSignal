@@ -62,6 +62,20 @@ waf install --project=Tests --enable-tsan=yes
 waf install --project=Tests --toolchain=linux64-gcc --enable-asan=yes
 ```
 
+Rule: Run `QtLikeSignal-Performance-Tests` under `--enable-tsan` with the suppression file, or it
+reports 19 findings that are all false positives. The installed Qt 6 is not built with
+ThreadSanitizer and `QMutex` synchronises with raw `futex(2)`, which TSan cannot see, so every
+object Qt hands between threads looks unsynchronised. `src/tests/tsan-suppressions.txt` carries the
+reasoning.
+
+```
+TSAN_OPTIONS=suppressions=src/tests/tsan-suppressions.txt \
+    ./out/linux/Tests/linux64-clang/debug/src/tests/QtLikeSignal-Performance-Tests
+```
+
+`QtLikeSignal-Tests` and `QtMimic-test` need no suppressions and must stay at zero findings; do not
+pass the file to them.
+
 On Windows, `win64-msvc` toolchain and `--enable-asan` need to be built and tests.
 When working on Windows, because we can use `wsl <command>` to run the command in WSL, we also
 need to build and test the Linux targets.
