@@ -6,8 +6,10 @@ def build(bld):
     # resolves by include-path order rather than by which library the file meant.
     kw["includes"] = ["."]
     kw["export_includes"] = ["."]
-    # No boost. QtLikeSignal used to get its signal from boost::signals2; it has its own now
-    # (src/QtLikeSignal/Signal.hpp, src/QtLikeSignal/Connection.hpp). QtMimic still depends on boost, so the submodule stays.
+    # No boost, anywhere in the project any more. QtLikeSignal used to get its signal from
+    # boost::signals2 and QtMimic followed; both have their own now
+    # (src/QtLikeSignal/Signal.hpp, src/QtLikeSignal/Connection.hpp). The submodule and its
+    # bootstrap were removed once neither library included a boost header.
     kw["use"] = []
     kw["features"] = ["cxx", "debug-info"]
 
