@@ -42,6 +42,36 @@ The compiled Google Test binary will be installed to:
 - **Windows**: `install\Tests\debug\Windows\x64\usr\bin\Tests.exe`
 - **Linux**: `install/Tests/debug/Linux/x64/usr/bin/Tests`
 
+## Sanitizer Builds
+
+Add `--enable-asan=yes` or `--enable-tsan=yes` to a `waf install` command to build with
+AddressSanitizer or ThreadSanitizer:
+
+```bash
+./waf install --project=Tests --enable-asan=yes
+./waf install --project=Tests --enable-tsan=yes
+```
+
+The two are mutually exclusive. If both are given, AddressSanitizer wins and ThreadSanitizer is
+dropped.
+
+Pick a specific toolchain with `--toolchain`, e.g.:
+
+```bash
+./waf install --project=Tests --toolchain=linux64-gcc --enable-asan=yes
+```
+
+`--enable-tsan` is not supported on Windows with MSVC.
+
+The performance suite's allocation counter (`src/tests/PerfAllocationCounter.cpp`) replaces the
+global `operator new`/`delete` to count heap allocations. Both AddressSanitizer and ThreadSanitizer
+ship their own replacement of those operators, so the counter disables itself under either
+sanitizer, and the allocation-count tests report `SKIPPED` instead of running.
+
+**Known issue:** on this project's WSL2 setup, `linux64-gcc` combined with `--enable-tsan` is
+unreliable — it can hang or report spurious data races. Use `linux64-clang` for ThreadSanitizer
+testing until this is resolved.
+
 ## Running the Tests
 
 Execute the test binary directly from the command line:

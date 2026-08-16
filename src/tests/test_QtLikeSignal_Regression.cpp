@@ -130,7 +130,11 @@ namespace
         return PerfHarness::timeLoop( kReps, []( int )
             {
                 Receiver r;
-                asm volatile ( "" : : "r" ( &r ) : "memory" );
+                // Through PerfHarness::keep() rather than the inline asm this line used to hold:
+                // `asm volatile` is GCC syntax that MSVC does not parse, and it was the only thing
+                // in the tree that stopped a Windows build outright. keep() already carries both
+                // arms, and this is the barrier it exists to be.
+                PerfHarness::keep( &r );
             } );
     }
 }

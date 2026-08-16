@@ -41,10 +41,12 @@ def build_tests(bld):
     env = make_toolchain_with_mode(bld, toolchain)
     bld.set_env(env)
 
+    bld.apply_sanitizer_settings()
+
     if (
         platform.system() == "Windows"
         and bld.env.DEST_OS == "win32"
-        and not Options.options.disable_asan_on_win
+        and bld.ASan_enabled
     ):
         bld.add_AddressSanitizer_on_Windows()
 

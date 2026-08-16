@@ -16,15 +16,6 @@ def configure_Linux_x64_gcc(ctx, root):
 
     ctx.env.append_unique("CXXFLAGS", ["-std=c++17"])
 
-    if Options.options.enable_address_sanitizer_on_Linux:
-        for flag in ("CFLAGS", "CXXFLAGS"):
-            ctx.env.append_unique(flag, ["-fsanitize=address"])
-        ctx.env.append_unique("LINKFLAGS", ["-fsanitize=address"])
-    elif Options.options.enable_thread_sanitizer_on_Linux:
-        for flag in ("CFLAGS", "CXXFLAGS"):
-            ctx.env.append_unique(flag, ["-fsanitize=thread"])
-        ctx.env.append_unique("LINKFLAGS", ["-fsanitize=thread"])
-
     ctx.env.ENV_VALID = True
 
     """
@@ -62,15 +53,6 @@ def configure_Linux_x64_clang(ctx, root):
     ctx.load("gccdeps", tooldir="submodules/external/waf/waflib/extras")
 
     ctx.env.append_unique("CXXFLAGS", ["-std=c++17"])
-
-    if Options.options.enable_address_sanitizer_on_Linux:
-        for flag in ("CFLAGS", "CXXFLAGS"):
-            ctx.env.append_unique(flag, ["-fsanitize=address"])
-        ctx.env.append_unique("LINKFLAGS", ["-fsanitize=address"])
-    elif Options.options.enable_thread_sanitizer_on_Linux:
-        for flag in ("CFLAGS", "CXXFLAGS"):
-            ctx.env.append_unique(flag, ["-fsanitize=thread"])
-        ctx.env.append_unique("LINKFLAGS", ["-fsanitize=thread"])
 
     ctx.env.ENV_VALID = True
 

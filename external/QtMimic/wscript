@@ -33,6 +33,11 @@ def build(bld):
     bld(target="QtMimic", **kw)
 
     kw_test = {}
+    if bld.env.DEST_OS == "win32":
+        # EventDispatcherWin32 calls CreateWindowEx/PeekMessage/DispatchMessage, all of which live
+        # in user32. src/tests/wscript has always linked it; this one had not, so the QtMimic test
+        # program was the only Windows target that did not link.
+        kw_test["lib"] = ["user32"]
     if bld.env.DEST_OS == "win32" and "msvc" in bld.env.CXX_NAME:
         kw_test["linkflags"] = ["/SUBSYSTEM:CONSOLE"]
 
