@@ -83,7 +83,6 @@ namespace QtLikeSignal
                 *aSchedPriority = prio;
                 return true;
             }  // end calculateUnixPriority()
-
         } // namespace
 
     #endif
@@ -263,7 +262,6 @@ namespace QtLikeSignal
                 return true;
             }
         }
-
 
         {
             std::unique_lock<std::mutex> lock( mWaitMutex );

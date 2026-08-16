@@ -5,6 +5,7 @@ local_tools = [
     "variant-builder",
     "toolchains",
     "debug-info",
+    "sanitizer"
 ]
 
 opt.load(local_tools, tooldir='tools')

@@ -197,8 +197,7 @@ namespace QtLikeSignal
         //! explicit template resolution.
         template <typename Signal, typename Receiver, typename Slot>
         static std::enable_if_t<MemberFunctionTraits<Slot>::is_member_function,
-            Connection>
-        connect
+            Connection> connect
             (
             Signal& aSignal,
             Receiver* aReceiver,
@@ -222,7 +221,6 @@ namespace QtLikeSignal
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-
         //! Connect Overload 2: Connects an overloaded void member function slot inherited from
         //! a base class.
         //!
@@ -232,12 +230,14 @@ namespace QtLikeSignal
         //! inherited overloaded methods seamlessly.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename SlotClass>
-        static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, Connection>
-        connect
+        static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, Connection> connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
-            void ( SlotClass::*aSlot )( SignalArgs... ),
+            void ( SlotClass::*aSlot )
+            (
+            SignalArgs...
+            ),
             ConnectionType aType = ConnectionType::Auto
             )
         {
@@ -249,7 +249,6 @@ namespace QtLikeSignal
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-
         //! Connect Overload 3: Connects an overloaded const void member function slot inherited
         //! from a base class.
         //!
@@ -257,8 +256,7 @@ namespace QtLikeSignal
         //! requires separate template matching for const qualifiers on member function pointers.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename SlotClass>
-        static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, Connection>
-        connect
+        static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, Connection> connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
@@ -274,7 +272,6 @@ namespace QtLikeSignal
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-
         //! Connect Overload 4: Connects an overloaded non-void returning member function slot
         //! inherited from a base class.
         //!
@@ -288,7 +285,10 @@ namespace QtLikeSignal
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
-            Ret ( SlotClass::*aSlot )( SignalArgs... ),
+            Ret ( SlotClass::*aSlot )
+            (
+            SignalArgs...
+            ),
             ConnectionType aType = ConnectionType::Auto
             )
         {
@@ -299,7 +299,6 @@ namespace QtLikeSignal
 
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
-
 
         //! Connect Overload 5: Connects an overloaded non-void returning const member function
         //! slot inherited from a base class.
@@ -324,7 +323,6 @@ namespace QtLikeSignal
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-
         //! Connect Overload 6: Connects an overloaded void member function slot defined
         //! directly on the receiver.
         //!
@@ -335,8 +333,7 @@ namespace QtLikeSignal
         //! signature.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver>
-        static std::enable_if_t<is_obj<Receiver>, Connection>
-        connect
+        static std::enable_if_t<is_obj<Receiver>, Connection> connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
@@ -352,7 +349,6 @@ namespace QtLikeSignal
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-
         //! Connect Overload 7: Connects an overloaded const void member function slot defined
         //! directly on the receiver.
         //!
@@ -360,8 +356,7 @@ namespace QtLikeSignal
         //! signature.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver>
-        static std::enable_if_t<is_obj<Receiver>, Connection>
-        connect
+        static std::enable_if_t<is_obj<Receiver>, Connection> connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
@@ -377,7 +372,6 @@ namespace QtLikeSignal
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-
         //! Connect Overload 8: Connects an overloaded non-void returning member function slot
         //! defined directly on the receiver.
         //!
@@ -387,8 +381,7 @@ namespace QtLikeSignal
         //! signature.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename Ret>
-        static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, Connection>
-        connect
+        static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, Connection> connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
@@ -404,7 +397,6 @@ namespace QtLikeSignal
             return connectImpl( aSignal, aReceiver, std::move( adapter ), aType );
         }
 
-
         //! Connect Overload 9: Connects an overloaded non-void returning const member function
         //! slot defined directly on the receiver.
         //!
@@ -412,8 +404,7 @@ namespace QtLikeSignal
         //! signature.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename Ret>
-        static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, Connection>
-        connect
+        static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, Connection> connect
             (
             SignalSource<SignalArgs...>& aSignal,
             Receiver* aReceiver,
@@ -447,12 +438,11 @@ namespace QtLikeSignal
         {
             #if __cplusplus >= 201703L
                 static_assert( std::is_invocable_v<Func, Args...>,
-                    "The provided lambda or callable does not match the Signal's arguments." );
+                "The provided lambda or callable does not match the Signal's arguments." );
             #endif
 
             return connectImpl( aSignal, aContext, std::forward<Func>( aSlot ), aType );
         }
-
 
         //! Disconnects a signal connection using a connection handle. Thread-safe.
         //!
@@ -586,6 +576,7 @@ namespace QtLikeSignal
             (
             std::shared_ptr<ThreadData> aThreadData
             );
+
     private:
         //! Key identifying a deduplicated deferred call.
         //!
@@ -782,7 +773,7 @@ namespace QtLikeSignal
             // matches on. ~Object() strips every event still queued for it before it goes away, so
             // the dispatcher never delivers to a dead receiver.
             auto wrapper = [weakLife, aContext, slot = std::forward<Callable>( aSlot ), aType,
-                ctxAffinity]( auto&&... aArgs )
+                    ctxAffinity]( auto&&... aArgs )
                 {
                     if( aType == ConnectionType::Direct )
                     {
@@ -960,7 +951,7 @@ namespace QtLikeSignal
     //! Slot type.
     template <typename Receiver, typename Slot, typename ... Args>
     std::enable_if_t<is_obj<Receiver> && MemberFunctionTraits<Slot>::is_member_function,
-        void>Object::callLater
+        void> Object::callLater
         (
         Receiver* aReceiver,  //!< Target object receiving the call.
         Slot aSlot,            //!< Member function pointer.
@@ -994,7 +985,7 @@ namespace QtLikeSignal
     //! class, type deduction fails. This overload explicitly resolves the base class pointer so
     //! you can defer execution of inherited overloaded methods.
     template <typename Receiver, typename SlotClass, typename ... Args>
-    std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, void>Object::callLater
+    std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, void> Object::callLater
         (
         Receiver* aReceiver,  //!< Target object receiving the call.
         void ( SlotClass::*aSlot )
@@ -1009,7 +1000,10 @@ namespace QtLikeSignal
             return;
         }
 
-        dispatchCallLater<void ( SlotClass::* )( Args... )>( aReceiver, aSlot,
+        dispatchCallLater<void ( SlotClass::* )
+            (
+            Args...
+            )>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1020,7 +1014,7 @@ namespace QtLikeSignal
     //! CallLater Overload 3 definition. Same as Overload 2, but specifically for const member
     //! functions.
     template <typename Receiver, typename SlotClass, typename ... Args>
-    std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, void>Object::callLater
+    std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, void> Object::callLater
         (
         Receiver* aReceiver,                                             //!< Target object receiving the call.
         void ( SlotClass::*aSlot )( NonDeduced<Args>... ) const,       //!< Const member function pointer.
@@ -1032,7 +1026,10 @@ namespace QtLikeSignal
             return;
         }
 
-        dispatchCallLater<void ( SlotClass::* )( Args... ) const>( aReceiver, aSlot,
+        dispatchCallLater<void ( SlotClass::* )
+            (
+            Args...
+            ) const>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1044,7 +1041,7 @@ namespace QtLikeSignal
     //! match the void-returning overloads. This overload explicitly catches non-void slots from
     //! base classes; the return value is safely discarded upon invocation.
     template <typename Receiver, typename SlotClass, typename Ret, typename ... Args>
-    std::enable_if_t<obj_is_child_of<Receiver, SlotClass> && !is_void<Ret>, void>Object::callLater
+    std::enable_if_t<obj_is_child_of<Receiver, SlotClass> && !is_void<Ret>, void> Object::callLater
         (
         Receiver* aReceiver,  //!< Target object receiving the call.
         Ret ( SlotClass::*aSlot )
@@ -1059,7 +1056,10 @@ namespace QtLikeSignal
             return;
         }
 
-        dispatchCallLater<Ret ( SlotClass::* )( Args... )>( aReceiver, aSlot,
+        dispatchCallLater<Ret ( SlotClass::* )
+            (
+            Args...
+            )>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1070,7 +1070,7 @@ namespace QtLikeSignal
     //! CallLater Overload 5 definition. Same as Overload 4, but specifically for const member
     //! functions.
     template <typename Receiver, typename SlotClass, typename Ret, typename ... Args>
-    std::enable_if_t<obj_is_child_of<Receiver, SlotClass> && !is_void<Ret>, void>Object::callLater
+    std::enable_if_t<obj_is_child_of<Receiver, SlotClass> && !is_void<Ret>, void> Object::callLater
         (
         Receiver* aReceiver,                                        //!< Target object receiving the call.
         Ret ( SlotClass::*aSlot )( NonDeduced<Args>... ) const,   //!< Const member function pointer.
@@ -1082,7 +1082,10 @@ namespace QtLikeSignal
             return;
         }
 
-        dispatchCallLater<Ret ( SlotClass::* )( Args... ) const>( aReceiver, aSlot,
+        dispatchCallLater<Ret ( SlotClass::* )
+            (
+            Args...
+            ) const>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1094,7 +1097,7 @@ namespace QtLikeSignal
     //! deduce Slot in Overload 1. Using NonDeduced<Receiver>, this overload forces the compiler
     //! to use the passed args types to select the right overload.
     template <typename Receiver, typename ... Args>
-    std::enable_if_t<is_obj<Receiver>, void>Object::callLater
+    std::enable_if_t<is_obj<Receiver>, void> Object::callLater
         (
         Receiver* aReceiver,                                                  //!< Target object receiving the call.
         void ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ),   //!< Member function pointer.
@@ -1106,7 +1109,10 @@ namespace QtLikeSignal
             return;
         }
 
-        dispatchCallLater<void ( Receiver::* )( Args... )>( aReceiver, aSlot,
+        dispatchCallLater<void ( Receiver::* )
+            (
+            Args...
+            )>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1117,7 +1123,7 @@ namespace QtLikeSignal
     //! CallLater Overload 7 definition. Same as Overload 6, but specifically for const member
     //! functions.
     template <typename Receiver, typename ... Args>
-    std::enable_if_t<is_obj<Receiver>, void>Object::callLater
+    std::enable_if_t<is_obj<Receiver>, void> Object::callLater
         (
         Receiver* aReceiver,                                                        //!< Target object receiving the call.
         void ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ) const,   //!< Const member function pointer.
@@ -1129,7 +1135,10 @@ namespace QtLikeSignal
             return;
         }
 
-        dispatchCallLater<void ( Receiver::* )( Args... ) const>( aReceiver, aSlot,
+        dispatchCallLater<void ( Receiver::* )
+            (
+            Args...
+            ) const>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1141,7 +1150,7 @@ namespace QtLikeSignal
     //! void-returning Overload 6. This ensures deferring overloaded methods that return Ret
     //! compiles successfully.
     template <typename Receiver, typename Ret, typename ... Args>
-    std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, void>Object::callLater
+    std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, void> Object::callLater
         (
         Receiver* aReceiver,                                                 //!< Target object receiving the call.
         Ret ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ),   //!< Member function pointer.
@@ -1153,7 +1162,10 @@ namespace QtLikeSignal
             return;
         }
 
-        dispatchCallLater<Ret ( Receiver::* )( Args... )>( aReceiver, aSlot,
+        dispatchCallLater<Ret ( Receiver::* )
+            (
+            Args...
+            )>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1164,7 +1176,7 @@ namespace QtLikeSignal
     //! CallLater Overload 9 definition. Same as Overload 8, but specifically for const member
     //! functions.
     template <typename Receiver, typename Ret, typename ... Args>
-    std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, void>Object::callLater
+    std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, void> Object::callLater
         (
         Receiver* aReceiver,                                                       //!< Target object receiving the call.
         Ret ( NonDeduced<Receiver>::*aSlot )( NonDeduced<Args>... ) const,   //!< Const member function pointer.
@@ -1176,7 +1188,10 @@ namespace QtLikeSignal
             return;
         }
 
-        dispatchCallLater<Ret ( Receiver::* )( Args... ) const>( aReceiver, aSlot,
+        dispatchCallLater<Ret ( Receiver::* )
+            (
+            Args...
+            ) const>( aReceiver, aSlot,
             [aReceiver, aSlot]( auto&&... a )
             {
                 ( aReceiver->*aSlot )( std::forward<decltype( a )>( a )... );
@@ -1189,7 +1204,7 @@ namespace QtLikeSignal
     template <typename Func, typename ... Args>
     std::enable_if_t<std::is_pointer<Func>::value &&
         std::is_function<std::remove_pointer_t<Func> >::value,
-        void>Object::callLater
+        void> Object::callLater
         (
         Object* aContext,  //!< Target Object defining thread affinity and lifetime.
         Func aFunc,          //!< Function pointer.
@@ -1233,7 +1248,7 @@ namespace QtLikeSignal
 
         Signal<SignalArgs...>* sigPtr = &aSignal;
 
-        dispatchCallLater<Signal<SignalArgs...>>( aContext, sigPtr,
+        dispatchCallLater<Signal<SignalArgs...> >( aContext, sigPtr,
             [sigPtr]( auto&&... a )
             {
                 sigPtr->emit( std::forward<decltype( a )>( a )... );
@@ -1249,7 +1264,7 @@ namespace QtLikeSignal
         !( std::is_pointer<Target>::value &&
         std::is_function<std::remove_pointer_t<Target> >::value ) &&
         !IsSignal<std::decay_t<Target> >::value,
-        void>Object::callLater
+        void> Object::callLater
         (
         Object* aContext,  //!< Target Object context.
         Target&& aTarget,   //!< Unsupported callable object (e.g. lambda).

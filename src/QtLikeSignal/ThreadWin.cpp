@@ -8,6 +8,7 @@
 #include "QtLikeSignal/Thread.hpp"
 
 #include <cstdio>
+
 #include <windows.h>
 // _beginthreadex() rather than CreateThread(): it is the same OS thread either way, but it
 // also initialises and, on return, releases the CRT's per-thread state. Qt reaches for it

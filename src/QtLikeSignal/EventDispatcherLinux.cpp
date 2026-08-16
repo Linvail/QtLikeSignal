@@ -197,6 +197,10 @@ namespace QtLikeSignal
                     continue;
                 }
 
+                // Resolved immediately before it is called, so a source unregistered by an earlier callback in
+                // this same round is not then called itself. That is what makes unregisterEventSource()
+                // synchronous on this thread, and it is the rule the dispatch batches follow too: re-check
+                // under the lock, act outside it.
                 const EventSourceCallback callback
                     = callbackIfStillRegistered( pollSet[i].fd, generations[i] );
                 if( callback )

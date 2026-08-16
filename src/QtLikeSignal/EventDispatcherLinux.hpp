@@ -44,7 +44,7 @@ namespace QtLikeSignal
         virtual ~EventDispatcherLinux() override;
 
         //! Invoked when a registered descriptor is ready; receives the poll(2) revents bitmask.
-        using EventSourceCallback = std::function<void( short aEvents )>;
+        using EventSourceCallback = std::function<void ( short aEvents )>;
 
         bool registerEventSource
             (

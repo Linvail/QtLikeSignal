@@ -435,7 +435,7 @@ namespace QtLikeSignal
             [aTimerId]( const EventPair& aEp )
             {
                 if( aEp.mEvent && aEp.mEvent->type() == Event::Timer
-                    && static_cast<TimerEvent*>( aEp.mEvent )->timerId() == aTimerId )
+                && static_cast<TimerEvent*>( aEp.mEvent )->timerId() == aTimerId )
                 {
                     delete aEp.mEvent;
                     return true;
@@ -707,7 +707,7 @@ namespace QtLikeSignal
 
     //! Unregisters the receiver's timers and returns them for re-registration elsewhere. Returns
     //! the removed registrations, empty if the receiver had none. Thread-safe.
-    std::vector<AbstractEventDispatcher::TimerRegistration>EventDispatcherDefault::
+    std::vector<AbstractEventDispatcher::TimerRegistration> EventDispatcherDefault::
     takeTimersForReceiver
         (
         Object* aReceiver  //!< The receiver whose timers should be taken.

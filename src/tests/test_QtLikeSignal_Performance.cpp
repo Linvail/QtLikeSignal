@@ -61,8 +61,8 @@ TEST( Performance, QtLikeSignal_Connect )
     const double ns = timeLoop( kConnectOps, [&]( int )
         {
             Object::connect( sig, &receiver, []( int )
-                {
-                }, ConnectionType::Direct );
+            {
+            }, ConnectionType::Direct );
         } );
     record( "connect()", "QtLikeSignal", ns );
 }
@@ -169,8 +169,6 @@ TEST( Performance, QtLikeSignal_QueuedEmitCrossThread )
     worker.wait();
 }
 
-// =================================================================================================
-
 //! Prints the comparison table once every scenario has run.
 //!
 //! A gtest environment rather than a test, so it runs after all of them regardless of ordering or
@@ -182,6 +180,7 @@ public:
     {
         PerfHarness::printSummary();
     }
+
 };
 
 //! Entry point. This binary is separate from the correctness suite so its cost is opt-in.

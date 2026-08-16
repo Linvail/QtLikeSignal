@@ -102,7 +102,7 @@ namespace QtLikeSignal
     {
         if( mAdopted.load() )
         {
-            return;
+            return; // an adopted thread already represents an already-running native thread
         }
 
         if( mData->isThreadRunning() )

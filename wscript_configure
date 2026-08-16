@@ -106,6 +106,7 @@ local_tools = [
     "variant-builder",
     "toolchains",
     "debug-info",
+    "sanitizer"
 ]
 
 ctx.load(local_tools, tooldir="tools")

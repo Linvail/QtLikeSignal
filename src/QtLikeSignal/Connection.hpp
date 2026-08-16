@@ -165,6 +165,7 @@ namespace QtLikeSignal
                 (
                 ConnectionNode* aNode
                 ) = 0;
+
         };
     }
 
