@@ -48,16 +48,24 @@ Rule: Run `waf configure`:
 waf configure
 ```
 
-Rule: Build/install. `--enable-tsan`, `--enable-asan`, `--toolchain` can be used in build/install context.
+Rule: Use `install` instead of `build` command. `--enable-tsan`, `--enable-asan`, `--toolchain`
+can be used in install context.
 On Linux, both `linux64-gcc` and `linux64-clang` toolchains need to be built and tested.
 On Linux, both `--enable-tsan` and `--enable-asan` need to be built and tested.
 Exception: skip `linux64-gcc` with `--enable-tsan`. GCC's ThreadSanitizer runtime is unreliable
 on this machine; it hangs or reports many spurious races. Build it, if wanted, but do not run it.
 On Linux, `linux-2-win64-clang` toolchain needs to be built, but no need to run the tests.
-On Windows, `win64-msvc` toolchain and `--enable-asan` need to be built and tests.
 
 ```
 waf install --project=Tests --enable-tsan=yes
 
 waf install --project=Tests --toolchain=linux64-gcc --enable-asan=yes
+```
+
+On Windows, `win64-msvc` toolchain and `--enable-asan` need to be built and tests.
+When working on Windows, because we can use `wsl <command>` to run the command in WSL, we also
+need to build and test the Linux targets.
+
+```
+wsl ./waf install --project=Tests --enable-tsan=yes
 ```
