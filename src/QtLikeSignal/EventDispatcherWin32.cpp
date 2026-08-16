@@ -9,7 +9,9 @@
 
 #include <cstdio>
 #include <mutex>
+#include <sstream>
 #include <string>
+#include <tchar.h>
 
 #ifndef WIN32_LEAN_AND_MEAN
     #define WIN32_LEAN_AND_MEAN
@@ -33,7 +35,7 @@ namespace QtLikeSignal
         //! processPlatformEvents() is not the only thing on this thread that can consume it: any
         //! foreign message loop -- MessageBox(), a modal dialog, a menu or drag loop, a COM modal
         //! loop, any third-party GetMessage loop -- will PeekMessage it off the queue and
-        //! DispatchMessage it here. With DefWindowProcA in this slot, which is what used to be
+        //! DispatchMessage it here. With DefWindowProc in this slot, which is what used to be
         //! here, the message was discarded and the flag stayed set forever, so every later
         //! wakeWaiter() returned early without posting and the loop could never be woken again.
         //! quit() went with it, since that wakes through the same path, so the application also
@@ -61,7 +63,7 @@ namespace QtLikeSignal
                 // Null until the constructor has stored the flag: CreateWindowEx sends WM_NCCREATE
                 // and WM_CREATE through here before it returns the handle we would set it on.
                 auto* wakePending = reinterpret_cast<std::atomic<bool>*>(
-                    GetWindowLongPtrA( aWindow, GWLP_USERDATA ) );
+                    GetWindowLongPtr( aWindow, GWLP_USERDATA ) );
                 if( wakePending != nullptr )
                 {
                     wakePending->store( false );
@@ -69,7 +71,7 @@ namespace QtLikeSignal
                 return 0;
             }
 
-            return DefWindowProcA( aWindow, aMessage, aWParam, aLParam );
+            return DefWindowProc( aWindow, aMessage, aWParam, aLParam );
         }
 
         //! Class name of the hidden message-only window, unique to this copy of the library.
@@ -82,21 +84,27 @@ namespace QtLikeSignal
         //! winner's class. That was harmless while the class had no window procedure of its own.
         //! It stopped being harmless the moment the one above started carrying the R34 fix, because
         //! the surviving registration decides which copy's code runs.
-        const char* windowClassName()
+        //!
+        //! Built as TCHAR, like every string this file hands to Win32, because the calls here are
+        //! the generic-text ones -- RegisterClass, not RegisterClassA -- and those take LPCTSTR.
+        //! A TCHAR ostringstream rather than a printf into a fixed buffer: it needs no size guess,
+        //! and it avoids the _sntprintf family, whose truncation behaviour differs between the two
+        //! toolchains that build this file.
+        const TCHAR* windowClassName()
         {
-            static const std::string sName = []()
+            static const std::basic_string<TCHAR> sName = []()
                 {
-                    char buffer[64] {};
-                    std::snprintf( buffer, sizeof( buffer ), "QtLikeSignal_EventDispatcher_%p",
-                    reinterpret_cast<void*>( &messageWindowProc ) );
-                    return std::string( buffer );
+                    std::basic_ostringstream<TCHAR> name;
+                    name << TEXT( "QtLikeSignal_EventDispatcher_" )
+                         << reinterpret_cast<const void*>( &messageWindowProc );
+                    return name.str();
                 }();
             return sName.c_str();
         }
 
         //! Registers the window class once per process.
         //!
-        //! Every dispatcher on every thread shares one class; RegisterClassA is process-wide, so
+        //! Every dispatcher on every thread shares one class; RegisterClass is process-wide, so
         //! registering per-instance would fail with ERROR_CLASS_ALREADY_EXISTS after the first.
         //! call_once also makes it safe for two threads to start their loops simultaneously.
         void ensureWindowClassRegistered()
@@ -104,11 +112,11 @@ namespace QtLikeSignal
             static std::once_flag sOnce;
             std::call_once( sOnce, []()
                 {
-                    WNDCLASSA windowClass {};
+                    WNDCLASS windowClass {};
                     windowClass.lpfnWndProc   = &messageWindowProc;
-                    windowClass.hInstance     = GetModuleHandleA( nullptr );
+                    windowClass.hInstance     = GetModuleHandle( nullptr );
                     windowClass.lpszClassName = windowClassName();
-                    if( RegisterClassA( &windowClass ) == 0 )
+                    if( RegisterClass( &windowClass ) == 0 )
                     {
                         std::fprintf( stderr,
                         "EventDispatcherWin32: RegisterClass() failed (%lu)\n",
@@ -125,7 +133,7 @@ namespace QtLikeSignal
 
         // HWND_MESSAGE creates a message-only window: never visible, never enumerated, and not a
         // child of the desktop -- it exists purely to own a message queue endpoint we can post to.
-        const HWND window = CreateWindowExA(
+        const HWND window = CreateWindowEx(
             0,
             windowClassName(),
             windowClassName(),
@@ -133,7 +141,7 @@ namespace QtLikeSignal
             0, 0, 0, 0,
             HWND_MESSAGE,
             nullptr,
-            GetModuleHandleA( nullptr ),
+            GetModuleHandle( nullptr ),
             nullptr );
 
         if( window == nullptr )
@@ -151,7 +159,7 @@ namespace QtLikeSignal
             // passed through CreateWindowEx's lpParam because the window procedure only needs it
             // for kWakeUpMessage, which cannot arrive before this line: nothing can post to a
             // handle that has not been returned yet.
-            SetWindowLongPtrA( window, GWLP_USERDATA,
+            SetWindowLongPtr( window, GWLP_USERDATA,
                 reinterpret_cast<LONG_PTR>( &mWakePending ) );
         }
 
@@ -225,7 +233,7 @@ namespace QtLikeSignal
             return;
         }
 
-        if( PostMessageA( static_cast<HWND>( mMessageWindow ), kWakeUpMessage, 0, 0 ) == FALSE )
+        if( PostMessage( static_cast<HWND>( mMessageWindow ), kWakeUpMessage, 0, 0 ) == FALSE )
         {
             // The post failed, so no wakeup is coming and the flag would wedge the fast path shut
             // forever. Clear it so the next caller retries rather than assuming a wake is pending.
@@ -242,7 +250,7 @@ namespace QtLikeSignal
         }
 
         MSG message;
-        while( PeekMessageA( &message, nullptr, 0, 0, PM_REMOVE ) != FALSE )
+        while( PeekMessage( &message, nullptr, 0, 0, PM_REMOVE ) != FALSE )
         {
             if( message.message == kWakeUpMessage
                 && message.hwnd == static_cast<HWND>( mMessageWindow ) )
@@ -278,7 +286,7 @@ namespace QtLikeSignal
             }
 
             TranslateMessage( &message );
-            DispatchMessageA( &message );
+            DispatchMessage( &message );
         }
     }
 }

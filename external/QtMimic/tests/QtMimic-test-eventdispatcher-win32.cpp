@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 Evan
-// SPDX-License-Identifier: MIT
-
 //! @file
 //!
 //! Tests for the Win32 event dispatcher's OS-message handling -- mission stage 5, "I want to
@@ -19,12 +16,12 @@
 #if defined( _WIN32 )
 
 #include <gtest/gtest.h>
-#include "QtLikeSignal/CoreApplication.hpp"
-#include "QtLikeSignal/EventDispatcherWin32.hpp"
-#include "QtLikeSignal/Object.hpp"
+#include "QtMimic/CoreApplication.hpp"
+#include "QtMimic/EventDispatcherWin32.hpp"
+#include "QtMimic/Object.hpp"
 #include "TestCpuTime.hpp"
-#include "QtLikeSignal/Thread.hpp"
-#include "QtLikeSignal/Timer.hpp"
+#include "QtMimic/Thread.hpp"
+#include "QtMimic/Timer.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -42,7 +39,7 @@
 #endif
 #include <windows.h>
 
-using namespace QtLikeSignal;
+using namespace QtMimic;
 
 namespace
 {
@@ -56,7 +53,7 @@ namespace
     //! Class name of the tests' own window, distinct from the dispatcher's.
     //!
     //! TCHAR, matching the generic-text Win32 calls this file makes.
-    const TCHAR* const kTestWindowClassName = TEXT( "QtLikeSignalTest_Window" );
+    const TCHAR* const kTestWindowClassName = TEXT( "QtMimicTest_Window" );
 
     //! A message-only window belonging to the thread that constructs it, recording what it receives.
     //!

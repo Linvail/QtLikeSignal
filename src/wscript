@@ -35,3 +35,4 @@ def build(bld):
     bld(target="QtLikeSignal", **kw)
 
     bld.recurse("tests")
+    bld.recurse("demo")

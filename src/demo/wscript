@@ -1,0 +1,23 @@
+def build(bld):
+    """
+    Build the Windows demo program.
+
+    Windows-only: it is a Win32 SDK program, so it is skipped for any target whose DEST_OS is not
+    win32. The cross toolchain (linux-2-win64-clang) does target win32 and does build it, which is
+    the only compiler other than MSVC that sees this code.
+    """
+    if bld.env.DEST_OS != "win32":
+        return
+
+    kw = {}
+    kw["features"] = ["cxx", "cxxprogram", "debug-info"]
+    kw["source"] = bld.path.ant_glob("windows/*.cpp")
+    # The demo's own headers are included unprefixed ("GuiApplication.hpp"), so its directory goes
+    # on the include path; src/ is already there via the QtLikeSignal use below, which is what makes
+    # the library's own includes read "QtLikeSignal/CoreApplication.hpp".
+    kw["includes"] = ["windows"]
+    kw["use"] = ["QtLikeSignal"]
+    # user32 for the window and its messages, gdi32 for the painting.
+    kw["lib"] = ["user32", "gdi32"]
+
+    bld(target="QtLikeSignal-Demo-Windows", **kw)

@@ -291,6 +291,28 @@ watchdog assertion is most likely to produce falsely.
 Suite after the fix: **185 tests, 184 passed, 1 skipped, 0 failures** on `win64-msvc` with ASan, in
 declaration order and under `--gtest_shuffle`.
 
+### QtMimic had it too, and now has the fix and the tests
+
+`external/QtMimic` carries its own copy of this dispatcher, and it had the identical wedge: one
+place clearing the flag, `DefWindowProc` in the window-procedure slot, nothing to re-arm the
+collapse when a foreign loop consumed the message. Ported on 2026-08-16 — the window procedure, the
+per-copy class name, the `GWLP_USERDATA` publish, and the corrected R22 comment on the `WM_QUIT`
+branch — together with all six Win32 tests, as
+`external/QtMimic/tests/QtMimic-test-eventdispatcher-win32.cpp`.
+
+**The port was verified the same way the original was, and the mutation is what makes it worth
+recording.** With `lpfnWndProc` put back to `DefWindowProc` in *QtMimic's* dispatcher:
+
+| binary | result under the mutation |
+|---|---|
+| `QtMimic-test` | `WakeSurvivesAForeignMessageLoopDrainingTheQueue` **fails**, "the dispatcher was wedged, not merely slow" |
+| `QtLikeSignal-Tests` | the identical test still **passes** |
+
+That is two facts at once: QtMimic genuinely had the defect rather than inheriting a fix it never
+needed, and each library's tests are wired to its own dispatcher rather than accidentally sharing
+one. `QtMimic-test` is now at **185 tests, 184 passed, 1 skipped**, the same as `QtLikeSignal-Tests`,
+in declaration order and shuffled, and clean under ThreadSanitizer on `linux64-clang`.
+
 ### One smaller observation from the same reading, still open
 
 **Qt checks `interrupt` on every message; we check it once per pass.** Qt's drain loop is
