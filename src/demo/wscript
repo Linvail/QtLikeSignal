@@ -1,23 +1,96 @@
-def build(bld):
-    """
-    Build the Windows demo program.
+import os
 
-    Windows-only: it is a Win32 SDK program, so it is skipped for any target whose DEST_OS is not
-    win32. The cross toolchain (linux-2-win64-clang) does target win32 and does build it, which is
-    the only compiler other than MSVC that sees this code.
-    """
-    if bld.env.DEST_OS != "win32":
-        return
+#: Prefixes searched for an X11 development installation, in order.
+#:
+#: /usr is where libx11-dev puts Xlib.h; /usr/local covers a hand-built X11. Both are already on
+#: every compiler's default search path, so finding one here is about deciding whether to build the
+#: demo at all, not about producing a -I flag.
+X11_PREFIXES = ["/usr", "/usr/local"]
 
+
+def _find_x11(bld):
+    """
+    Locate an X11 development installation for the X11 demo.
+
+    Returns a dict of paths, or None when X11 is unavailable. Only native Linux builds are
+    considered: the cross-compile to Windows would not find these host paths, and the demo is a
+    development tool rather than something the shipped library depends on.
+    """
+    if bld.env.DEST_OS != "linux":
+        return None
+
+    for prefix in X11_PREFIXES:
+        include = os.path.join(prefix, "include")
+        if os.path.exists(os.path.join(include, "X11", "Xlib.h")):
+            return {"include": include}
+
+    return None
+
+
+def _build_windows_demo(bld):
+    """
+    Build the Win32 demo program.
+
+    The cross toolchain (linux-2-win64-clang) also targets win32 and does build it, which is the
+    only compiler other than MSVC that sees this code.
+    """
     kw = {}
     kw["features"] = ["cxx", "cxxprogram", "debug-info"]
     kw["source"] = bld.path.ant_glob("windows/*.cpp")
     # The demo's own headers are included unprefixed ("GuiApplication.hpp"), so its directory goes
-    # on the include path; src/ is already there via the QtLikeSignal use below, which is what makes
-    # the library's own includes read "QtLikeSignal/CoreApplication.hpp".
-    kw["includes"] = ["windows"]
+    # on the include path, and common/ with it for the MouseEvent both demos share. src/ is already
+    # there via the QtLikeSignal use below, which is what makes the library's own includes read
+    # "QtLikeSignal/CoreApplication.hpp".
+    kw["includes"] = ["windows", "common"]
     kw["use"] = ["QtLikeSignal"]
     # user32 for the window and its messages, gdi32 for the painting.
     kw["lib"] = ["user32", "gdi32"]
 
     bld(target="QtLikeSignal-Demo-Windows", **kw)
+
+
+def _build_x11_demo(bld):
+    """
+    Build the X11 demo program, if the X11 development headers are installed.
+
+    Skipped with a message rather than failing the build when they are not: the demo needs a
+    window system that a build machine has no reason to have, and the library itself does not
+    depend on X11 at all.
+    """
+    x11 = _find_x11(bld)
+    if not x11:
+        bld.msg(
+            "X11 demo",
+            "skipped (no X11/Xlib.h; install libx11-dev)",
+            color="YELLOW",
+        )
+        return
+
+    kw = {}
+    kw["features"] = ["cxx", "cxxprogram", "debug-info"]
+    kw["source"] = bld.path.ant_glob("x11/*.cpp")
+    kw["includes"] = ["x11", "common"]
+    kw["use"] = ["QtLikeSignal"]
+    kw["lib"] = ["X11"]
+
+    # Only when the headers were found somewhere the compiler does not already look. Adding
+    # /usr/include by hand would reorder it ahead of the compiler's own directories, which is a
+    # known way to break a build for no gain.
+    if x11["include"] != "/usr/include":
+        kw["includes"] = kw["includes"] + [x11["include"]]
+
+    bld(target="QtLikeSignal-Demo-X11", **kw)
+
+
+def build(bld):
+    """
+    Build whichever demo the target platform has a window system for.
+
+    One demo per window system, both over the same QtLikeSignal::CoreApplication: the Win32 one
+    shows the dispatcher pumping the OS queue itself, the X11 one shows an application handing its
+    connection to the dispatcher's poll() set.
+    """
+    if bld.env.DEST_OS == "win32":
+        _build_windows_demo(bld)
+    elif bld.env.DEST_OS == "linux":
+        _build_x11_demo(bld)

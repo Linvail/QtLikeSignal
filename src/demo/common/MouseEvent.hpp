@@ -12,10 +12,12 @@ namespace QtLikeSignalDemo
 {
     //! A mouse press, release or move, in client coordinates.
     //!
-    //! Deliberately carries no Windows types. GuiApplication translates the WM_ message into this
-    //! before emitting it, so everything downstream -- the slots, the log, the painting -- is
-    //! ordinary C++ that knows nothing about Win32. That is the same split Qt makes between
-    //! QWindowSystemInterface and QMouseEvent.
+    //! Deliberately carries no platform types. Each demo's application class translates the native
+    //! event into this before emitting it -- a WM_LBUTTONDOWN on Windows, an XButtonPressedEvent on
+    //! X11 -- so everything downstream, the slots and the painting, is ordinary C++ that knows
+    //! nothing about either window system. That is the same split Qt makes between
+    //! QWindowSystemInterface and QMouseEvent, and it is why this header is shared by both demos
+    //! rather than duplicated per platform.
     //!
     //! The button enum is nested rather than free so this header still declares exactly one public
     //! type.
