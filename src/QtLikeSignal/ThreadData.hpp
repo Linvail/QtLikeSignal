@@ -147,6 +147,10 @@ namespace QtLikeSignal
 
         //! Timer::singleShot() validates a context's thread before arming against it.
         friend class Timer;
+
+        //! namesOtherRunningThread() answers ~Object()'s diagnostic without copying a shared_ptr
+        //! out, which means asking these two accessors from inside the Affinity's own mutex.
+        friend class Affinity;
     };
 
     //----------------------------------------------------------------
@@ -194,6 +198,26 @@ namespace QtLikeSignal
         {
             std::lock_guard<std::mutex> locker( mMutex );
             return mData;
+        }
+
+        //! @return true when this affinity names a *running* thread that is not @p aCaller.
+        //!
+        //! The question ~Object()'s safety diagnostic asks, answered without handing a strong
+        //! reference back out. data() copies a shared_ptr, so asking it cost two atomic
+        //! read-modify-writes on top of the mutex, on a path every destruction takes -- and the
+        //! copy existed only to keep alive, for three instructions, something this mutex already
+        //! keeps alive. See PERFORMANCE-20260817.md (P11).
+        //!
+        //! The Thread* is compared, never dereferenced, which is the same rule data()'s callers
+        //! follow and the reason this cannot resurrect the dangling-pointer hazard the Affinity
+        //! indirection exists to remove.
+        bool namesOtherRunningThread
+            (
+            const Thread* aCaller   //!< The thread asking; compared, never dereferenced.
+            ) const
+        {
+            std::lock_guard<std::mutex> locker( mMutex );
+            return mData && mData->isThreadRunning() && mData->thread() != aCaller;
         }
 
         //! Re-point at another thread's data. Called only by Object::moveToThread().

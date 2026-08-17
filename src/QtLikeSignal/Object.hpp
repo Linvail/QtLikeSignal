@@ -892,6 +892,19 @@ namespace QtLikeSignal
         // the scan; Qt keeps an exact count instead, which needs the dispatch side to decrement and is
         // more machinery than the difference is worth here.
         std::atomic<bool> mMayHaveQueuedWork { false };
+
+        //! True once this object has started a timer, so ~Object() knows whether mRunningTimerIds
+        //! can possibly hold anything.
+        //!
+        //! The third flag of the same set-once family, and there for the same reason as the other
+        //! two: the destructor took mRunningTimerIdsMutex unconditionally, so every object that
+        //! never owned a timer -- nearly all of them -- paid an uncontended lock and unlock to swap
+        //! an empty vector. Cheaper than the scans P1 removed, but paid on a path whose whole cost
+        //! is a few hundred nanoseconds. See PERFORMANCE-20260817.md (P11).
+        // Set with release before the id is pushed, read with acquire, so seeing it false means no
+        // push has been made visible to us. Never cleared: an object that has owned a timer keeps
+        // taking the lock, which is the same honest trade the other two flags make.
+        std::atomic<bool> mUsedTimers { false };
         //! This object's descriptive name.
         //!
         //! Deliberately unguarded, matching QObject, whose objectName() has no locking either. A

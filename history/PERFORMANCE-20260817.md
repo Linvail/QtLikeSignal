@@ -15,7 +15,7 @@ How every figure below was produced is at the end, under
 
 | ID | Status | Finding | Impact | Latest measurement |
 |----|--------|---------|--------|--------------------|
-| P11 | **Open** | Teardown against *raw* boost::signals2 is ~3x, not the 1.35x recorded on 2026-08-13 | Medium | 258.6 ns vs boost's **86.6 ns** per receiver, at 16 000 resident |
+| P11 | **In progress** | Teardown against *raw* boost::signals2 is ~3x, not the 1.35x recorded on 2026-08-13 | Medium | 258.6 → **246.4 ns** per receiver; bare `~Object()` 110.6 → **86.8 ns**. Qt 6 gap 2.02x → **1.54x** |
 | P12 | **Fixed** | The summary table's ratio baseline was whichever library linked first, so adding a fourth benchmark file silently inverted every ratio | High (in the tool) | Baseline is now named, not inferred |
 | P13 | **Fixed** | The first allocation-heavy test in a process paid for heap growth, and the `connect()` row charged it to whichever library ran first | High (in the tool) | boost's connect **358.3 → 190.7 ns**; our advantage over boost on that row was overstated by 1.7x |
 
@@ -95,8 +95,73 @@ we win emit by 2.7x — though by less than the record implies, since the connec
 rather than the 2.4x stated, for the reason P13 gives.
 
 What changes is that **teardown is a wider gap than the record said**, and it is the only row where
-both reference libraries beat us. Left open rather than scheduled, on the same reasoning P8 was
-parked under.
+both reference libraries beat us.
+
+### Where the cost is
+
+Decomposed by destroying N objects that hold no connection at all, against N that hold one:
+
+| | before | after |
+|---|---|---|
+| `~Object()`, no connections | 110.6 ns | **86.8 ns** |
+| `~Object()`, one connection, shared signal | 278.6 ns | **252.3 ns** |
+| `~Object()`, one connection, own signal | – | 237.5 ns |
+
+Two things follow. **The bare destructor was already more expensive than boost's entire teardown**
+(110.6 against 86.6), before a single connection is involved — so this was never mainly a
+disconnect-path problem. And the shared-signal bookkeeping (tombstones, compaction, one mutex for
+16 000 receivers) accounts for only ~32 ns of the ~166 ns a connection adds; the rest is per-object
+work that no amount of signal-side tuning would reach.
+
+### What was fixed, and what it cost in features
+
+**Nothing.** Both changes remove work that bought nothing:
+
+- **`mUsedTimers`**, a third set-once flag beside `mUsedCallLater` and `mMayHaveQueuedWork`. The
+  destructor took `mRunningTimerIdsMutex` unconditionally to swap a vector that is empty for every
+  object that never started a timer. Same guard, same precedent, same honest trade — an object that
+  has owned a timer keeps taking the lock.
+- **`Affinity::namesOtherRunningThread()`**. The cross-thread-destruction diagnostic called
+  `Affinity::data()`, which copies a `shared_ptr` out from under the mutex. Two atomic
+  read-modify-writes to keep alive, for the length of two atomic loads, something the mutex already
+  held. The question is now asked in one call, answered inside the mutex. The diagnostic is
+  unchanged, and the `Thread*` is still only ever compared, never dereferenced.
+
+Together: bare `~Object()` **110.6 → 86.8 ns (−22%)**, the shipped teardown row **258.6 → 246.4 ns**,
+and the Qt 6 gap on that row **2.02x → 1.54x**. QtMimic, untouched, still measures ~305 ns, which is
+a clean control: the same benchmark, the same process, the same source minus these two changes.
+
+### A change that was tried and reverted
+
+Replacing the destructor's `std::vector` of incoming connections with an eight-slot stack buffer.
+It did exactly what it was meant to — allocations per destroy went from **1.004 to 0.004** — and the
+teardown row got **30 ns slower**, reproducibly, across every inline capacity tried:
+
+| inline capacity | `~Object()`, one connection |
+|---|---|
+| vector (original) | 278.6 ns |
+| 1 | 282.0 ns |
+| 2 | 292.7 ns |
+| 4 | 295.6 ns |
+| 8 | 289.9 ns |
+
+The allocation it removed was a hot tcache hit costing less than the zeroing and destruction of the
+buffer that replaced it. **Reverted.** Recorded here because "remove the allocation" is the obvious
+next idea and it is wrong: on this path the allocation count and the time do not move together, and
+the allocation guards next door would have called this a win.
+
+### Left open
+
+The remaining gap to Qt 6 is ~1.5x on this row. The largest identified item is that every `Object`
+carries **two** separately allocated boxes — `mLife` (a `shared_ptr<int>` life token) and `mAffinity`
+— where Qt allocates one `QObjectPrivate`. Merging the life token into the affinity box would save
+one allocation per construction and one free per destruction without losing anything: connections
+already capture `shared_ptr<Affinity>`, and an atomic flag inside it answers the same question
+`weak_ptr::expired()` answers now.
+
+**Not attempted here.** It rewrites the lifetime mechanism that every queued connection depends on
+for its use-after-free safety, which is the one part of this library where a subtle mistake does not
+announce itself. It wants its own change, its own review, and a TSan run of its own.
 
 ## P12 — the summary table's ratio baseline followed link order *(Fixed)*
 
@@ -292,7 +357,16 @@ a Windows build reports the two columns it can. Note that 1.74 is from 2020 and 
 submodule removed in `bee83fe`; signals2 has been effectively frozen for years, but the version is
 recorded here so a future re-measure can be compared honestly.
 
-**What this run did not do.** No optimisation was attempted, and no threshold in
+**The P11 decomposition** used a scratch benchmark that destroyed N objects with and without a
+connection, and with the receivers sharing one signal or holding one each. It is not committed: it
+measures internals rather than the public shape, and it exists in this document as numbers rather
+than as a test somebody has to keep passing. `bestOf(5)` throughout.
+
+**The P11 fixes were verified under ThreadSanitizer**, not only in release — both touch threading
+(a new atomic flag, and a diagnostic moved inside the affinity mutex), so a release-only pass would
+not have been evidence. 180/180 clean, no race reports.
+
+**What this run did not do.** No threshold in
 `test_QtLikeSignal_Regression.cpp` or the Qt 6 timing guards was changed — all of them still pass
 with the corrected numbers, the loosest of them (`ConnectKeepsUpWithQt6`, barred at 6x) now sitting
 at about 1.3x. All 28 tests in the performance binary pass, as do `QtLikeSignal-Tests` (180/180) and
