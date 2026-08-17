@@ -882,6 +882,15 @@ namespace QtMimic
         //! every destruction, including for the objects -- most of them -- that never used either
         //! feature. Qt guards the same call the same way: `if (d->postedEvents)` in ~QObject().
         std::atomic<bool> mMayHaveQueuedWork { false };
+
+        //! True once this object has started a timer, so ~Object() knows whether mRunningTimerIds
+        //! can possibly hold anything.
+        //!
+        //! The third flag of the same set-once family, and there for the same reason as the other
+        //! two: the destructor took mRunningTimerIdsMutex unconditionally, so every object that
+        //! never owned a timer -- nearly all of them -- paid an uncontended lock and unlock to swap
+        //! an empty vector.
+        std::atomic<bool> mUsedTimers { false };
         //! This object's descriptive name.
         //!
         //! Deliberately unguarded, matching QObject, whose objectName() has no locking either. A
