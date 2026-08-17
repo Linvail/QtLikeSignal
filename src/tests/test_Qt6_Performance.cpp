@@ -3,8 +3,8 @@
 
 //! @file
 //!
-//! Dispatch-overhead benchmarks for Qt 6 itself, run alongside the QtLikeSignal and QtMimic ones so
-//! all three appear in a single comparison table.
+//! Dispatch-overhead benchmarks for Qt 6 itself, run alongside the QtLikeSignal, QtMimic and
+//! boost::signals2 ones so every library appears in a single comparison table.
 //!
 //! Qt is the thing this project is imitating, so it is the reference the other two should be read
 //! against. The scenarios, iteration counts and timing code are shared through PerfHarness.hpp, and
@@ -25,7 +25,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <thread>
+#include <vector>
 
 namespace
 {
@@ -190,6 +192,42 @@ TEST( Performance, Qt6_QueuedEmitCrossThread )
     // receiver afterwards, with no loop left that could be dispatching to it.
     worker.quit();
     worker.wait();
+}
+
+//! Measures destroying N receivers that are all connected to one long-lived sender.
+//!
+//! Qt's number is the one to beat here rather than merely to match: ~QObject unlinks each incoming
+//! connection through the sender's list in O(1), which is the design our own teardown was rewritten
+//! towards in P7.
+TEST( Performance, Qt6_TeardownAtScale )
+{
+    Qt6PerfSender sender;
+    long long received = 0;
+
+    std::vector<std::unique_ptr<Qt6PerfReceiver> > receivers;
+    receivers.reserve( PerfHarness::kTeardownResident );
+    for( int i = 0; i < PerfHarness::kTeardownResident; ++i )
+    {
+        receivers.push_back( std::unique_ptr<Qt6PerfReceiver>( new Qt6PerfReceiver() ) );
+        QObject::connect( &sender, &Qt6PerfSender::fired, receivers.back().get(),
+            [&received]( int aValue )
+            {
+                received += aValue;
+            }, Qt::DirectConnection );
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    receivers.clear();
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
+    PerfHarness::record( "destroy N receivers", "Qt6",
+        std::chrono::duration<double, std::nano>( elapsed ).count()
+            / PerfHarness::kTeardownResident );
+
+    // Proves the destructors really did disconnect, so the row above is not the time to destroy
+    // N objects that were never attached to anything.
+    sender.fire( 1 );
+    EXPECT_EQ( received, 0 );
 }
 
 // -------------------------------------------------------------------------------------------

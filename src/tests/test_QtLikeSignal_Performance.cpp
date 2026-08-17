@@ -3,8 +3,8 @@
 
 //! @file
 //!
-//! Dispatch-overhead benchmarks for QtLikeSignal, measured against QtMimic and, where Qt 6 is
-//! installed, against Qt itself.
+//! Dispatch-overhead benchmarks for QtLikeSignal, measured against QtMimic and -- where they are
+//! installed -- against Qt 6 and boost::signals2.
 //!
 //! Covers the whole path a signal travels -- connect, emit, receive -- rather than any one function,
 //! so the numbers say what a user actually pays. Both libraries run the same scenarios with the same
@@ -20,8 +20,13 @@
 //!   ./waf install --project=Tests --mode=release
 //! @endcode
 //!
-//! The Qt 6 rows come from test_Qt6_Performance.cpp, which is compiled into this same binary when
-//! Qt 6 is found, so all three libraries are measured in one process on one machine.
+//! The Qt 6 rows come from test_Qt6_Performance.cpp and the boost ones from
+//! test_Boost_Performance.cpp, each compiled into this same binary when its library is found, so
+//! every column is measured in one process on one machine. Both are Linux-only; a Windows build
+//! reports the two columns it can.
+//!
+//! boost fills fewer rows than the others, because signals2 has no thread affinity and no event
+//! loop. See test_Boost_Performance.cpp for why those rows are left blank rather than redefined.
 //!
 //! These are microbenchmarks with no work between iterations, which is the condition most flattering
 //! to fixed per-emit overhead. Treat the ratios as meaningful and the absolute nanoseconds as
@@ -46,12 +51,15 @@
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <memory>
 #include <thread>
+#include <vector>
 
 using PerfHarness::keep;
 using PerfHarness::kConnectOps;
 using PerfHarness::kDirectOps;
 using PerfHarness::kQueuedOps;
+using PerfHarness::kTeardownResident;
 using PerfHarness::record;
 using PerfHarness::timeLoop;
 
@@ -177,6 +185,45 @@ TEST( Performance, QtLikeSignal_QueuedEmitCrossThread )
     worker.wait();
 }
 
+//! Measures destroying N receivers that are all connected to one long-lived signal.
+//!
+//! The scenario P7 was found in, kept in the comparison table because it is the one operation where
+//! the boost we replaced is still ahead of us. Teardown is quadratic if a disconnect has to search
+//! the signal's slot list, and quadratic again if it has to search the receiver's own list, so this
+//! row is where both of those come back if either regresses.
+//!
+//! Only the teardown is timed. Connecting is setup, and timing it too would blur what this measures.
+TEST( Performance, QtLikeSignal_TeardownAtScale )
+{
+    using namespace QtLikeSignal;
+
+    Signal<int> sig;
+    long long received = 0;
+
+    std::vector<std::unique_ptr<Object> > receivers;
+    receivers.reserve( kTeardownResident );
+    for( int i = 0; i < kTeardownResident; ++i )
+    {
+        receivers.push_back( std::unique_ptr<Object>( new Object() ) );
+        Object::connect( sig, receivers.back().get(), [&received]( int aValue )
+            {
+                received += aValue;
+            }, ConnectionType::Direct );
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    receivers.clear();
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
+    record( "destroy N receivers", "QtLikeSignal",
+        std::chrono::duration<double, std::nano>( elapsed ).count() / kTeardownResident );
+
+    // Proves the destructors really did disconnect, so the row above is not the time to destroy
+    // N objects that were never attached to anything.
+    sig.emit( 1 );
+    EXPECT_EQ( received, 0 );
+}
+
 // =================================================================================================
 // QtMimic
 // =================================================================================================
@@ -283,6 +330,34 @@ TEST( Performance, QtMimic_QueuedEmitCrossThread )
     worker.wait();
 }
 
+//! Measures destroying N receivers that are all connected to one long-lived signal.
+TEST( Performance, QtMimic_TeardownAtScale )
+{
+    QtMimic::Signal<int> sig;
+    long long received = 0;
+
+    std::vector<std::unique_ptr<QtMimic::Object> > receivers;
+    receivers.reserve( kTeardownResident );
+    for( int i = 0; i < kTeardownResident; ++i )
+    {
+        receivers.push_back( std::unique_ptr<QtMimic::Object>( new QtMimic::Object() ) );
+        QtMimic::Object::connect( sig, receivers.back().get(), [&received]( int aValue )
+            {
+                received += aValue;
+            }, QtMimic::ConnectionType::Direct );
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    receivers.clear();
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
+    record( "destroy N receivers", "QtMimic",
+        std::chrono::duration<double, std::nano>( elapsed ).count() / kTeardownResident );
+
+    sig.emit( 1 );
+    EXPECT_EQ( received, 0 );
+}
+
 // =================================================================================================
 
 //! Prints the comparison table once every scenario has run.
@@ -308,9 +383,12 @@ int main
 {
     ::testing::InitGoogleTest( &aArgc, aArgv );
 
-    // Before anything is timed, not between tests: the allocator state it settles is process-wide
-    // and one-way, so it has to be established while every library is still unmeasured.
+    // Before anything is timed, not between tests: the state these settle is process-wide and
+    // one-way, so it has to be established while every library is still unmeasured. Without them
+    // the table charges whichever library ran first for putting the process into the state every
+    // later measurement enjoys.
     PerfHarness::settleAllocatorState();
+    PerfHarness::settleHeap();
 
     ::testing::AddGlobalTestEnvironment( new SummaryPrinter() );
     return RUN_ALL_TESTS();

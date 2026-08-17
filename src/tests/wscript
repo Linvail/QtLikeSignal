@@ -28,6 +28,30 @@ def _find_qt6(bld):
     return {"moc": moc, "include": include, "lib": lib}
 
 
+# Where boost's headers may be. boost::signals2 is header-only, so this is a header path and nothing
+# is ever linked from it -- `sudo apt install libboost-dev` is the whole dependency, and no boost
+# submodule or bootstrap comes back with it. See bee83fe for why that matters.
+BOOST_INCLUDE_CANDIDATES = ["/usr/include", "/usr/local/include"]
+
+
+def _find_boost(bld):
+    """
+    Locate boost's headers for the boost::signals2 benchmarks.
+
+    Returns a dict of paths, or None when boost is unavailable. Linux-only for the same reason
+    _find_qt6 is: the comparison table is only meaningful where every column can be produced in one
+    process, and the Qt 6 column is native-Linux only.
+    """
+    if bld.env.DEST_OS != "linux":
+        return None
+
+    for include in BOOST_INCLUDE_CANDIDATES:
+        if os.path.exists(os.path.join(include, "boost", "signals2", "signal.hpp")):
+            return {"include": include}
+
+    return None
+
+
 def build(bld):
     kw = {}
     kw["features"] = ["cxx", "cxxprogram", "debug-info"]
@@ -39,6 +63,7 @@ def build(bld):
             "test_QtLikeSignal_Performance.cpp",
             "test_QtLikeSignal_Regression.cpp",
             "test_Qt6_Performance.cpp",
+            "test_Boost_Performance.cpp",
             "PerfAllocationCounter.cpp",
         ],
     )
@@ -93,6 +118,25 @@ def build(bld):
         bld.msg(
             "Qt 6 performance benchmarks",
             "skipped (no Qt 6 at %s)" % QT6_PREFIX,
+            color="YELLOW",
+        )
+
+    boost = _find_boost(bld)
+    if boost:
+        # Appended last on purpose. printSummary() makes whichever library recorded first the
+        # baseline the ratio columns are expressed against, and registration order across
+        # translation units follows link order, so keeping this after the others leaves QtLikeSignal
+        # as the baseline it has always been.
+        kw["source"] += ["test_Boost_Performance.cpp"]
+        # /usr/include is already on the compiler's search path, and passing it as -I moves it ahead
+        # of the toolchain's own directories, which breaks the #include_next chain libstdc++ relies
+        # on. Only a non-default prefix needs saying out loud.
+        if boost["include"] != "/usr/include":
+            kw["includes"] += [boost["include"]]
+    else:
+        bld.msg(
+            "boost::signals2 performance benchmarks",
+            "skipped (no boost headers; apt install libboost-dev)",
             color="YELLOW",
         )
 
