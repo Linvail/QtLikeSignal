@@ -23,6 +23,10 @@ namespace QtMimic
     class Connection;
     class Object;
 
+    //! An Object's thread-affinity box, which also carries the flag saying whether that Object is
+    //! still alive. Declared here because a connection node holds one; defined in ThreadData.hpp.
+    class Affinity;
+
     namespace Private
     {
         class SignalImplBase;
@@ -47,11 +51,11 @@ namespace QtMimic
                 (
                 std::weak_ptr<SignalImplBase> aImpl,  //!< The signal that owns the connection.
                 Object* aOwner,                       //!< Receiver keeping it incoming, or null.
-                std::weak_ptr<int> aLife              //!< Receiver's life token; expired means gone.
+                std::shared_ptr<Affinity> aOwnerLife  //!< Receiver's affinity box, which carries its life flag.
                 )
                 : mImpl( std::move( aImpl ) )
                 , mOwner( aOwner )
-                , mLife( std::move( aLife ) )
+                , mOwnerLife( std::move( aOwnerLife ) )
             {
             }
 
@@ -114,8 +118,15 @@ namespace QtMimic
             //! put it back. Set by pruneReceiver() and by ~Object(). Guarded the same way.
             bool mIncomingDone { false };
 
-            Object* mOwner;             //!< Receiver keeping this node incoming, or null.
-            std::weak_ptr<int> mLife;   //!< Receiver's life token; expired means it is gone.
+            Object* mOwner;   //!< Receiver keeping this node incoming, or null.
+
+            //! The receiver's affinity box, which carries the flag ~Object() clears. Null when there
+            //! is no receiver.
+            //!
+            //! Strong, where the life token it replaced was weak, and that costs nothing: the slot
+            //! this node belongs to already holds the same box, and both are owned by the same
+            //! Signal. The box is a few dozen bytes and is designed to outlive its Object.
+            std::shared_ptr<Affinity> mOwnerLife;
 
             //! This node's place in the receiver's list, which is what makes both linking and
             //! unlinking O(1) and costs no allocation of its own.

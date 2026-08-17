@@ -190,11 +190,12 @@ TEST( ObjectTest, ObjectNameAndThreadAffinity )
 
 //! Tests weak life token tracking for object destruction.
 //!
-//! Verifies Object::objectLife() returns a valid weak pointer during the lifetime of Object
-//! and expires upon object destruction.
+//! Verifies Object::objectLife() returns a token that reports the object alive during its
+//! lifetime and expired once it has been destroyed, including after the Object itself is gone.
 TEST( ObjectTest, ObjectLifeToken )
 {
-    std::weak_ptr<int> lifeToken;
+    ObjectLife lifeToken;
+    EXPECT_TRUE( lifeToken.expired() ) << "a token naming no object reports expired";
     {
         Object obj;
         lifeToken = obj.objectLife();

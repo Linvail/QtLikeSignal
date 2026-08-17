@@ -3,10 +3,12 @@
 boost::signals2 is back in the comparison table, as a fourth column measured in the same process as
 the other three. Items are `P<n>`, continuing the numbering from `PERFORMANCE-20260813.md`.
 
-This snapshot adds no optimisation to the library. It adds a **measurement**, corrects a figure that
-`PERFORMANCE-20260813.md` states more favourably than the evidence supports, and fixes two defects
-in the benchmark harness — one of which had been quietly distorting the `connect()` row for as long
-as that row has existed.
+It adds a **measurement**, corrects a figure that `PERFORMANCE-20260813.md` states more favourably
+than the evidence supports, fixes two defects in the benchmark harness — one of which had been
+quietly distorting the `connect()` row for as long as that row has existed — and then acts on what
+the corrected measurement showed, taking three costs out of `Object` that bought nothing.
+
+Written 2026-08-17 and extended 2026-08-18 with the P11 work.
 
 How every figure below was produced is at the end, under
 [How these were measured](#how-these-were-measured). Read it before quoting a number.
@@ -15,7 +17,7 @@ How every figure below was produced is at the end, under
 
 | ID | Status | Finding | Impact | Latest measurement |
 |----|--------|---------|--------|--------------------|
-| P11 | **In progress** | Teardown against *raw* boost::signals2 is ~3x, not the 1.35x recorded on 2026-08-13 | Medium | 258.6 → **246.4 ns** per receiver; bare `~Object()` 110.6 → **86.8 ns**. Qt 6 gap 2.02x → **1.54x** |
+| P11 | **In progress** | Teardown against *raw* boost::signals2 is ~3x, not the 1.35x recorded on 2026-08-13 | Medium | Teardown 258.6 → **246.4 ns**; bare `~Object()` 110.6 → **86.8 ns**; Qt 6 gap 2.02x → **1.54x**. Object construction 84 → **62 ns**, one allocation fewer |
 | P12 | **Fixed** | The summary table's ratio baseline was whichever library linked first, so adding a fourth benchmark file silently inverted every ratio | High (in the tool) | Baseline is now named, not inferred |
 | P13 | **Fixed** | The first allocation-heavy test in a process paid for heap growth, and the `connect()` row charged it to whichever library ran first | High (in the tool) | boost's connect **358.3 → 190.7 ns**; our advantage over boost on that row was overstated by 1.7x |
 
@@ -72,7 +74,7 @@ equivalent. An "auto" row would re-measure the direct row, and a "queued" row wo
 our event loop and would then be measuring our queue. `test_Boost_Performance.cpp` says the same at
 greater length.
 
-## P11 — teardown against raw boost is ~3x, not 1.35x *(Open)*
+## P11 — teardown against raw boost is ~3x, not 1.35x *(In progress)*
 
 `PERFORMANCE-20260813.md` (P7) records, after the quadratic teardown was fixed:
 
@@ -150,18 +152,62 @@ buffer that replaced it. **Reverted.** Recorded here because "remove the allocat
 next idea and it is wrong: on this path the allocation count and the time do not move together, and
 the allocation guards next door would have called this a win.
 
+### The life token merged into the affinity box
+
+Every `Object` carried **two** separately allocated boxes — `mLife`, a `shared_ptr<int>` life token,
+and `mAffinity` — where Qt allocates one `QObjectPrivate`. The two had identical lifetime
+requirements: both had to outlive the Object, and both were captured by the same closures. Keeping
+them apart cost an allocation, a free, and a second sixteen-byte capture in every connection, all to
+carry one bit.
+
+Done 2026-08-18. The flag now lives in the affinity box as `Affinity::isObjectAlive()` /
+`markObjectDead()`, a plain atomic load where the old check was `weak_ptr::expired()`.
+
+| | before | after |
+|---|---|---|
+| allocations per `Object` construction | 3.003 | **2.002** |
+| `Object` construction | 81.2–88.4 ns | **58.7–66.6 ns** |
+| teardown per receiver | ~250 ns | ~250 ns, unchanged |
+
+**The saving is at construction, not teardown**, which is worth stating plainly because teardown is
+the row that motivated the work. The allocation happens when the Object is built; the matching free
+is a tcache push cheap enough to vanish under everything else the destructor does. This is the third
+time in this document that removing an allocation did not move the time it was expected to
+(see P13, and the reverted stack buffer above) — on these paths the allocation count and the clock
+are close to independent, and each has to be measured on its own.
+
+Measured against QtMimic as an in-process control, before it was ported, interleaved run by run so
+neither library got the warmer half: 22 ns apart, same direction every run, well outside the ±10%
+these two normally differ by.
+
+**No feature was given up.** `Object::objectLife()` is public and had a test, so it keeps working: it
+returns an `ObjectLife` token instead of a `std::weak_ptr<int>`. The one operation callers ever used,
+`expired()`, is unchanged, and the token still outlives the Object. Only the type's name changed,
+which is an improvement in itself — the old signature leaked `shared_ptr<int>`, an implementation
+detail, into the public interface.
+
+**Verified harder than anything else in this document**, because it rewrites the mechanism every
+queued connection depends on for its use-after-free safety: ThreadSanitizer and AddressSanitizer,
+both libraries, all from clean builds.
+
+### A build trap this change sets
+
+Removing `mLife` changes `sizeof(Object)` and the offset of every member after it. An **incremental**
+build that leaves one translation unit compiled against the old layout produces a binary that
+crashes with an access violation — order-dependent, and disappearing under a sanitizer, which is the
+most misleading combination a bug can have. That happened here on win64-msvc, reproducibly across
+three runs, and vanished entirely on `waf clean` followed by a full rebuild.
+
+Not a defect in the change, but recorded because the symptom is alarming and the cause is not
+obvious: anyone pulling this wants a clean build first, and anyone bisecting across it should not
+trust an incremental one.
+
 ### Left open
 
-The remaining gap to Qt 6 is ~1.5x on this row. The largest identified item is that every `Object`
-carries **two** separately allocated boxes — `mLife` (a `shared_ptr<int>` life token) and `mAffinity`
-— where Qt allocates one `QObjectPrivate`. Merging the life token into the affinity box would save
-one allocation per construction and one free per destruction without losing anything: connections
-already capture `shared_ptr<Affinity>`, and an atomic flag inside it answers the same question
-`weak_ptr::expired()` answers now.
-
-**Not attempted here.** It rewrites the lifetime mechanism that every queued connection depends on
-for its use-after-free safety, which is the one part of this library where a subtle mistake does not
-announce itself. It wants its own change, its own review, and a TSan run of its own.
+The remaining gap to Qt 6 on the teardown row is ~1.5x, and nothing identified accounts for it in one
+piece. What is left is spread across a mutex per disconnect, a `weak_ptr` upgrade to reach the
+signal, and the frees of the connection node and the slot — each of which buys something, and none
+of which is obviously the next thing to attack.
 
 ## P12 — the summary table's ratio baseline followed link order *(Fixed)*
 

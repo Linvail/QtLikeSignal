@@ -73,7 +73,7 @@ namespace QtMimic
             (
             Callable&& aSlot,          //!< The callable slot function.
             Object* aOwner,            //!< Receiver whose incoming list to keep.
-            std::weak_ptr<int> aLife   //!< That receiver's life token.
+            std::shared_ptr<Affinity> aOwnerLife   //!< That receiver's affinity box, carrying its life flag.
             );
 
         Signal<Args...>& mSignal;
@@ -154,7 +154,7 @@ namespace QtMimic
             )
         {
             return mImpl->connect( std::forward<Callable>( aSlot ), mImpl, nullptr,
-                std::weak_ptr<int>() );
+                std::shared_ptr<Affinity>() );
         }
 
         //! Disconnects a connection by handle. Thread-safe.
@@ -226,11 +226,11 @@ namespace QtMimic
             (
             Callable&& aSlot,          //!< The callable slot function.
             Object* aOwner,            //!< Receiver whose incoming list to keep.
-            std::weak_ptr<int> aLife   //!< That receiver's life token.
+            std::shared_ptr<Affinity> aOwnerLife   //!< That receiver's affinity box, carrying its life flag.
             )
         {
             return mImpl->connect( std::forward<Callable>( aSlot ), mImpl, aOwner,
-                std::move( aLife ) );
+                std::move( aOwnerLife ) );
         }
 
         //! The callable half of a connection, with its concrete type erased behind one virtual
@@ -355,11 +355,11 @@ namespace QtMimic
                 Callable&& aSlot,
                 const std::shared_ptr<Impl>& aSelf,
                 Object* aOwner,
-                std::weak_ptr<int> aLife
+                std::shared_ptr<Affinity> aOwnerLife
                 )
             {
                 auto node = std::make_shared<Private::ConnectionNode>( aSelf, aOwner,
-                    std::move( aLife ) );
+                    std::move( aOwnerLife ) );
                 auto slot = std::make_shared<SlotImpl<std::decay_t<Callable> > >(
                     std::forward<Callable>( aSlot ), node );
 
@@ -611,10 +611,10 @@ namespace QtMimic
         (
         Callable&& aSlot,          //!< The callable slot function.
         Object* aOwner,            //!< Receiver whose incoming list to keep.
-        std::weak_ptr<int> aLife   //!< That receiver's life token.
+        std::shared_ptr<Affinity> aOwnerLife   //!< That receiver's affinity box, carrying its life flag.
         )
     {
-        return mSignal.connect( std::forward<Callable>( aSlot ), aOwner, std::move( aLife ) );
+        return mSignal.connect( std::forward<Callable>( aSlot ), aOwner, std::move( aOwnerLife ) );
     }
 }
 

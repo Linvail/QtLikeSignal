@@ -126,8 +126,7 @@ namespace QtLikeSignal
         (
         std::shared_ptr<ThreadData> aThreadData  //!< Affinity to start with; may be null.
         )
-        : mLife( std::make_shared<int>( 0 ) )
-        , mAffinity( std::make_shared<Affinity>( std::move( aThreadData ) ) )
+        : mAffinity( std::make_shared<Affinity>( std::move( aThreadData ) ) )
     {
     }
 
@@ -178,16 +177,20 @@ namespace QtLikeSignal
                 "deleteLater() to destroy an object from another thread.\n" );
         }
 
-        // Invalidate the life token first. connect()/callLater() wrappers running on other threads
-        // check objectLife().lock() before posting a call to this object; resetting mLife up front
-        // shrinks the window in which such a wrapper can still observe this object as "alive" to
-        // the check-then-post race itself, instead of the whole destructor body (which below runs
-        // arbitrary user cleanup-callback code).
+        // Invalidate the life flag first. connect()/callLater() wrappers running on other threads
+        // check it before posting a call to this object; clearing it up front shrinks the window in
+        // which such a wrapper can still observe this object as "alive" to the check-then-post race
+        // itself, instead of the whole destructor body (which below runs arbitrary user
+        // cleanup-callback code).
         //
         // Doing it before the disconnect loop below is also what keeps that loop re-entrancy-free:
-        // disconnect() reaches pruneReceiver(), which checks this very token and bails out rather
+        // disconnect() reaches pruneReceiver(), which checks this very flag and bails out rather
         // than asking for mIncomingMutex while we are already tearing the list down.
-        mLife.reset();
+        //
+        // The flag lives in the affinity box rather than in a shared_ptr<int> of its own; see
+        // Affinity::isObjectAlive(). The box outlives us, which is exactly what a life token has to
+        // do, so it was already the right place for it.
+        mAffinity->markObjectDead();
 
         // Disconnect every connection where this object is the receiver, so the sender stops
         // holding a slot that can never do anything again. The life token above already makes such
@@ -694,8 +697,8 @@ namespace QtLikeSignal
 
         if( isNew )
         {
-            std::weak_ptr<int> weakLife = aContext->objectLife();
-            auto metaCall = [aKey, node, weakLife]()
+            std::shared_ptr<Affinity> ctxAffinity = aContext->mAffinity;
+            auto metaCall = [aKey, node, ctxAffinity]()
                 {
                     std::function<void()> fnToRun;
                     {
@@ -708,9 +711,8 @@ namespace QtLikeSignal
                     }
                     if( fnToRun )
                     {
-                        // expired(), not lock(): see objectLife(). Equally safe, and a plain
-                        // load rather than an atomic read-modify-write.
-                        if( !weakLife.expired() )
+                        // A plain atomic load; see Affinity::isObjectAlive().
+                        if( ctxAffinity->isObjectAlive() )
                         {
                             fnToRun();
                         }
@@ -955,7 +957,7 @@ namespace QtLikeSignal
     {
         // No receiver, or one already being destroyed. Signal::connect() takes the first branch:
         // a slot subscribed without an Object has no incoming list to appear in.
-        if( mOwner == nullptr || mLife.expired() )
+        if( mOwner == nullptr || !mOwnerLife || !mOwnerLife->isObjectAlive() )
         {
             return;
         }
@@ -984,9 +986,9 @@ namespace QtLikeSignal
     {
         // The receiver is gone or already being destroyed; ~Object() has taken the list over and
         // touching mOwner here would be a use-after-free. This is also what makes ~Object()'s own
-        // disconnect loop non-re-entrant: it resets the life token before disconnecting, so this
+        // disconnect loop non-re-entrant: it clears the life flag before disconnecting, so this
         // returns before it can ask for a mutex ~Object() is holding.
-        if( mOwner == nullptr || mLife.expired() )
+        if( mOwner == nullptr || !mOwnerLife || !mOwnerLife->isObjectAlive() )
         {
             return;
         }

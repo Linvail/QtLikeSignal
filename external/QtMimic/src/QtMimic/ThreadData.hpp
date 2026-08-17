@@ -160,9 +160,9 @@ namespace QtMimic
     //! at EMIT time (that is what makes moveToThread() affect connections made before it), but the
     //! receiver may be destroyed concurrently, and disconnect() does not wait
     //! for an in-flight emit -- so reading thread()/threadData() straight off the receiver Object is
-    //! a use-after-free. The connect() wrapper's weak_ptr<int> life-token check narrows that window
-    //! but does not close it: a successful lock() only proves ~Object() had not yet reached
-    //! mLife.reset() at the moment of the check, not that it cannot start immediately afterward,
+    //! a use-after-free. The connect() wrapper's life-token check narrows that window but does not
+    //! close it: seeing the object alive only proves ~Object() had not yet reached
+    //! markObjectDead() at the moment of the check, not that it cannot start immediately afterward,
     //! concurrently with this thread going on to dereference the receiver's own members.
     //!
     //! The box breaks that dependency: connect() captures a shared_ptr<Affinity> at CONNECT time,
@@ -197,6 +197,34 @@ namespace QtMimic
         {
             std::lock_guard<std::mutex> locker( mMutex );
             return mData;
+        }
+
+        //! @return false once ~Object() has begun on the object this box describes.
+        //!
+        //! The life token, folded into the box that already had to exist. It used to be a separate
+        //! `std::shared_ptr<int>` on the Object, read through a `weak_ptr` -- a second heap block
+        //! per Object, a second free per destruction, and a second capture in the closure of every
+        //! connection, all to carry one bit. This box was already allocated, already captured by
+        //! those same closures, and already outlives the Object by design.
+        //!
+        //! A plain atomic load, and deliberately nothing that hands back a strong reference. What
+        //! it answers is "had destruction begun at the instant of the check", which is exactly what
+        //! `weak_ptr::expired()` answered before it -- and, as before, neither closes the
+        //! check-then-use race that follows. What actually stops a destroyed receiver being called
+        //! is ~Object() disconnecting its incoming connections and stripping its queued events.
+        bool isObjectAlive() const
+        {
+            return mObjectAlive.load( std::memory_order_acquire );
+        }
+
+        //! Records that the object this box describes is being destroyed.
+        //!
+        //! Called once, at the top of ~Object(), before anything that can run user code. Release
+        //! ordering so that a reader seeing `false` also sees everything the destructor did before
+        //! saying so.
+        void markObjectDead()
+        {
+            mObjectAlive.store( false, std::memory_order_release );
         }
 
         //! @return true when this affinity names a *running* thread that is not @p aCaller.
@@ -234,6 +262,12 @@ namespace QtMimic
         //! any other. The same reason QObject keeps its threadData in a QAtomicPointer.
         mutable std::mutex mMutex;
         std::shared_ptr<ThreadData> mData;
+
+        //! False once ~Object() has begun on the object this box describes. See isObjectAlive().
+        //!
+        //! Outside mMutex on purpose: it is written once and read constantly, by closures that have
+        //! no other reason to touch the mutex. An atomic keeps that read a load rather than a lock.
+        std::atomic<bool> mObjectAlive { true };
     };
 
 } // namespace QtMimic

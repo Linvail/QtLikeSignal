@@ -193,13 +193,19 @@ TEST( ObjectTest, ObjectNameAndThreadAffinity )
     EXPECT_EQ( obj.thread(), &dummyThread );
 }
 
-//! Tests weak life token tracking for object destruction.
+//! Tests life token tracking for object destruction.
 //!
-//! Verifies Object::objectLife() returns a valid weak pointer during the lifetime of Object
-//! and expires upon object destruction.
+//! Verifies Object::objectLife() returns a token that reports the object alive during its lifetime
+//! and expired once it has been destroyed -- including, as the token outliving the scope below
+//! shows, after the Object itself is gone.
+//!
+//! The token was a std::weak_ptr<int> until 2026-08-18, when the life flag moved into the affinity
+//! box that every connection already holds. Only the type's name changed; expired() is what callers
+//! ever used and is what this asserts.
 TEST( ObjectTest, ObjectLifeToken )
 {
-    std::weak_ptr<int> lifeToken;
+    ObjectLife lifeToken;
+    EXPECT_TRUE( lifeToken.expired() ) << "a token naming no object reports expired";
     {
         Object obj;
         lifeToken = obj.objectLife();
