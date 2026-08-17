@@ -4,6 +4,8 @@
 //! "I want to receive OS/platform's messages. 100% cpu-spin is not allowed."
 //!
 //! The whole file is Linux-only; it compiles to nothing elsewhere so the cross-build stays clean.
+//!
+//! Copyright 2026 by Garmin Ltd. or its subsidiaries.
 
 #if defined( __linux__ )
 

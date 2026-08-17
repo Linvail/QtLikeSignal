@@ -9,6 +9,8 @@
 //!
 //! Four of them matter, and they are the four ForAI/mission-signal.md identified as the reason
 //! replacing boost::signals2 was delicate. Each one fails silently rather than at compile time.
+//!
+//! Copyright 2026 by Garmin Ltd. or its subsidiaries.
 
 #include "QtMimic-test-types.hpp"
 

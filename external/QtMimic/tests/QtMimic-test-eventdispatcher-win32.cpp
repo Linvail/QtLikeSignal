@@ -12,6 +12,8 @@
 //! file is reached. What none of them touch is the part of processPlatformEvents() that deals with
 //! a message the dispatcher did not send itself: TranslateMessage/DispatchMessage, and the WM_QUIT
 //! branch. That is what these tests are for.
+//!
+//! Copyright 2026 by Garmin Ltd. or its subsidiaries.
 
 #if defined( _WIN32 )
 
@@ -114,7 +116,7 @@ namespace
             ) const
         {
             std::lock_guard<std::mutex> lock( mMutex );
-            int                         count = 0;
+            int count = 0;
             for( const auto& received : mReceived )
             {
                 if( received.mMessage == aMessage )
@@ -152,7 +154,7 @@ namespace
         //! One message as the window procedure saw it.
         struct Received
         {
-            UINT   mMessage;   //!< Message id.
+            UINT mMessage;     //!< Message id.
             WPARAM mWParam;    //!< Its first parameter.
         };
 
@@ -196,8 +198,8 @@ namespace
             return DefWindowProc( aWindow, aMessage, aWParam, aLParam );
         }
 
-        HWND                  mWindow { nullptr };   //!< The message-only window, or nullptr.
-        mutable std::mutex    mMutex;                //!< Guards mReceived.
+        HWND mWindow { nullptr };                    //!< The message-only window, or nullptr.
+        mutable std::mutex mMutex;                   //!< Guards mReceived.
         std::vector<Received> mReceived;             //!< Every message the procedure saw, in order.
         std::atomic<Thread*>  mRanOn { nullptr };    //!< Thread the procedure last ran on.
     };
@@ -280,8 +282,8 @@ namespace
         //! How long each sleep slice is, and so how promptly a cancel is noticed.
         static constexpr int kSliceMs = 5;
 
-        DWORD             mLoopThreadId;            //!< Thread whose message queue to poke on firing.
-        std::thread       mThread;                  //!< Runs the deadline.
+        DWORD mLoopThreadId;                        //!< Thread whose message queue to poke on firing.
+        std::thread mThread;                        //!< Runs the deadline.
         std::atomic<bool> mCancelled { false };     //!< Set by the destructor to end mThread early.
         std::atomic<bool> mFired { false };         //!< Set when the deadline expired and quit ran.
     };
@@ -296,7 +298,7 @@ namespace
 TEST( EventDispatcherWin32Test, PostedWindowMessageIsDispatchedToItsWindowProc )
 {
     CoreApplication app;
-    auto            dispatcher = currentWin32Dispatcher();
+    auto dispatcher = currentWin32Dispatcher();
     ASSERT_NE( dispatcher, nullptr ) << "the main thread should be running EventDispatcherWin32";
 
     TestMessageWindow window;
@@ -344,7 +346,7 @@ TEST( EventDispatcherWin32Test, KeyDownIsTranslatedIntoACharacterMessage )
 
     // Scan code in bits 16-23 and a repeat count of 1, as a real key-down carries. TranslateMessage
     // consults the scan code, so a bare wParam is not enough to rely on.
-    const UINT   scanCode = MapVirtualKey( 'A', MAPVK_VK_TO_VSC );
+    const UINT scanCode = MapVirtualKey( 'A', MAPVK_VK_TO_VSC );
     const LPARAM keyParam = static_cast<LPARAM>( 1 | ( scanCode << 16 ) );
 
     std::thread poster( [&window, keyParam]()
@@ -384,7 +386,7 @@ TEST( EventDispatcherWin32Test, KeyDownIsTranslatedIntoACharacterMessage )
 TEST( EventDispatcherWin32Test, WmQuitEndsTheFollowingPassAndNotTheProcess )
 {
     CoreApplication app;
-    auto            dispatcher = currentWin32Dispatcher();
+    auto dispatcher = currentWin32Dispatcher();
     ASSERT_NE( dispatcher, nullptr );
 
     std::atomic<bool> firstTaskRan { false };
@@ -548,7 +550,7 @@ TEST( EventDispatcherWin32Test, AWorkerThreadDispatchesTheMessagesOfItsOwnWindow
 TEST( EventDispatcherWin32Test, WakeSurvivesAForeignMessageLoopDrainingTheQueue )
 {
     CoreApplication app;
-    auto            dispatcher = currentWin32Dispatcher();
+    auto dispatcher = currentWin32Dispatcher();
     ASSERT_NE( dispatcher, nullptr );
 
     // 1. Cause a wakeup, so a wakeup message is queued and the collapse flag is set.
@@ -577,14 +579,14 @@ TEST( EventDispatcherWin32Test, WakeSurvivesAForeignMessageLoopDrainingTheQueue 
 
     // 4. The question: does a new post still reach a blocked loop?
     std::atomic<bool> secondRan { false };
-    std::thread       poster( [&secondRan]()
+    std::thread poster( [&secondRan]()
         {
             std::this_thread::sleep_for( std::chrono::milliseconds( 50 ) );
             CoreApplication::post( [&secondRan]()
-                {
-                    secondRan.store( true );
-                    CoreApplication::quit();
-                } );
+            {
+                secondRan.store( true );
+                CoreApplication::quit();
+            } );
         } );
 
     Watchdog watchdog( 5000 );
@@ -623,10 +625,10 @@ TEST( EventDispatcherWin32Test, IdleLoopWithAWindowDoesNotSpin )
     // Here the deadline is the point of the test rather than a safety net: the loop is meant to sit
     // idle for the whole of it, and this is what ends it.
     constexpr int kRunMs = 300;
-    Watchdog      watchdog( kRunMs );
+    Watchdog watchdog( kRunMs );
 
     const double cpuBefore  = TestSupport::processCpuSeconds();
-    const auto   wallBefore = std::chrono::steady_clock::now();
+    const auto wallBefore = std::chrono::steady_clock::now();
 
     EXPECT_EQ( app.exec(), 0 );
 

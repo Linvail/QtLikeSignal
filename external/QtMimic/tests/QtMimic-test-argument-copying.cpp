@@ -7,6 +7,8 @@
 //! bounded, so a regression shows up as a number rather than as a vague slowdown nobody notices.
 //!
 //! Modelled on QtMimic's DeepArgumentCopying tests, which cover the same contract for that library.
+//!
+//! Copyright 2026 by Garmin Ltd. or its subsidiaries.
 
 #include <gtest/gtest.h>
 #include "QtMimic/Object.hpp"

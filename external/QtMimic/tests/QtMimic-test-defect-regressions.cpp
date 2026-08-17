@@ -1,11 +1,7 @@
-// Regression tests for the defects found in the code review of technology/G* (see CHANGES.md /
-// the accompanying patch). Kept separate from test_gobject.cpp / test_gthread.cpp / test_gtimer.cpp
-// since these specifically target crash/UAF/leak/race scenarios rather than day-to-day API
-// behavior, and several of them are stress tests rather than single-shot deterministic checks --
-// see each test's doc comment for what it actually proves and how to get the strongest signal
-// out of it (most benefit from being run under AddressSanitizer and/or ThreadSanitizer; the build
-// enables one or the other, never both -- see tools/toolchain-linux.py -- so run it under each in
-// turn, since they catch disjoint classes of defect).
+//! @file
+//!
+//! Copyright 2026 by Garmin Ltd. or its subsidiaries.
+
 #include <gtest/gtest.h>
 #include "QtMimic/Object.hpp"
 #include "QtMimic/Thread.hpp"
