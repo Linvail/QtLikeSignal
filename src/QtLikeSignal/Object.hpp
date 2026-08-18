@@ -71,6 +71,48 @@ namespace QtLikeSignal
     //! True when T is void.
     template <typename T> constexpr bool is_void = std::is_same<void, T>::value;
 
+    //! A token that outlives the Object it came from, and says whether that Object still exists.
+    //!
+    //! What Object::objectLife() used to hand back as a `std::weak_ptr<int>`. The token is now the
+    //! Object's Affinity box, which already outlives it by design, rather than a second heap block
+    //! allocated for the purpose -- see Affinity::isObjectAlive(). Wrapped in a type of its own so
+    //! that the box stays an implementation detail and callers keep the one operation they ever
+    //! used, `expired()`.
+    //!
+    //! Copyable and default-constructible, like the `weak_ptr` it replaces. A default-constructed
+    //! token reports expired, since it names no object.
+    //!
+    //! Holding one keeps a small box alive; it does nothing whatsoever to stop the Object being
+    //! destroyed, which was equally true before. It answers exactly one question -- "had
+    //! destruction begun at the instant of the check" -- and does not close the check-then-use race
+    //! that follows it.
+    class ObjectLife
+    {
+    public:
+        ObjectLife() = default;
+
+        //! @return true once the Object this came from has begun destruction, or if this names no
+        //! object at all.
+        bool expired() const
+        {
+            return !mAffinity || !mAffinity->isObjectAlive();
+        }
+
+    private:
+        //! Wraps @p aAffinity. Only Object may mint a token.
+        explicit ObjectLife
+            (
+            std::shared_ptr<Affinity> aAffinity   //!< The object's affinity box.
+            )
+            : mAffinity( std::move( aAffinity ) )
+        {
+        }
+
+        std::shared_ptr<Affinity> mAffinity;   //!< The box carrying the flag; null when empty.
+
+        friend class Object;
+    };
+
     //! Base class for all objects participating in the signal-slot and event system.
     //!
     //! Derive from it and declare signals as public Signal<Args...> members, then connect them to
@@ -95,11 +137,11 @@ namespace QtLikeSignal
         //! Object is neither copyable nor movable.
         //!
         //! These are already deleted implicitly, because the class holds std::mutex members -- but
-        //! only by accident. Stating it makes the guarantee survive refactoring: mLife is a
-        //! shared_ptr, so a copy would raise its use count and ~Object()'s mLife.reset() would no
-        //! longer expire the token. Every connect()/callLater() wrapper's weakLife.lock() would keep
-        //! succeeding and invoke slots on a destroyed object -- a use-after-free reintroduced silently
-        //! by an unrelated change.
+        //! only by accident. Stating it makes the guarantee survive refactoring: a copy would share
+        //! one Affinity box between two Objects, so the first of them to be destroyed would mark
+        //! the box dead and silence every connection belonging to the other, while the second would
+        //! leave a box already reporting dead. Both halves of that are wrong, and neither announces
+        //! itself.
         Object
             (
             const Object&
@@ -171,23 +213,18 @@ namespace QtLikeSignal
             return mIncomingCount;
         }
 
-        //! Gets the weak pointer tracking the lifetime of this object. Thread-safe.
+        //! Gets a token tracking the lifetime of this object. Thread-safe.
         //!
-        //! Callers testing whether the object is still alive should use `expired()`, **not**
-        //! `lock()`. The two are equally safe here and `expired()` is far cheaper: it is a plain
-        //! load where `lock()` is an atomic read-modify-write on the control block.
-        // Measured at 0.25 ns against 17.1 ns, about 68x, which on the emit path was some 22% of a
-        // direct emit spent on nothing.
+        //! The token outlives the Object and reports `expired()` once destruction has begun, which
+        //! is the whole of what it is for. See ObjectLife, and Affinity::isObjectAlive() for why
+        //! the flag lives where it does.
         //!
-        //! Equally safe because the token is an `int`, not the Object. Holding the `shared_ptr`
-        //! that `lock()` returns keeps that `int` alive; it does nothing whatsoever to stop the
-        //! Object being destroyed a moment later. Both forms answer exactly one question -- "had
-        //! destruction begun at the instant of the check" -- and neither closes the check-then-use
-        //! race that follows it. What actually stops a destroyed receiver being called is
-        //! ~Object() disconnecting its incoming connections.
-        std::weak_ptr<int> objectLife() const
+        //! Returned a `std::weak_ptr<int>` until 2026-08-18, when the separate life-token
+        //! allocation was folded into the affinity box. The operation callers used, `expired()`, is
+        //! unchanged; only the type's name is.
+        ObjectLife objectLife() const
         {
-            return mLife;
+            return ObjectLife( mAffinity );
         }
 
         //! Connect Overload 1: Connects a signal to a non-overloaded member function slot.
@@ -754,13 +791,14 @@ namespace QtLikeSignal
                 return {};
             }
 
-            // A weak reference to the context's life token, so a queued invocation can be dropped
-            // if the receiver is destroyed before it runs.
-            std::weak_ptr<int> weakLife = aContext->objectLife();
-
             // The receiver's Affinity box, not a Thread* and not a snapshot of its ThreadData. The
             // box is resolved at emit time, so moveToThread() redirects even a connection made
             // before it, and it stays readable after the Object is destroyed.
+            //
+            // It is also the life token: the box carries the flag ~Object() clears, so a queued
+            // invocation can be dropped if the receiver is destroyed before it runs. That used to
+            // be a separate weak_ptr<int> captured alongside this one, which made every closure
+            // here sixteen bytes larger to carry a bit this box already had room for.
             std::shared_ptr<Affinity> ctxAffinity = aContext->mAffinity;
 
             // Generic in its arguments so one wrapper serves every signal signature. Taking them by
@@ -772,7 +810,7 @@ namespace QtLikeSignal
             // dispatchMetaCallTo() purely as the queue key that removeEventsForReceiver() later
             // matches on. ~Object() strips every event still queued for it before it goes away, so
             // the dispatcher never delivers to a dead receiver.
-            auto wrapper = [weakLife, aContext, slot = std::forward<Callable>( aSlot ), aType,
+            auto wrapper = [aContext, slot = std::forward<Callable>( aSlot ), aType,
                     ctxAffinity]( auto&&... aArgs )
                 {
                     if( aType == ConnectionType::Direct )
@@ -822,10 +860,10 @@ namespace QtLikeSignal
                     // MetaCallEvent, so the tuple is built once and never copied, and the second
                     // heap allocation the box cost is gone.
                     dispatchMetaCallTo( ctxData, aContext,
-                        [weakLife, slot,
+                        [ctxAffinity, slot,
                         argTuple = std::make_tuple( std::forward<decltype( aArgs )>( aArgs )... )]()
                         {
-                            if( !weakLife.expired() )
+                            if( ctxAffinity->isObjectAlive() )
                             {
                                 std::apply( slot, argTuple );
                             }
@@ -837,7 +875,7 @@ namespace QtLikeSignal
             // threw the first away.
             // The receiver and its life token go into the connection node, so ending the connection
             // prunes the receiver's incoming list in the same step, whichever route ends it.
-            Connection handle = aSignal.connect( std::move( wrapper ), aContext, weakLife );
+            Connection handle = aSignal.connect( std::move( wrapper ), aContext, ctxAffinity );
 
             // Links the node into aContext's incoming list, and does nothing if a concurrent
             // disconnectAll() unlinked the connection while we were between the two lines. Both this
@@ -870,8 +908,7 @@ namespace QtLikeSignal
         //! helper directly on the context's thread data rather than moving it there afterwards.
         friend class Timer;
 
-        std::shared_ptr<int> mLife;                          //!< Lifetime token; reset in ~Object() so weak references expire.
-        const std::shared_ptr<Affinity> mAffinity;           //!< Thread affinity box; the box itself is never reassigned, only its contents (see moveToThread()).
+        const std::shared_ptr<Affinity> mAffinity;           //!< Thread affinity box, which also carries the life flag ~Object() clears; the box itself is never reassigned, only its contents (see moveToThread()).
         std::atomic<bool> mDeleteLaterPosted { false };       //!< True once deleteLater() has posted a DeferredDeleteEvent; de-bounces repeat calls, matching QObject::deleteLaterCalled.
 
         //! True once this object has been the context of a callLater(), so ~Object() knows whether
@@ -891,6 +928,19 @@ namespace QtLikeSignal
         // the scan; Qt keeps an exact count instead, which needs the dispatch side to decrement and is
         // more machinery than the difference is worth here.
         std::atomic<bool> mMayHaveQueuedWork { false };
+
+        //! True once this object has started a timer, so ~Object() knows whether mRunningTimerIds
+        //! can possibly hold anything.
+        //!
+        //! The third flag of the same set-once family, and there for the same reason as the other
+        //! two: the destructor took mRunningTimerIdsMutex unconditionally, so every object that
+        //! never owned a timer -- nearly all of them -- paid an uncontended lock and unlock to swap
+        //! an empty vector. Cheaper than the scans P1 removed, but paid on a path whose whole cost
+        //! is a few hundred nanoseconds. See PERFORMANCE-20260817.md (P11).
+        // Set with release before the id is pushed, read with acquire, so seeing it false means no
+        // push has been made visible to us. Never cleared: an object that has owned a timer keeps
+        // taking the lock, which is the same honest trade the other two flags make.
+        std::atomic<bool> mUsedTimers { false };
         //! This object's descriptive name.
         //!
         //! Deliberately unguarded, matching QObject, whose objectName() has no locking either. A

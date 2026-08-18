@@ -231,9 +231,11 @@ Suite on Windows: **184 tests, 183 passed, 1 skipped, 0 failures**, in declarati
   `CreateWindowEx` fail, which needs a seam in the class — a test-only constructor flag or a virtual
   window-creation hook. That is production code reshaped for testability, and it is a decision
   rather than an oversight; three lines did not seem worth it. Recorded as a known-uncovered branch.
-- **`external/QtMimic` has the same dispatcher and no such tests.** Its copy is byte-identical apart
-  from namespace, include path and licence header. Its build was fixed here — it now links — but the
-  tests were not ported, because R22 as filed names `src/`.
+- ~~**`external/QtMimic` has the same dispatcher and no such tests.**~~ **Closed 2026-08-16**: the
+  six tests are ported, as `external/QtMimic/tests/QtMimic-test-eventdispatcher-win32.cpp`, and
+  `QtMimic-test` now runs the same 185 as `QtLikeSignal-Tests`. The port was not cosmetic — see
+  R34 in `OPEN-RISKS-20260816.md`, which QtMimic had too and which only its own copy of these
+  tests could catch.
 - **Only the `win64-msvc` debug variant was run.** Release and `win32-msvc` are untried.
 
 ## R25 — `Object::thread()` costs a mutex *(By Design)*

@@ -104,6 +104,17 @@ def configure_Windows_x64_Linux_clang(ctx, root):
     ctx.env.DEST_OS = "win32"
     ctx.env.DEST_BINFMT = "pe"
 
+    # Same Unicode setting as the MSVC toolchains in toolchain-windows.py, so that this
+    # cross-compile builds the *same* program rather than a near-copy. The generic-text Win32 entry
+    # points -- CreateWindowEx, RegisterClass, TextOut -- resolve to the W forms when UNICODE is
+    # defined and to the A forms when it is not, so without this the two toolchains compiled the
+    # same sources through different halves of the SDK. Both mappings are valid, which is why the
+    # difference stayed invisible until a call was written that only suited one of them.
+    #
+    # This does not change the entry point: mingw-w64 switches main() to wmain() only when
+    # -municode is passed, and it is not.
+    ctx.env.append_value("DEFINES", ["UNICODE", "_UNICODE"])
+
     ctx.env.append_unique("CXXFLAGS", ["-std=c++17"])
 
     # Static linking options for standalone Windows executable

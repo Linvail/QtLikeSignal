@@ -248,8 +248,8 @@ namespace QtLikeSignal
         }
 
         const std::shared_ptr<ThreadData> contextData = aContext->threadData();
-        const std::weak_ptr<int> contextLife = aContext->mLife;
-        if( !contextData || contextData->thread() == nullptr || contextLife.expired() )
+        const std::shared_ptr<Affinity> contextLife = aContext->mAffinity;
+        if( !contextData || contextData->thread() == nullptr || !contextLife->isObjectAlive() )
         {
             // Detached object: no loop would ever deliver the timer, so there is nothing to arm.
             return;
@@ -262,7 +262,7 @@ namespace QtLikeSignal
             SingleShotContextHelper
                 (
                 std::shared_ptr<ThreadData> aOwnerData,
-                std::weak_ptr<int> aContextLife,
+                std::shared_ptr<Affinity> aContextLife,
                 int aMs,
                 Functor aFn
                 )
@@ -278,7 +278,7 @@ namespace QtLikeSignal
             //! Public only so the posted task below can target it; it is not part of any API.
             void arm()
             {
-                if( mContextLife.expired() )
+                if( !mContextLife->isObjectAlive() )
                 {
                     delete this;
                     return;
@@ -305,7 +305,7 @@ namespace QtLikeSignal
                 killTimer( mId );  // see SingleShotHelper::timerEvent() for why this is not deferred
                 mId = -1;
 
-                if( !mContextLife.expired() )
+                if( mContextLife->isObjectAlive() )
                 {
                     mFn();
                 }
@@ -313,7 +313,7 @@ namespace QtLikeSignal
             }
 
         private:
-            std::weak_ptr<int> mContextLife;
+            std::shared_ptr<Affinity> mContextLife;
             Functor mFn;
             int mInterval { 0 };
             int mId { -1 };

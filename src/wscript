@@ -6,8 +6,10 @@ def build(bld):
     # project that has one of its own.
     kw["includes"] = ["."]
     kw["export_includes"] = ["."]
-    # No boost. QtLikeSignal used to get its signal from boost::signals2; it has its own now
-    # (src/QtLikeSignal/Signal.hpp, src/QtLikeSignal/Connection.hpp).
+    # No boost, anywhere in the project any more. QtLikeSignal used to get its signal from
+    # boost::signals2; it has its own now (src/QtLikeSignal/Signal.hpp,
+    # src/QtLikeSignal/Connection.hpp). The submodule and its bootstrap were removed once the
+    # library no longer included a boost header.
     kw["use"] = []
     kw["features"] = ["cxx", "debug-info"]
 
@@ -35,3 +37,4 @@ def build(bld):
     bld(target="QtLikeSignal", **kw)
 
     bld.recurse("tests")
+    bld.recurse("demo")

@@ -1,9 +1,4 @@
 def build(bld):
-    kw = {}
-    kw["includes"] = ["boost"]
-    kw["export_includes"] = ["boost"]
-    bld(target="boost", features="cxx", **kw)
-
     kw_gtest = {}
     kw_gtest["features"] = ["cxx", "cxxstlib"]
     kw_gtest["source"] = [

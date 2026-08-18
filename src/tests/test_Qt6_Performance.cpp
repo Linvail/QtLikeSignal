@@ -3,8 +3,8 @@
 
 //! @file
 //!
-//! Dispatch-overhead benchmarks for Qt 6 itself, run alongside the QtLikeSignal ones so
-//! all three appear in a single comparison table.
+//! Dispatch-overhead benchmarks for Qt 6 itself, run alongside the QtLikeSignal and
+//! boost::signals2 ones so every library appears in a single comparison table.
 //!
 //! Qt is the thing this project is imitating, so it is the reference the other two should be read
 //! against. The scenarios, iteration counts and timing code are shared through PerfHarness.hpp, and
@@ -26,6 +26,7 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <vector>
 
 namespace
 {
@@ -190,6 +191,46 @@ TEST( Performance, Qt6_QueuedEmitCrossThread )
     // receiver afterwards, with no loop left that could be dispatching to it.
     worker.quit();
     worker.wait();
+}
+
+//! Measures ending a connection through its QMetaObject::Connection handle.
+//!
+//! The counterpart of the connect() row, and the one scenario in this table that every library --
+//! including boost, which has no object model -- can run identically: a signal, a slot, and a
+//! handle, with no QObject destroyed in the timed region. The connections are context-free, so
+//! disconnecting touches only the sender's own bookkeeping.
+//!
+//! Only the disconnects are timed. Connecting is setup.
+TEST( Performance, Qt6_Disconnect )
+{
+    Qt6PerfSender sender;
+    long long received = 0;
+
+    std::vector<QMetaObject::Connection> handles;
+    handles.reserve( PerfHarness::kDisconnectOps );
+    for( int i = 0; i < PerfHarness::kDisconnectOps; ++i )
+    {
+        handles.push_back( QObject::connect( &sender, &Qt6PerfSender::fired,
+            [&received]( int aValue )
+            {
+                received += aValue;
+            } ) );
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    for( const auto& handle : handles )
+    {
+        QObject::disconnect( handle );
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
+    PerfHarness::record( "disconnect()", "Qt6",
+        std::chrono::duration<double, std::nano>( elapsed ).count()
+        / PerfHarness::kDisconnectOps );
+
+    // Proves the handles really ended their connections, so the row above is not timing a no-op.
+    sender.fire( 1 );
+    EXPECT_EQ( received, 0 );
 }
 
 // -------------------------------------------------------------------------------------------

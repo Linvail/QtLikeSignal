@@ -27,63 +27,63 @@ namespace QtLikeSignal
 
     #if defined( QT_LIKE_SIGNAL_HAS_THREAD_PRIORITY_SCHEDULING )
 
-        namespace
-        {
+    namespace
+    {
 
-            //! Maps a Thread priority onto a scheduler policy and priority number.
-            //!
-            //! This is Qt's mapping from qthread_unix.cpp, including its deliberately coarse scaling: the
-            //! divisor is TimeCriticalPriority rather than the span between the lowest and highest values, so
-            //! the enum lands on the low end of the platform's range rather than spreading across it. Kept as
-            //! Qt has it so behaviour matches. Returns true if a priority could be calculated; false if the
-            //! platform would not report a range.
-            // The alternative would be a library that claims to mimic QThread and then schedules
-            // differently.
-            bool calculateUnixPriority
-                (
-                int aPriority,      //!< The Thread priority to convert.
-                int* aSchedPolicy,  //!< In: the thread's current policy. Out: the policy to apply, which
+        //! Maps a Thread priority onto a scheduler policy and priority number.
+        //!
+        //! This is Qt's mapping from qthread_unix.cpp, including its deliberately coarse scaling: the
+        //! divisor is TimeCriticalPriority rather than the span between the lowest and highest values, so
+        //! the enum lands on the low end of the platform's range rather than spreading across it. Kept as
+        //! Qt has it so behaviour matches. Returns true if a priority could be calculated; false if the
+        //! platform would not report a range.
+        // The alternative would be a library that claims to mimic QThread and then schedules
+        // differently.
+        bool calculateUnixPriority
+            (
+            int aPriority,          //!< The Thread priority to convert.
+            int* aSchedPolicy,      //!< In: the thread's current policy. Out: the policy to apply, which
                                     //!< only changes when IdlePriority selects SCHED_IDLE.
-                int* aSchedPriority //!< Out: the priority number to apply under that policy.
-                )
+            int* aSchedPriority     //!< Out: the priority number to apply under that policy.
+            )
+        {
+            #ifdef SCHED_IDLE
+                if( aPriority == Thread::IdlePriority )
+                {
+                    *aSchedPolicy = SCHED_IDLE;
+                    *aSchedPriority = 0;
+                    return true;
+                }
+                const int lowestPriority = Thread::LowestPriority;
+            #else
+                const int lowestPriority = Thread::IdlePriority;
+            #endif
+            const int highestPriority = Thread::TimeCriticalPriority;
+
+            const int prioMin = sched_get_priority_min( *aSchedPolicy );
+            const int prioMax = sched_get_priority_max( *aSchedPolicy );
+            if( prioMin == -1 || prioMax == -1 )
             {
-                #ifdef SCHED_IDLE
-                    if( aPriority == Thread::IdlePriority )
-                    {
-                        *aSchedPolicy = SCHED_IDLE;
-                        *aSchedPriority = 0;
-                        return true;
-                    }
-                    const int lowestPriority = Thread::LowestPriority;
-                #else
-                    const int lowestPriority = Thread::IdlePriority;
-                #endif
-                const int highestPriority = Thread::TimeCriticalPriority;
+                return false;
+            }
 
-                const int prioMin = sched_get_priority_min( *aSchedPolicy );
-                const int prioMax = sched_get_priority_max( *aSchedPolicy );
-                if( prioMin == -1 || prioMax == -1 )
-                {
-                    return false;
-                }
+            int prio = ( ( aPriority - lowestPriority ) * ( prioMax - prioMin ) /
+                highestPriority
+                       ) +
+                prioMin;
+            if( prio < prioMin )
+            {
+                prio = prioMin;
+            }
+            if( prio > prioMax )
+            {
+                prio = prioMax;
+            }
 
-                int prio = ( ( aPriority - lowestPriority ) * ( prioMax - prioMin ) /
-                    highestPriority
-                           ) +
-                    prioMin;
-                if( prio < prioMin )
-                {
-                    prio = prioMin;
-                }
-                if( prio > prioMax )
-                {
-                    prio = prioMax;
-                }
-
-                *aSchedPriority = prio;
-                return true;
-            }  // end calculateUnixPriority()
-        } // namespace
+            *aSchedPriority = prio;
+            return true;
+        }      // end calculateUnixPriority()
+    }     // namespace
 
     #endif
 

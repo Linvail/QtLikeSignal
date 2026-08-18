@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <thread>
 #include <vector>
@@ -104,11 +105,26 @@ namespace PerfHarness
             } ).join();
     }
 
-    //! Prints one row per scenario with a column per library, plus ratios against the first library.
+    //! The library the ratio columns are expressed against.
     //!
-    //! Column order follows first appearance, so whichever library ran first is the baseline the
-    //! ratios are expressed against. A library that skipped a scenario leaves a gap rather than a
-    //! misleading zero.
+    //! Named, rather than taken from whichever library happened to record first. That used to be
+    //! how the baseline was chosen, and it was quietly fragile: registration order across
+    //! translation units is link order, so adding the boost benchmark as a fourth file moved boost
+    //! to the front and inverted every ratio in the table -- the same numbers, now meaning the
+    //! opposite thing, with only the footer to say so. A table that can silently change direction
+    //! is worse than no table.
+    //!
+    //! QtLikeSignal is the baseline because it is the library this repository exists to make fast;
+    //! the useful question is always what it costs against the others.
+    inline const char* baselineLibrary()
+    {
+        return "QtLikeSignal";
+    }
+
+    //! Prints one row per scenario with a column per library, plus ratios against the baseline.
+    //!
+    //! The baseline column comes first and the rest follow first appearance. A library that skipped
+    //! a scenario leaves a gap rather than a misleading zero.
     inline void printSummary()
     {
         auto& all = results();
@@ -130,6 +146,15 @@ namespace PerfHarness
             {
                 libraries.push_back( r.mLibrary );
             }
+        }
+
+        // Move the baseline to the front, so the ratio columns read the same way no matter what
+        // order the translation units registered in. Absent -- a filtered run measuring only one
+        // other library -- the first column stands in, and the footer still names whatever it is.
+        const auto baseline = std::find( libraries.begin(), libraries.end(), baselineLibrary() );
+        if( baseline != libraries.end() )
+        {
+            std::rotate( libraries.begin(), baseline, baseline + 1 );
         }
 
         //! Looks a measurement up, or returns -1 if that library skipped that scenario.
@@ -198,6 +223,47 @@ namespace PerfHarness
     constexpr int kConnectOps = 20000;
     constexpr int kDirectOps  = 1000000;
     constexpr int kQueuedOps  = 200000;
+
+    // Connections resident on one signal before the disconnect scenario ends them one by one.
+    // Deliberately the same as kConnectOps, so the connect() and disconnect() rows describe the two
+    // halves of the same connection's life and can be read against each other directly.
+    constexpr int kDisconnectOps = kConnectOps;
+
+    //! Grows and faults in the heap the benchmarks will need, before anything is measured.
+    //!
+    //! The companion to settleAllocatorState(), for a first-mover cost of the same shape. A
+    //! `connect()` row takes two heap blocks per connection over kConnectOps iterations, so the
+    //! first library to run one pays for the arena growing to hold 40 000 blocks -- and charges it
+    //! to itself. Measured on `Performance.QtLikeSignal_Connect`: 122.7 ns with other tests ahead of
+    //! it, 207-296 ns as the first test in the process. A 1.9x artefact, larger than any real
+    //! difference in the row it sits in, and it made QtLikeSignal look 1.8x slower than QtMimic --
+    //! two libraries whose sources are identical -- across five consecutive runs.
+    //!
+    //! Running each test in its own process is not the fix. That makes every library cold rather
+    //! than one of them, and the cold penalty is not uniform: ours is about 1.7x, Qt 6's about 1.1x,
+    //! so the ratios move anyway. The state to settle into is warm, because it is the state a
+    //! process is in by the time any of this code runs in earnest.
+    //!
+    //! The blocks are written to, not merely allocated. Reserving address space is cheap; it is the
+    //! page fault on first touch that costs, and an untouched allocation does not pay it here.
+    inline void settleHeap()
+    {
+        constexpr std::size_t kBlocks = 2 * static_cast<std::size_t>( kConnectOps );
+        constexpr std::size_t kBlockBytes = 64;
+
+        std::vector<void*> blocks;
+        blocks.reserve( kBlocks );
+        for( std::size_t i = 0; i < kBlocks; ++i )
+        {
+            void* block = ::operator new( kBlockBytes );
+            std::memset( block, 0, kBlockBytes );
+            blocks.push_back( block );
+        }
+        for( void* block : blocks )
+        {
+            ::operator delete( block );
+        }
+    }
 
     //! Runs @p aBody @p aRepeats times and keeps the fastest result.
     //!

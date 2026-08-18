@@ -147,6 +147,10 @@ namespace QtLikeSignal
 
         //! Timer::singleShot() validates a context's thread before arming against it.
         friend class Timer;
+
+        //! namesOtherRunningThread() answers ~Object()'s diagnostic without copying a shared_ptr
+        //! out, which means asking these two accessors from inside the Affinity's own mutex.
+        friend class Affinity;
     };
 
     //----------------------------------------------------------------
@@ -157,15 +161,20 @@ namespace QtLikeSignal
     //! at EMIT time (that is what makes moveToThread() affect connections made before it), but the
     //! receiver may be destroyed concurrently, and disconnect() does not wait
     //! for an in-flight emit -- so reading thread()/threadData() straight off the receiver Object is
-    //! a use-after-free. The connect() wrapper's weak_ptr<int> life-token check narrows that window
-    //! but does not close it: a successful lock() only proves ~Object() had not yet reached
-    //! mLife.reset() at the moment of the check, not that it cannot start immediately afterward,
+    //! a use-after-free. The connect() wrapper's life-token check narrows that window but does not
+    //! close it: seeing the object alive only proves ~Object() had not yet reached
+    //! markObjectDead() at the moment of the check, not that it cannot start immediately afterward,
     //! concurrently with this thread going on to dereference the receiver's own members.
     //!
     //! The box breaks that dependency: connect() captures a shared_ptr<Affinity> at CONNECT time,
     //! and the wrapper resolves affinity through the box at EMIT time, never through the receiver.
     //! Because the box is independently heap-allocated and kept alive by the closure's own
     //! shared_ptr, it is safe to read no matter what has happened to the Object by then.
+    //!
+    //! Since 2026-08-18 the box also carries the life flag itself (isObjectAlive()), which used to
+    //! be a separate shared_ptr<int> on the Object. The two had identical lifetime requirements --
+    //! both had to outlive the Object, both were captured by the same closures -- so keeping them
+    //! apart cost an allocation and a capture for nothing.
     //----------------------------------------------------------------
     class Affinity
     {
@@ -196,6 +205,55 @@ namespace QtLikeSignal
             return mData;
         }
 
+        //! @return false once ~Object() has begun on the object this box describes.
+        //!
+        //! The life token, folded into the box that already had to exist. It used to be a separate
+        //! `std::shared_ptr<int>` on the Object, read through a `weak_ptr` -- a second heap block
+        //! per Object, a second free per destruction, and a second capture in the closure of every
+        //! connection, all to carry one bit. This box was already allocated, already captured by
+        //! those same closures, and already outlives the Object by design, so the bit had a home
+        //! all along. See PERFORMANCE-20260817.md (P11).
+        //!
+        //! A plain atomic load, and deliberately nothing that hands back a strong reference. What
+        //! it answers is "had destruction begun at the instant of the check", which is exactly what
+        //! `weak_ptr::expired()` answered before it -- and, as before, neither closes the
+        //! check-then-use race that follows. What actually stops a destroyed receiver being called
+        //! is ~Object() disconnecting its incoming connections and stripping its queued events.
+        bool isObjectAlive() const
+        {
+            return mObjectAlive.load( std::memory_order_acquire );
+        }
+
+        //! Records that the object this box describes is being destroyed.
+        //!
+        //! Called once, at the top of ~Object(), before anything that can run user code. Release
+        //! ordering so that a reader seeing `false` also sees everything the destructor did before
+        //! saying so.
+        void markObjectDead()
+        {
+            mObjectAlive.store( false, std::memory_order_release );
+        }
+
+        //! @return true when this affinity names a *running* thread that is not @p aCaller.
+        //!
+        //! The question ~Object()'s safety diagnostic asks, answered without handing a strong
+        //! reference back out. data() copies a shared_ptr, so asking it cost two atomic
+        //! read-modify-writes on top of the mutex, on a path every destruction takes -- and the
+        //! copy existed only to keep alive, for three instructions, something this mutex already
+        //! keeps alive. See PERFORMANCE-20260817.md (P11).
+        //!
+        //! The Thread* is compared, never dereferenced, which is the same rule data()'s callers
+        //! follow and the reason this cannot resurrect the dangling-pointer hazard the Affinity
+        //! indirection exists to remove.
+        bool namesOtherRunningThread
+            (
+            const Thread* aCaller   //!< The thread asking; compared, never dereferenced.
+            ) const
+        {
+            std::lock_guard<std::mutex> locker( mMutex );
+            return mData && mData->isThreadRunning() && mData->thread() != aCaller;
+        }
+
         //! Re-point at another thread's data. Called only by Object::moveToThread().
         void setData
             (
@@ -211,6 +269,12 @@ namespace QtLikeSignal
         //! any other. The same reason QObject keeps its threadData in a QAtomicPointer.
         mutable std::mutex mMutex;
         std::shared_ptr<ThreadData> mData;
+
+        //! False once ~Object() has begun on the object this box describes. See isObjectAlive().
+        //!
+        //! Outside mMutex on purpose: it is written once and read constantly, by closures that have
+        //! no other reason to touch the mutex. An atomic keeps that read a load rather than a lock.
+        std::atomic<bool> mObjectAlive { true };
     };
 
 } // namespace QtLikeSignal
