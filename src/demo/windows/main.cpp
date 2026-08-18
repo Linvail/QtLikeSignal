@@ -131,7 +131,7 @@ namespace
             void* aDeviceContext   //!< HDC from BeginPaint, valid only during this call.
             )
         {
-            const HDC  target = static_cast<HDC>( aDeviceContext );
+            const HDC target = static_cast<HDC>( aDeviceContext );
             const HWND window = static_cast<HWND>( mApplication->nativeWindowHandle() );
 
             RECT client {};
@@ -141,7 +141,7 @@ namespace
 
             // Drawn into a bitmap and blitted in one go. Mouse moves repaint constantly, and
             // painting straight onto the window flickers badly at that rate.
-            const HDC     memory    = CreateCompatibleDC( target );
+            const HDC memory    = CreateCompatibleDC( target );
             const HBITMAP bitmap    = CreateCompatibleBitmap( target, width, height );
             const HGDIOBJ oldBitmap = SelectObject( memory, bitmap );
 
@@ -155,12 +155,12 @@ namespace
             const HGDIOBJ oldFont = SelectObject( memory, font );
             SetBkMode( memory, TRANSPARENT );
 
-            int       y          = 16;
+            int y          = 16;
             const int lineHeight = 22;
 
             // One stream, emptied after each line, so no line needs a buffer size guessed for it.
             DemoStream text;
-            auto       flush = [&]()
+            auto flush = [&]()
                 {
                     const DemoString built = text.str();
                     TextOut( memory, 16, y, built.c_str(), static_cast<int>( built.size() ) );
@@ -214,7 +214,7 @@ namespace
 
             // A crosshair at the last known cursor position, so the coordinates are visibly the
             // ones the OS reported rather than something invented.
-            const HPEN    pen    = CreatePen( PS_SOLID, 1, RGB( 90, 160, 220 ) );
+            const HPEN pen    = CreatePen( PS_SOLID, 1, RGB( 90, 160, 220 ) );
             const HGDIOBJ oldPen = SelectObject( memory, pen );
             MoveToEx( memory, mLastX - 12, mLastY, nullptr );
             LineTo( memory, mLastX + 13, mLastY );
@@ -243,10 +243,10 @@ namespace
             const TCHAR* button = TEXT( "none  " );
             switch( aEvent.mButton )
             {
-                case MouseEvent::Button::Left:   button = TEXT( "left  " ); break;
-                case MouseEvent::Button::Middle: button = TEXT( "middle" ); break;
-                case MouseEvent::Button::Right:  button = TEXT( "right " ); break;
-                case MouseEvent::Button::None:   break;
+            case MouseEvent::Button::Left:   button = TEXT( "left  " ); break;
+            case MouseEvent::Button::Middle: button = TEXT( "middle" ); break;
+            case MouseEvent::Button::Right:  button = TEXT( "right " ); break;
+            case MouseEvent::Button::None:   break;
             }
 
             DemoStream entry;
@@ -265,14 +265,14 @@ namespace
 
         GuiApplication*        mApplication;          //!< Window owner. Not owned.
         std::deque<DemoString> mLog;                  //!< Most recent event descriptions.
-        int                    mPressCount { 0 };     //!< Total presses seen.
-        int                    mReleaseCount { 0 };   //!< Total releases seen.
-        int                    mMoveCount { 0 };      //!< Total moves seen.
-        int                    mSeconds { 0 };        //!< Seconds since start, from the timer.
-        int                    mLastX { 0 };          //!< Last reported cursor X.
-        int                    mLastY { 0 };          //!< Last reported cursor Y.
-        int                    mLastLoggedX { 0 };    //!< Cursor X when a move was last logged.
-        int                    mLastLoggedY { 0 };    //!< Cursor Y when a move was last logged.
+        int mPressCount { 0 };                        //!< Total presses seen.
+        int mReleaseCount { 0 };                      //!< Total releases seen.
+        int mMoveCount { 0 };                         //!< Total moves seen.
+        int mSeconds { 0 };                           //!< Seconds since start, from the timer.
+        int mLastX { 0 };                             //!< Last reported cursor X.
+        int mLastY { 0 };                             //!< Last reported cursor Y.
+        int mLastLoggedX { 0 };                       //!< Cursor X when a move was last logged.
+        int mLastLoggedY { 0 };                       //!< Cursor Y when a move was last logged.
     };
 }
 

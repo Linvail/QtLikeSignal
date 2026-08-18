@@ -409,10 +409,10 @@ namespace
         {
             switch( aButton )
             {
-                case MouseEvent::Button::Left:   return "left  ";
-                case MouseEvent::Button::Middle: return "middle";
-                case MouseEvent::Button::Right:  return "right ";
-                case MouseEvent::Button::None:   break;
+            case MouseEvent::Button::Left:   return "left  ";
+            case MouseEvent::Button::Middle: return "middle";
+            case MouseEvent::Button::Right:  return "right ";
+            case MouseEvent::Button::None:   break;
             }
             return "none  ";
         }
@@ -495,24 +495,24 @@ namespace
         X11Application*        mApplication;                       //!< Window owner. Not owned.
         std::deque<std::string> mLog;                              //!< Recent event descriptions.
         XFontStruct*           mFont { nullptr };                  //!< Core font, or null.
-        int                    mLineHeight { 16 };                 //!< Baseline-to-baseline pixels.
-        int                    mPressCount { 0 };                  //!< Total presses seen.
-        int                    mReleaseCount { 0 };                //!< Total releases seen.
-        int                    mMoveCount { 0 };                   //!< Total motion events seen.
-        int                    mKeyCount { 0 };                    //!< Total key presses seen.
-        int                    mSeconds { 0 };                     //!< Seconds from the local timer.
-        int                    mWorkerTicks { 0 };                 //!< Last count from the worker.
-        int                    mLastX { 0 };                       //!< Last reported pointer X.
-        int                    mLastY { 0 };                       //!< Last reported pointer Y.
-        int                    mLastLoggedX { 0 };                 //!< Pointer X when last logged.
-        int                    mLastLoggedY { 0 };                 //!< Pointer Y when last logged.
-        MouseEvent::Button     mHeld { MouseEvent::Button::None }; //!< Button currently held down.
-        unsigned long          mBackground { 0 };                  //!< Window background pixel.
-        unsigned long          mHeading { 0 };                     //!< Heading text pixel.
-        unsigned long          mDim { 0 };                         //!< Secondary text pixel.
-        unsigned long          mText { 0 };                        //!< Primary text pixel.
-        unsigned long          mAccent { 0 };                      //!< Highlighted value pixel.
-        unsigned long          mCrosshair { 0 };                   //!< Pointer crosshair pixel.
+        int mLineHeight { 16 };                                    //!< Baseline-to-baseline pixels.
+        int mPressCount { 0 };                                     //!< Total presses seen.
+        int mReleaseCount { 0 };                                   //!< Total releases seen.
+        int mMoveCount { 0 };                                      //!< Total motion events seen.
+        int mKeyCount { 0 };                                       //!< Total key presses seen.
+        int mSeconds { 0 };                                        //!< Seconds from the local timer.
+        int mWorkerTicks { 0 };                                    //!< Last count from the worker.
+        int mLastX { 0 };                                          //!< Last reported pointer X.
+        int mLastY { 0 };                                          //!< Last reported pointer Y.
+        int mLastLoggedX { 0 };                                    //!< Pointer X when last logged.
+        int mLastLoggedY { 0 };                                    //!< Pointer Y when last logged.
+        MouseEvent::Button mHeld { MouseEvent::Button::None };     //!< Button currently held down.
+        unsigned long mBackground { 0 };                           //!< Window background pixel.
+        unsigned long mHeading { 0 };                              //!< Heading text pixel.
+        unsigned long mDim { 0 };                                  //!< Secondary text pixel.
+        unsigned long mText { 0 };                                 //!< Primary text pixel.
+        unsigned long mAccent { 0 };                               //!< Highlighted value pixel.
+        unsigned long mCrosshair { 0 };                            //!< Pointer crosshair pixel.
     };
 
     //! Reads --seconds=N from the command line, or 0 if it was not given.

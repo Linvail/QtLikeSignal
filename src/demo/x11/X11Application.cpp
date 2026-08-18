@@ -51,17 +51,17 @@ namespace QtLikeSignalDemo
         {
             switch( aButton )
             {
-                case Button1:
-                    return MouseEvent::Button::Left;
+            case Button1:
+                return MouseEvent::Button::Left;
 
-                case Button2:
-                    return MouseEvent::Button::Middle;
+            case Button2:
+                return MouseEvent::Button::Middle;
 
-                case Button3:
-                    return MouseEvent::Button::Right;
+            case Button3:
+                return MouseEvent::Button::Right;
 
-                default:
-                    return MouseEvent::Button::None;
+            default:
+                return MouseEvent::Button::None;
             }
         }
 
@@ -317,88 +317,88 @@ namespace QtLikeSignalDemo
 
         switch( event.type )
         {
-            case Expose:
+        case Expose:
+        {
+            // The server sends one Expose per exposed rectangle and this demo redraws the whole
+            // window regardless, so only the last of a burst is worth acting on. count is how
+            // many are still to come.
+            if( event.xexpose.count == 0 )
             {
-                // The server sends one Expose per exposed rectangle and this demo redraws the whole
-                // window regardless, so only the last of a burst is worth acting on. count is how
-                // many are still to come.
-                if( event.xexpose.count == 0 )
-                {
-                    paintNow();
-                }
-                break;
+                paintNow();
             }
+            break;
+        }
 
-            case ConfigureNotify:
+        case ConfigureNotify:
+        {
+            if( event.xconfigure.width != mWidth || event.xconfigure.height != mHeight )
             {
-                if( event.xconfigure.width != mWidth || event.xconfigure.height != mHeight )
-                {
-                    resizeBackBuffer( event.xconfigure.width, event.xconfigure.height );
-                    paintNow();
-                }
-                break;
+                resizeBackBuffer( event.xconfigure.width, event.xconfigure.height );
+                paintNow();
             }
+            break;
+        }
 
-            case MotionNotify:
+        case MotionNotify:
+        {
+            MouseEvent moved;
+            moved.mX      = event.xmotion.x;
+            moved.mY      = event.xmotion.y;
+            moved.mButton = MouseEvent::Button::None;
+            mMouseMoved.emit( moved );
+            break;
+        }
+
+        case ButtonPress:
+        {
+            MouseEvent pressed;
+            pressed.mX      = event.xbutton.x;
+            pressed.mY      = event.xbutton.y;
+            pressed.mButton = buttonOf( event.xbutton.button );
+            mMousePressed.emit( pressed );
+            break;
+        }
+
+        case ButtonRelease:
+        {
+            MouseEvent released;
+            released.mX      = event.xbutton.x;
+            released.mY      = event.xbutton.y;
+            released.mButton = buttonOf( event.xbutton.button );
+            mMouseReleased.emit( released );
+            break;
+        }
+
+        case KeyPress:
+        {
+            // Index 0 is the unshifted symbol, which is all this demo needs. A program taking
+            // text would go through XLookupString or an input method instead.
+            const KeySym key = XLookupKeysym( const_cast<XKeyEvent*>( &event.xkey ), 0 );
+            mKeyPressed.emit( key );
+            if( key == XK_Escape )
             {
-                MouseEvent moved;
-                moved.mX      = event.xmotion.x;
-                moved.mY      = event.xmotion.y;
-                moved.mButton = MouseEvent::Button::None;
-                mMouseMoved.emit( moved );
-                break;
+                QtLikeSignal::CoreApplication::quit();
             }
+            break;
+        }
 
-            case ButtonPress:
+        case ClientMessage:
+        {
+            if( static_cast<Atom>( event.xclient.data.l[0] ) == mDeleteWindowAtom )
             {
-                MouseEvent pressed;
-                pressed.mX      = event.xbutton.x;
-                pressed.mY      = event.xbutton.y;
-                pressed.mButton = buttonOf( event.xbutton.button );
-                mMousePressed.emit( pressed );
-                break;
+                // quit(), and for the same reason the Win32 demo calls quit() from WM_CLOSE
+                // rather than PostQuitMessage(): Thread::exec() loops on its own exit flag and
+                // never reads what processEvents() returned, so nothing a platform event can
+                // return will stop it. An application built on this library ends its loop
+                // through quit(). That divergence from Qt is R22 in
+                // history/OPEN-RISKS-20260816.md.
+                QtLikeSignal::CoreApplication::quit();
             }
+            break;
+        }
 
-            case ButtonRelease:
-            {
-                MouseEvent released;
-                released.mX      = event.xbutton.x;
-                released.mY      = event.xbutton.y;
-                released.mButton = buttonOf( event.xbutton.button );
-                mMouseReleased.emit( released );
-                break;
-            }
-
-            case KeyPress:
-            {
-                // Index 0 is the unshifted symbol, which is all this demo needs. A program taking
-                // text would go through XLookupString or an input method instead.
-                const KeySym key = XLookupKeysym( const_cast<XKeyEvent*>( &event.xkey ), 0 );
-                mKeyPressed.emit( key );
-                if( key == XK_Escape )
-                {
-                    QtLikeSignal::CoreApplication::quit();
-                }
-                break;
-            }
-
-            case ClientMessage:
-            {
-                if( static_cast<Atom>( event.xclient.data.l[0] ) == mDeleteWindowAtom )
-                {
-                    // quit(), and for the same reason the Win32 demo calls quit() from WM_CLOSE
-                    // rather than PostQuitMessage(): Thread::exec() loops on its own exit flag and
-                    // never reads what processEvents() returned, so nothing a platform event can
-                    // return will stop it. An application built on this library ends its loop
-                    // through quit(). That divergence from Qt is R22 in
-                    // history/OPEN-RISKS-20260816.md.
-                    QtLikeSignal::CoreApplication::quit();
-                }
-                break;
-            }
-
-            default:
-                break;
+        default:
+            break;
         }
     }
 

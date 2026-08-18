@@ -32,8 +32,8 @@ namespace QtLikeSignalDemo
             Right     //!< Right button.
         };
 
-        int    mX { 0 };                     //!< X in client coordinates, pixels from the left.
-        int    mY { 0 };                     //!< Y in client coordinates, pixels from the top.
+        int mX { 0 };                        //!< X in client coordinates, pixels from the left.
+        int mY { 0 };                        //!< Y in client coordinates, pixels from the top.
         Button mButton { Button::None };     //!< Button pressed or released; None for a move.
     };
 }

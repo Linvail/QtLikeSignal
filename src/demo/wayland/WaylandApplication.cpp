@@ -90,17 +90,17 @@ namespace QtLikeSignalDemo
         {
             switch( aButton )
             {
-                case BTN_LEFT:
-                    return MouseEvent::Button::Left;
+            case BTN_LEFT:
+                return MouseEvent::Button::Left;
 
-                case BTN_MIDDLE:
-                    return MouseEvent::Button::Middle;
+            case BTN_MIDDLE:
+                return MouseEvent::Button::Middle;
 
-                case BTN_RIGHT:
-                    return MouseEvent::Button::Right;
+            case BTN_RIGHT:
+                return MouseEvent::Button::Right;
 
-                default:
-                    return MouseEvent::Button::None;
+            default:
+                return MouseEvent::Button::None;
             }
         }
 

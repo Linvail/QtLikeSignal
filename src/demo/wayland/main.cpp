@@ -225,10 +225,10 @@ namespace
         {
             switch( aButton )
             {
-                case MouseEvent::Button::Left:   return "left  ";
-                case MouseEvent::Button::Middle: return "middle";
-                case MouseEvent::Button::Right:  return "right ";
-                case MouseEvent::Button::None:   break;
+            case MouseEvent::Button::Left:   return "left  ";
+            case MouseEvent::Button::Middle: return "middle";
+            case MouseEvent::Button::Right:  return "right ";
+            case MouseEvent::Button::None:   break;
             }
             return "other ";
         }

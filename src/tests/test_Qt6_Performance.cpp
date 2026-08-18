@@ -226,7 +226,7 @@ TEST( Performance, Qt6_Disconnect )
 
     PerfHarness::record( "disconnect()", "Qt6",
         std::chrono::duration<double, std::nano>( elapsed ).count()
-            / PerfHarness::kDisconnectOps );
+        / PerfHarness::kDisconnectOps );
 
     // Proves the handles really ended their connections, so the row above is not timing a no-op.
     sender.fire( 1 );

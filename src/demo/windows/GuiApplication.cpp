@@ -41,20 +41,20 @@ namespace QtLikeSignalDemo
         {
             switch( aMessage )
             {
-                case WM_LBUTTONDOWN:
-                case WM_LBUTTONUP:
-                    return MouseEvent::Button::Left;
+            case WM_LBUTTONDOWN:
+            case WM_LBUTTONUP:
+                return MouseEvent::Button::Left;
 
-                case WM_MBUTTONDOWN:
-                case WM_MBUTTONUP:
-                    return MouseEvent::Button::Middle;
+            case WM_MBUTTONDOWN:
+            case WM_MBUTTONUP:
+                return MouseEvent::Button::Middle;
 
-                case WM_RBUTTONDOWN:
-                case WM_RBUTTONUP:
-                    return MouseEvent::Button::Right;
+            case WM_RBUTTONDOWN:
+            case WM_RBUTTONUP:
+                return MouseEvent::Button::Right;
 
-                default:
-                    return MouseEvent::Button::None;
+            default:
+                return MouseEvent::Button::None;
             }
         }
     }
@@ -94,7 +94,8 @@ namespace QtLikeSignalDemo
         const HINSTANCE instance = GetModuleHandle( nullptr );
 
         WNDCLASS windowClass {};
-        windowClass.lpfnWndProc   = []( HWND aWindow, UINT aMessage, WPARAM aWParam, LPARAM aLParam )
+        windowClass.lpfnWndProc   = []( HWND aWindow, UINT aMessage, WPARAM aWParam, LPARAM aLParam
+                                      )
             -> LRESULT
             {
                 // The instance is attached in WM_NCCREATE, which is the first message a window
@@ -104,7 +105,7 @@ namespace QtLikeSignalDemo
                 {
                     auto* create = reinterpret_cast<CREATESTRUCT*>( aLParam );
                     SetWindowLongPtr( aWindow, GWLP_USERDATA,
-                    reinterpret_cast<LONG_PTR>( create->lpCreateParams ) );
+                        reinterpret_cast<LONG_PTR>( create->lpCreateParams ) );
                     return DefWindowProc( aWindow, aMessage, aWParam, aLParam );
                 }
 
@@ -117,93 +118,93 @@ namespace QtLikeSignalDemo
 
                 switch( aMessage )
                 {
-                    case WM_MOUSEMOVE:
-                    {
-                        MouseEvent event;
-                        event.mX      = GET_X_LPARAM( aLParam );
-                        event.mY      = GET_Y_LPARAM( aLParam );
-                        event.mButton = MouseEvent::Button::None;
-                        self->mMouseMoved.emit( event );
-                        return 0;
-                    }
+                case WM_MOUSEMOVE:
+                {
+                    MouseEvent event;
+                    event.mX      = GET_X_LPARAM( aLParam );
+                    event.mY      = GET_Y_LPARAM( aLParam );
+                    event.mButton = MouseEvent::Button::None;
+                    self->mMouseMoved.emit( event );
+                    return 0;
+                }
 
-                    case WM_LBUTTONDOWN:
-                    case WM_MBUTTONDOWN:
-                    case WM_RBUTTONDOWN:
-                    {
-                        MouseEvent event;
-                        event.mX      = GET_X_LPARAM( aLParam );
-                        event.mY      = GET_Y_LPARAM( aLParam );
-                        event.mButton = buttonOf( aMessage );
-                        self->mMousePressed.emit( event );
-                        return 0;
-                    }
+                case WM_LBUTTONDOWN:
+                case WM_MBUTTONDOWN:
+                case WM_RBUTTONDOWN:
+                {
+                    MouseEvent event;
+                    event.mX      = GET_X_LPARAM( aLParam );
+                    event.mY      = GET_Y_LPARAM( aLParam );
+                    event.mButton = buttonOf( aMessage );
+                    self->mMousePressed.emit( event );
+                    return 0;
+                }
 
-                    case WM_LBUTTONUP:
-                    case WM_MBUTTONUP:
-                    case WM_RBUTTONUP:
-                    {
-                        MouseEvent event;
-                        event.mX      = GET_X_LPARAM( aLParam );
-                        event.mY      = GET_Y_LPARAM( aLParam );
-                        event.mButton = buttonOf( aMessage );
-                        self->mMouseReleased.emit( event );
-                        return 0;
-                    }
+                case WM_LBUTTONUP:
+                case WM_MBUTTONUP:
+                case WM_RBUTTONUP:
+                {
+                    MouseEvent event;
+                    event.mX      = GET_X_LPARAM( aLParam );
+                    event.mY      = GET_Y_LPARAM( aLParam );
+                    event.mButton = buttonOf( aMessage );
+                    self->mMouseReleased.emit( event );
+                    return 0;
+                }
 
-                    case WM_KEYDOWN:
+                case WM_KEYDOWN:
+                {
+                    if( aWParam == 'M' )
                     {
-                        if( aWParam == 'M' )
-                        {
-                            // A foreign message loop, on purpose. MessageBox runs its own loop and
-                            // drains this thread's queue, which includes any wakeup message the
-                            // dispatcher had posted to its own window. Everything must still work
-                            // after this returns; see the class comment and R34.
-                            MessageBox( aWindow,
+                        // A foreign message loop, on purpose. MessageBox runs its own loop and
+                        // drains this thread's queue, which includes any wakeup message the
+                        // dispatcher had posted to its own window. Everything must still work
+                        // after this returns; see the class comment and R34.
+                        MessageBox( aWindow,
                             TEXT( "This dialog is running its own message loop, which is draining "
                             "this thread's message queue.\n\n"
                             "Close it: the mouse events, the uptime timer and the loop itself "
                             "all keep working." ),
                             TEXT( "Foreign message loop" ), MB_OK | MB_ICONINFORMATION );
-                            return 0;
-                        }
-                        if( aWParam == VK_ESCAPE )
-                        {
-                            QtLikeSignal::CoreApplication::quit();
-                            return 0;
-                        }
                         return 0;
                     }
-
-                    case WM_ERASEBKGND:
+                    if( aWParam == VK_ESCAPE )
                     {
-                        // Claimed, so Windows does not flood-fill the client area before WM_PAINT.
-                        // The paint slot covers every pixel from a back buffer instead.
-                        return 1;
-                    }
-
-                    case WM_PAINT:
-                    {
-                        PAINTSTRUCT paint {};
-                        const HDC   deviceContext = BeginPaint( aWindow, &paint );
-                        self->mPaintRequested.emit( deviceContext );
-                        EndPaint( aWindow, &paint );
-                        return 0;
-                    }
-
-                    case WM_CLOSE:
-                    {
-                        // quit(), not PostQuitMessage(). WM_QUIT would interrupt one dispatch pass
-                        // and nothing more -- Thread::exec() loops on its own exit flag and never
-                        // reads what processEvents() returned, so the program would not stop. That
-                        // is the deliberate divergence from Qt recorded as R22, and it is why an
-                        // application built on this library ends its loop through quit().
                         QtLikeSignal::CoreApplication::quit();
                         return 0;
                     }
+                    return 0;
+                }
 
-                    default:
-                        break;
+                case WM_ERASEBKGND:
+                {
+                    // Claimed, so Windows does not flood-fill the client area before WM_PAINT.
+                    // The paint slot covers every pixel from a back buffer instead.
+                    return 1;
+                }
+
+                case WM_PAINT:
+                {
+                    PAINTSTRUCT paint {};
+                    const HDC deviceContext = BeginPaint( aWindow, &paint );
+                    self->mPaintRequested.emit( deviceContext );
+                    EndPaint( aWindow, &paint );
+                    return 0;
+                }
+
+                case WM_CLOSE:
+                {
+                    // quit(), not PostQuitMessage(). WM_QUIT would interrupt one dispatch pass
+                    // and nothing more -- Thread::exec() loops on its own exit flag and never
+                    // reads what processEvents() returned, so the program would not stop. That
+                    // is the deliberate divergence from Qt recorded as R22, and it is why an
+                    // application built on this library ends its loop through quit().
+                    QtLikeSignal::CoreApplication::quit();
+                    return 0;
+                }
+
+                default:
+                    break;
                 }
 
                 return DefWindowProc( aWindow, aMessage, aWParam, aLParam );
@@ -228,7 +229,7 @@ namespace QtLikeSignalDemo
 
         // Grow the requested client size into the outer window size the style needs.
         const DWORD style = WS_OVERLAPPEDWINDOW;
-        RECT        frame { 0, 0, aClientWidth, aClientHeight };
+        RECT frame { 0, 0, aClientWidth, aClientHeight };
         AdjustWindowRect( &frame, style, FALSE );
 
         const HWND window = CreateWindowEx(
