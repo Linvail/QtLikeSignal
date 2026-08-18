@@ -3,12 +3,11 @@
 boost::signals2 is back in the comparison table, as a fourth column measured in the same process as
 the other three. Items are `P<n>`, continuing the numbering from `PERFORMANCE-20260813.md`.
 
-It adds a **measurement**, corrects a figure that `PERFORMANCE-20260813.md` states more favourably
-than the evidence supports, fixes two defects in the benchmark harness — one of which had been
-quietly distorting the `connect()` row for as long as that row has existed — and then acts on what
-the corrected measurement showed, taking three costs out of `Object` that bought nothing.
+It adds a **measurement**, fixes two defects in the benchmark harness — one of which had been quietly
+distorting the `connect()` row for as long as that row has existed — withdraws a comparison that was
+measuring the wrong thing, and takes three costs out of `Object` that bought nothing.
 
-Written 2026-08-17 and extended 2026-08-18 with the P11 work.
+Written 2026-08-17; extended and partly retracted 2026-08-18.
 
 How every figure below was produced is at the end, under
 [How these were measured](#how-these-were-measured). Read it before quoting a number.
@@ -17,7 +16,7 @@ How every figure below was produced is at the end, under
 
 | ID | Status | Finding | Impact | Latest measurement |
 |----|--------|---------|--------|--------------------|
-| P11 | **In progress** | Teardown against *raw* boost::signals2 is ~3x, not the 1.35x recorded on 2026-08-13 | Medium | Teardown 258.6 → **246.4 ns**; bare `~Object()` 110.6 → **86.8 ns**; Qt 6 gap 2.02x → **1.54x**. Object construction 84 → **62 ns**, one allocation fewer |
+| P11 | **Withdrawn** | "Teardown is ~3x boost" — the scenario compared `~Object()` against a 16-byte connection handle, and measured the object model rather than the disconnect | Medium | Replaced by a `disconnect()` row: **79.7 ns** against boost's 81.1 and Qt 6's 70.7. The three `Object` savings it turned up are kept |
 | P12 | **Fixed** | The summary table's ratio baseline was whichever library linked first, so adding a fourth benchmark file silently inverted every ratio | High (in the tool) | Baseline is now named, not inferred |
 | P13 | **Fixed** | The first allocation-heavy test in a process paid for heap growth, and the `connect()` row charged it to whichever library ran first | High (in the tool) | boost's connect **358.3 → 190.7 ns**; our advantage over boost on that row was overstated by 1.7x |
 
@@ -27,10 +26,10 @@ Two things are worth knowing without reading further:
   direct emit (0.90x), level on queued cross-thread (1.09x), and 2.7x faster than boost on emit —
   against the 2.7x recorded then, from an independent run four days later on a rebuilt harness. That
   part of P6 was solid.
-- **Two claims did not hold up.** Teardown was measured against QtMimic-when-it-used-boost rather
-  than against boost (P11), and the `connect()` row was measuring run position as much as it was
-  measuring libraries (P13). Both are corrected below, and the corrections move in opposite
-  directions from each other.
+- **Two rows were measuring something other than what they claimed.** The teardown row compared our
+  `Object` destructor against a sixteen-byte boost handle and reported the difference as a disconnect
+  cost (P11, withdrawn — replaced by a `disconnect()` row where we are at parity with boost). The
+  `connect()` row was measuring run position as much as it was measuring libraries (P13, fixed).
 
 ---
 
@@ -45,11 +44,11 @@ estimates how fast the code can go, and everything above it is the scheduler.
 ```
 scenario                        QtLikeSignal      boost       Qt6    QtMimic   vs boost  vs Qt6  vs QtMimic
 -----------------------------------------------------------------------------------------------------------
-connect()                          112.0 ns    190.7 ns   83.7 ns   121.6 ns     0.59x   1.34x     0.92x
-emit->receive, direct               24.4 ns     65.9 ns   27.1 ns    25.6 ns     0.37x   0.90x     0.95x
-destroy N receivers                258.6 ns     86.6 ns  131.7 ns   285.2 ns     2.99x   1.96x     0.91x
-emit->receive, auto same-thread     45.2 ns          -    26.5 ns    47.3 ns         -   1.71x     0.96x
-emit->receive, queued x-thread     486.6 ns          -   447.1 ns   498.6 ns         -   1.09x     0.98x
+connect()                          104.0 ns    188.6 ns   82.9 ns   111.1 ns     0.55x   1.25x     0.94x
+emit->receive, direct               24.7 ns     67.0 ns   29.1 ns    25.7 ns     0.37x   0.85x     0.96x
+disconnect()                        79.7 ns     81.1 ns   70.7 ns    74.5 ns     0.98x   1.13x     1.07x
+emit->receive, auto same-thread     49.3 ns          -    28.5 ns    47.5 ns         -   1.73x     1.04x
+emit->receive, queued x-thread     477.2 ns          -   437.1 ns   441.6 ns         -   1.09x     1.08x
 ```
 
 Ratios are QtLikeSignal against each other library; above 1 means we are slower.
@@ -58,11 +57,11 @@ Run-to-run spread over those three runs, so the ratios are read with the right p
 
 | row | QtLikeSignal | boost | Qt6 | QtMimic |
 |---|---|---|---|---|
-| `connect()` | 112.0–137.5 | 190.7–226.5 | 83.7–92.9 | 121.6–139.5 |
-| `direct` | 24.4–26.3 | 65.9–76.7 | 27.1–30.3 | 25.6–27.3 |
-| `destroy N` | 258.6–276.2 | 86.6–107.5 | 131.7–145.0 | 285.2–298.8 |
-| `auto same-thread` | 45.2–47.4 | – | 26.5–28.7 | 47.3–50.8 |
-| `queued x-thread` | 486.6–529.5 | – | 447.1–519.6 | 498.6–526.6 |
+| `connect()` | 104.0–109.3 | 188.6–242.4 | 82.9–120.3 | 111.1–121.0 |
+| `direct` | 24.7–27.3 | 67.0–69.3 | 29.1–29.9 | 25.7–28.7 |
+| `disconnect()` | 79.7–89.3 | 81.1–96.1 | 70.7–78.6 | 74.5–100.0 |
+| `auto same-thread` | 49.3–51.2 | – | 28.5–29.9 | 47.5–49.4 |
+| `queued x-thread` | 477.2–540.5 | – | 437.1–472.2 | 441.6–488.4 |
 
 `connect()` remains the noisiest row by a wide margin — the ratio against Qt 6 ranged 1.21x to 1.64x
 across those three runs — which is what `PERFORMANCE-20260813.md` already said about it, and why the
@@ -74,70 +73,91 @@ equivalent. An "auto" row would re-measure the direct row, and a "queued" row wo
 our event loop and would then be measuring our queue. `test_Boost_Performance.cpp` says the same at
 greater length.
 
-## P11 — teardown against raw boost is ~3x, not 1.35x *(In progress)*
+## P11 — the teardown comparison was measuring the wrong thing *(Withdrawn)*
 
-`PERFORMANCE-20260813.md` (P7) records, after the quadratic teardown was fixed:
+This entry originally read "teardown against raw boost::signals2 is ~3x, not the 1.35x recorded on
+2026-08-13", against `PERFORMANCE-20260813.md` (P7):
 
 > We are 1.35x slower than boost on teardown alone and 2.4x faster on connect.
 
-Measured against boost::signals2 directly, the teardown figure is **2.99x** — 258.6 ns per receiver
-against 86.6 ns, at 16 000 resident, and 2.57x–3.01x across the three runs. Qt 6 sits between the
-two at 131.7 ns, so it is 1.96x ahead of us on the same row.
+**The ~3x was real and the conclusion drawn from it was not.** The scenario destroyed N receivers
+and timed it. On our side a receiver is an `Object` — thread affinity, a life flag, an incoming
+connection list, a queued-event strip, a timer-id return. On boost's side it is a
+`scoped_connection`: sixteen bytes, no identity, no thread, no event loop. The row was comparing an
+object model against a handle and reporting the difference as a disconnect cost.
 
-**The two numbers are not in conflict; they are different comparisons.** The 2026-08-13 column
-labelled `QtMimic (boost)` was QtMimic's own receiver bookkeeping with a boost signal underneath, so
-it carried overhead that raw signals2 does not. That made it the right column for the question being
-asked at the time — *did replacing boost inside our own design make teardown worse?* — and the wrong
-column for the question it is now quoted as answering, which is what the underlying primitive costs.
-~3x is the honest number for the second question.
+The decomposition below made that unmistakable and was not read carefully enough at the time: **the
+bare `~Object()` with no connections at all already cost more than boost's entire teardown**, 110.6
+against 86.6. Nothing about the disconnect path was needed to produce the ~3x.
 
-Nothing about P7's fix is invalidated: teardown is still flat rather than quadratic and still 169x
-better than before. The composite of connect + emit + destroy still favours us over boost, because
-we win emit by 2.7x — though by less than the record implies, since the connect advantage is 1.7x
-rather than the 2.4x stated, for the reason P13 gives.
+### Replaced by a `disconnect()` row
 
-What changes is that **teardown is a wider gap than the record said**, and it is the only row where
-both reference libraries beat us.
+The row is gone. In its place the table measures what both libraries genuinely have in common:
+`Connection::disconnect()` against `boost::signals2::connection::disconnect()`. One signal, N slots
+connected through `Signal::connect()` so no receiver exists at all, N handle disconnects timed. No
+`~Object()` anywhere in the timed region, on any side.
 
-### Where the cost is
+| `disconnect()`, min of 3 runs | ns |
+|---|---|
+| QtLikeSignal | **79.7** |
+| QtMimic | 74.5 |
+| Qt 6 | 70.7 |
+| boost | 81.1 |
 
-Decomposed by destroying N objects that hold no connection at all, against N that hold one:
+**We are at parity with boost** — 0.84x, 0.93x and 1.01x over three runs, changing sign, which by
+this document's own standard is not a gap at all — and about 1.1x Qt 6. There is nothing left here
+to fix.
+
+One caveat belongs on boost's number, recorded so it is not mistaken for an artefact to correct.
+`connection::disconnect()` flips a flag and drops the slot's refcount; it does **not** unlink the
+entry from the signal's list, which signals2 sweeps later from `connect()` or from an emit. The
+benchmark does neither afterwards, so boost's list maintenance falls outside the timed region while
+ours is inside it. That is a real design difference — lazy against eager — and ours buys bounded
+memory and an emit that never walks dead entries, which is what P7 was about. It does mean boost's
+figure is a lower bound.
+
+### What the investigation produced anyway
+
+The wrong scenario still pointed at real costs, all in `Object` rather than in disconnect, and all
+kept:
 
 | | before | after |
 |---|---|---|
-| `~Object()`, no connections | 110.6 ns | **86.8 ns** |
-| `~Object()`, one connection, shared signal | 278.6 ns | **252.3 ns** |
-| `~Object()`, one connection, own signal | – | 237.5 ns |
+| bare `~Object()` | 110.6 ns | **86.8 ns** |
+| `Object` construction | 81.2–88.4 ns | **58.7–66.6 ns** |
+| allocations per `Object` construction | 3.003 | **2.002** |
 
-Two things follow. **The bare destructor was already more expensive than boost's entire teardown**
-(110.6 against 86.6), before a single connection is involved — so this was never mainly a
-disconnect-path problem. And the shared-signal bookkeeping (tombstones, compaction, one mutex for
-16 000 receivers) accounts for only ~32 ns of the ~166 ns a connection adds; the rest is per-object
-work that no amount of signal-side tuning would reach.
-
-### What was fixed, and what it cost in features
-
-**Nothing.** Both changes remove work that bought nothing:
+Three changes, none of which gave up a feature:
 
 - **`mUsedTimers`**, a third set-once flag beside `mUsedCallLater` and `mMayHaveQueuedWork`. The
   destructor took `mRunningTimerIdsMutex` unconditionally to swap a vector that is empty for every
-  object that never started a timer. Same guard, same precedent, same honest trade — an object that
-  has owned a timer keeps taking the lock.
+  object that never started a timer. Same guard and same trade as its two siblings.
 - **`Affinity::namesOtherRunningThread()`**. The cross-thread-destruction diagnostic called
-  `Affinity::data()`, which copies a `shared_ptr` out from under the mutex. Two atomic
+  `Affinity::data()`, which copies a `shared_ptr` out from under the mutex — two atomic
   read-modify-writes to keep alive, for the length of two atomic loads, something the mutex already
-  held. The question is now asked in one call, answered inside the mutex. The diagnostic is
-  unchanged, and the `Thread*` is still only ever compared, never dereferenced.
+  held. Asked as one question now, answered inside the mutex. The diagnostic is unchanged and the
+  `Thread*` is still only ever compared, never dereferenced.
+- **The life token folded into the affinity box.** Every `Object` carried two separately allocated
+  boxes — `mLife`, a `shared_ptr<int>`, and `mAffinity` — where Qt allocates one `QObjectPrivate`.
+  Both had to outlive the Object and both were captured by the same closures, so keeping them apart
+  cost an allocation, a free, and a second sixteen-byte capture per connection to carry one bit. The
+  flag is now `Affinity::isObjectAlive()`, a plain atomic load.
 
-Together: bare `~Object()` **110.6 → 86.8 ns (−22%)**, the shipped teardown row **258.6 → 246.4 ns**,
-and the Qt 6 gap on that row **2.02x → 1.54x**. QtMimic, untouched, still measures ~305 ns, which is
-a clean control: the same benchmark, the same process, the same source minus these two changes.
+  `Object::objectLife()` is public and had a test, so it still works: it returns an `ObjectLife`
+  token rather than a `std::weak_ptr<int>`. `expired()` is unchanged and the token still outlives
+  the Object. Only the type's name changed, which is an improvement on its own — the old signature
+  leaked `shared_ptr<int>` into the public interface.
+
+The saving from the merge is at **construction**, not teardown. That is the third time in this
+document that removing an allocation did not move the time it was expected to — see P13, and the
+reverted stack buffer below. On these paths the allocation count and the clock are close to
+independent, and each has to be measured on its own.
 
 ### A change that was tried and reverted
 
-Replacing the destructor's `std::vector` of incoming connections with an eight-slot stack buffer.
-It did exactly what it was meant to — allocations per destroy went from **1.004 to 0.004** — and the
-teardown row got **30 ns slower**, reproducibly, across every inline capacity tried:
+Replacing the destructor's `std::vector` of incoming connections with an eight-slot stack buffer. It
+did exactly what it was meant to — allocations per destroy went from **1.004 to 0.004** — and the
+scenario got **30 ns slower**, reproducibly, at every inline capacity tried:
 
 | inline capacity | `~Object()`, one connection |
 |---|---|
@@ -148,66 +168,26 @@ teardown row got **30 ns slower**, reproducibly, across every inline capacity tr
 | 8 | 289.9 ns |
 
 The allocation it removed was a hot tcache hit costing less than the zeroing and destruction of the
-buffer that replaced it. **Reverted.** Recorded here because "remove the allocation" is the obvious
-next idea and it is wrong: on this path the allocation count and the time do not move together, and
-the allocation guards next door would have called this a win.
+buffer that replaced it. **Reverted.** Recorded because "remove the allocation" is the obvious next
+idea and the allocation guards next door would have scored it a win.
 
-### The life token merged into the affinity box
-
-Every `Object` carried **two** separately allocated boxes — `mLife`, a `shared_ptr<int>` life token,
-and `mAffinity` — where Qt allocates one `QObjectPrivate`. The two had identical lifetime
-requirements: both had to outlive the Object, and both were captured by the same closures. Keeping
-them apart cost an allocation, a free, and a second sixteen-byte capture in every connection, all to
-carry one bit.
-
-Done 2026-08-18. The flag now lives in the affinity box as `Affinity::isObjectAlive()` /
-`markObjectDead()`, a plain atomic load where the old check was `weak_ptr::expired()`.
-
-| | before | after |
-|---|---|---|
-| allocations per `Object` construction | 3.003 | **2.002** |
-| `Object` construction | 81.2–88.4 ns | **58.7–66.6 ns** |
-| teardown per receiver | ~250 ns | ~250 ns, unchanged |
-
-**The saving is at construction, not teardown**, which is worth stating plainly because teardown is
-the row that motivated the work. The allocation happens when the Object is built; the matching free
-is a tcache push cheap enough to vanish under everything else the destructor does. This is the third
-time in this document that removing an allocation did not move the time it was expected to
-(see P13, and the reverted stack buffer above) — on these paths the allocation count and the clock
-are close to independent, and each has to be measured on its own.
-
-Measured against QtMimic as an in-process control, before it was ported, interleaved run by run so
-neither library got the warmer half: 22 ns apart, same direction every run, well outside the ±10%
-these two normally differ by.
-
-**No feature was given up.** `Object::objectLife()` is public and had a test, so it keeps working: it
-returns an `ObjectLife` token instead of a `std::weak_ptr<int>`. The one operation callers ever used,
-`expired()`, is unchanged, and the token still outlives the Object. Only the type's name changed,
-which is an improvement in itself — the old signature leaked `shared_ptr<int>`, an implementation
-detail, into the public interface.
-
-**Verified harder than anything else in this document**, because it rewrites the mechanism every
-queued connection depends on for its use-after-free safety: ThreadSanitizer and AddressSanitizer,
-both libraries, all from clean builds.
-
-### A build trap this change sets
+### A build trap the merge sets
 
 Removing `mLife` changes `sizeof(Object)` and the offset of every member after it. An **incremental**
 build that leaves one translation unit compiled against the old layout produces a binary that
 crashes with an access violation — order-dependent, and disappearing under a sanitizer, which is the
-most misleading combination a bug can have. That happened here on win64-msvc, reproducibly across
-three runs, and vanished entirely on `waf clean` followed by a full rebuild.
+most misleading combination a bug can have. That happened on win64-msvc, reproducibly across three
+runs, and vanished on `waf clean` followed by a full rebuild.
 
-Not a defect in the change, but recorded because the symptom is alarming and the cause is not
-obvious: anyone pulling this wants a clean build first, and anyone bisecting across it should not
-trust an incremental one.
+Not a defect in the change, but anyone pulling it wants a clean build first, and anyone bisecting
+across it should not trust an incremental one.
 
-### Left open
+### The lesson worth keeping
 
-The remaining gap to Qt 6 on the teardown row is ~1.5x, and nothing identified accounts for it in one
-piece. What is left is spread across a mutex per disconnect, a `weak_ptr` upgrade to reach the
-signal, and the frees of the connection node and the slot — each of which buys something, and none
-of which is obviously the next thing to attack.
+A benchmark row is a claim about what two libraries have in common. This one asserted that
+destroying a receiver is the same operation in both, and it is not. The number was correct and
+reproducible for eight days, and it was still measuring the wrong thing — which no amount of
+run-to-run care would have caught, because the error was in the scenario and not in the timing.
 
 ## P12 — the summary table's ratio baseline followed link order *(Fixed)*
 
@@ -320,7 +300,7 @@ linked into the benchmark binary as plain object files.
 **So the differences in the table are measurement noise**, and the evidence is that the sign of the
 difference is not stable. Five consecutive runs, QtLikeSignal against QtMimic:
 
-| run | direct emit | ratio | destroy N receivers | ratio |
+| run | direct emit | ratio | teardown (row since withdrawn) | ratio |
 |---|---|---|---|---|
 | 1 | 28.2 vs 25.9 ns | 1.09x | 328.7 vs 285.2 ns | 1.15x |
 | 2 | 27.8 vs 28.5 ns | **0.98x** | 277.5 vs 338.4 ns | **0.82x** |
@@ -381,9 +361,9 @@ and timing code through `PerfHarness.hpp`. All four libraries are measured in on
 machine, interleaved in time, with the same slot bodies, so the only difference between rows is the
 dispatch machinery.
 
-**Iteration counts.** 20 000 connects, 1 000 000 direct emits, 200 000 queued emits, 16 000 resident
-receivers for teardown. The teardown count matches the size P7 was measured at, so the row is
-comparable with `PERFORMANCE-20260813.md`.
+**Iteration counts.** 20 000 connects, 1 000 000 direct emits, 200 000 queued emits, and 20 000
+disconnects — the last deliberately equal to the connect count, so the two rows describe the two
+halves of the same connection's life and can be read against each other.
 
 **Process warm-up.** `settleAllocatorState()` spawns and joins a thread, because glibc drops its
 single-threaded malloc fast path permanently once a second thread has existed. `settleHeap()` grows
@@ -392,9 +372,10 @@ they settle is process-wide and one-way. **Numbers taken before 2026-08-17 have 
 missing**, so any `connect()` figure from an earlier snapshot understates whichever library ran
 first — including, in `PERFORMANCE-20260813.md`, our own advantage over boost on that row.
 
-**Teardown timing** covers only the destruction. Connecting is setup. Each teardown test emits once
-afterwards and asserts nothing is received, which proves the destructors really disconnected and the
-row is not timing the destruction of N objects that were attached to nothing.
+**Disconnect timing** covers only the disconnects. Connecting is setup. Each disconnect test emits
+once afterwards and asserts nothing is received, which proves the handles really ended their
+connections and the row is not timing a no-op. The check is written as an emit rather than as a slot
+count so that the identical assertion can be made for all four libraries.
 
 **boost.** 1.74.0 from Ubuntu 22.04's `libboost-dev`, header-only, nothing linked. The benchmark
 compiles only where the headers are found; `src/tests/wscript` probes for them and skips with a

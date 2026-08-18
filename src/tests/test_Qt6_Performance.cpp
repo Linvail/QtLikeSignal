@@ -25,7 +25,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <memory>
 #include <thread>
 #include <vector>
 
@@ -194,38 +193,42 @@ TEST( Performance, Qt6_QueuedEmitCrossThread )
     worker.wait();
 }
 
-//! Measures destroying N receivers that are all connected to one long-lived sender.
+//! Measures ending a connection through its QMetaObject::Connection handle.
 //!
-//! Qt's number is the one to beat here rather than merely to match: ~QObject unlinks each incoming
-//! connection through the sender's list in O(1), which is the design our own teardown was rewritten
-//! towards in P7.
-TEST( Performance, Qt6_TeardownAtScale )
+//! The counterpart of the connect() row, and the one scenario in this table that every library --
+//! including boost, which has no object model -- can run identically: a signal, a slot, and a
+//! handle, with no QObject destroyed in the timed region. The connections are context-free, so
+//! disconnecting touches only the sender's own bookkeeping.
+//!
+//! Only the disconnects are timed. Connecting is setup.
+TEST( Performance, Qt6_Disconnect )
 {
     Qt6PerfSender sender;
     long long received = 0;
 
-    std::vector<std::unique_ptr<Qt6PerfReceiver> > receivers;
-    receivers.reserve( PerfHarness::kTeardownResident );
-    for( int i = 0; i < PerfHarness::kTeardownResident; ++i )
+    std::vector<QMetaObject::Connection> handles;
+    handles.reserve( PerfHarness::kDisconnectOps );
+    for( int i = 0; i < PerfHarness::kDisconnectOps; ++i )
     {
-        receivers.push_back( std::unique_ptr<Qt6PerfReceiver>( new Qt6PerfReceiver() ) );
-        QObject::connect( &sender, &Qt6PerfSender::fired, receivers.back().get(),
+        handles.push_back( QObject::connect( &sender, &Qt6PerfSender::fired,
             [&received]( int aValue )
             {
                 received += aValue;
-            }, Qt::DirectConnection );
+            } ) );
     }
 
     const auto start = std::chrono::steady_clock::now();
-    receivers.clear();
+    for( const auto& handle : handles )
+    {
+        QObject::disconnect( handle );
+    }
     const auto elapsed = std::chrono::steady_clock::now() - start;
 
-    PerfHarness::record( "destroy N receivers", "Qt6",
+    PerfHarness::record( "disconnect()", "Qt6",
         std::chrono::duration<double, std::nano>( elapsed ).count()
-            / PerfHarness::kTeardownResident );
+            / PerfHarness::kDisconnectOps );
 
-    // Proves the destructors really did disconnect, so the row above is not the time to destroy
-    // N objects that were never attached to anything.
+    // Proves the handles really ended their connections, so the row above is not timing a no-op.
     sender.fire( 1 );
     EXPECT_EQ( received, 0 );
 }

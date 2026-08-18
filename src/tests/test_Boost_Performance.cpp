@@ -43,7 +43,7 @@
 using PerfHarness::keep;
 using PerfHarness::kConnectOps;
 using PerfHarness::kDirectOps;
-using PerfHarness::kTeardownResident;
+using PerfHarness::kDisconnectOps;
 using PerfHarness::record;
 using PerfHarness::timeLoop;
 
@@ -52,29 +52,6 @@ namespace
     //! The signal every benchmark below drives. One `int`, matching the other libraries.
     using BoostSignal = boost::signals2::signal<void ( int )>;
 
-    //! Holds one connection and ends it on destruction.
-    //!
-    //! The counterpart of a QtLikeSignal `Object` or a `QObject` receiver, and the thing whose
-    //! destructor the teardown scenario times. signals2 has no receiver concept of its own, so a
-    //! `scoped_connection` is the closest equivalent -- and it is what our receivers held internally
-    //! back when they were built on boost, so the comparison is like for like.
-    class BoostPerfReceiver
-    {
-    public:
-        //! Connects @p aSlot to @p aSignal, holding the connection for as long as this object lives.
-        template <typename Callable>
-        BoostPerfReceiver
-            (
-            BoostSignal& aSignal,   //!< Signal to connect to.
-            Callable aSlot          //!< Slot to invoke on emission.
-            )
-            : mConnection( aSignal.connect( aSlot ) )
-        {
-        }
-
-    private:
-        boost::signals2::scoped_connection mConnection;
-    };
 }
 
 //! Measures establishing a connection.
@@ -114,42 +91,46 @@ TEST( Performance, Boost_DirectEmit )
     EXPECT_GT( received, 0 );
 }
 
-//! Measures destroying N receivers that are all connected to one long-lived signal.
+//! Measures ending a connection through its handle.
 //!
-//! The row boost exists in this table for. P7 was a quadratic teardown -- 16 000 receivers took
-//! 671 ms against boost's 2.94 ms -- and after the fix we were still 1.35x behind on this one
-//! operation while ahead on every other. That is a live comparison rather than a historical one, so
-//! it is worth measuring in the same process as everything else rather than trusting a number
-//! recorded in a document last August.
+//! The row this column exists for. Every other scenario either has no boost equivalent or compares
+//! machinery boost does not have; this one is a signal, a slot and a handle on both sides, with no
+//! object model involved anywhere in the timed region.
 //!
-//! Only the teardown is timed. Connecting is setup, and timing it too would blur the thing being
-//! measured.
-TEST( Performance, Boost_TeardownAtScale )
+//! One caveat belongs on the number. `connection::disconnect()` flips a flag and drops the slot's
+//! refcount; it does **not** unlink the entry from the signal's list, which signals2 sweeps later
+//! from `connect()` or from an emit. This benchmark does neither afterwards, so boost's deferred
+//! list maintenance falls outside the timed region while ours is inside it. That is a real
+//! difference in design -- eager against lazy -- and not an artefact to correct for, but the number
+//! is a lower bound on what a signals2 disconnect eventually costs.
+//!
+//! Only the disconnects are timed. Connecting is setup.
+TEST( Performance, Boost_Disconnect )
 {
     BoostSignal sig;
     long long received = 0;
 
-    std::vector<std::unique_ptr<BoostPerfReceiver> > receivers;
-    receivers.reserve( kTeardownResident );
-    for( int i = 0; i < kTeardownResident; ++i )
+    std::vector<boost::signals2::connection> handles;
+    handles.reserve( kDisconnectOps );
+    for( int i = 0; i < kDisconnectOps; ++i )
     {
-        receivers.push_back( std::unique_ptr<BoostPerfReceiver>(
-            new BoostPerfReceiver( sig, [&received]( int aValue )
+        handles.push_back( sig.connect( [&received]( int aValue )
             {
                 received += aValue;
-            } ) ) );
+            } ) );
     }
 
     const auto start = std::chrono::steady_clock::now();
-    receivers.clear();
+    for( auto& handle : handles )
+    {
+        handle.disconnect();
+    }
     const auto elapsed = std::chrono::steady_clock::now() - start;
 
-    record( "destroy N receivers", "boost",
-        std::chrono::duration<double, std::nano>( elapsed ).count() / kTeardownResident );
+    record( "disconnect()", "boost",
+        std::chrono::duration<double, std::nano>( elapsed ).count() / kDisconnectOps );
 
-    // Proves the destructors really did disconnect, so the row above is not the time to destroy
-    // N objects that were never attached to anything. Checked by emitting rather than by reading a
-    // slot count, so the same check can be written for every library in this table.
+    // Proves the handles really ended their connections, so the row above is not timing a no-op.
     sig( 1 );
     EXPECT_EQ( received, 0 );
 }

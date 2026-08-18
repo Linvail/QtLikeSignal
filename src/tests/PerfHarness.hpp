@@ -224,11 +224,10 @@ namespace PerfHarness
     constexpr int kDirectOps  = 1000000;
     constexpr int kQueuedOps  = 200000;
 
-    // Receivers resident on one signal before the teardown scenario destroys them all. 16 000 is
-    // the size P7 was measured at, so the row this produces can be read directly against the table
-    // in history/PERFORMANCE-20260813.md -- which is also the one row where the boost we replaced
-    // was ahead of us, and so the one worth keeping a boost column for.
-    constexpr int kTeardownResident = 16000;
+    // Connections resident on one signal before the disconnect scenario ends them one by one.
+    // Deliberately the same as kConnectOps, so the connect() and disconnect() rows describe the two
+    // halves of the same connection's life and can be read against each other directly.
+    constexpr int kDisconnectOps = kConnectOps;
 
     //! Grows and faults in the heap the benchmarks will need, before anything is measured.
     //!

@@ -59,7 +59,7 @@ using PerfHarness::keep;
 using PerfHarness::kConnectOps;
 using PerfHarness::kDirectOps;
 using PerfHarness::kQueuedOps;
-using PerfHarness::kTeardownResident;
+using PerfHarness::kDisconnectOps;
 using PerfHarness::record;
 using PerfHarness::timeLoop;
 
@@ -185,41 +185,44 @@ TEST( Performance, QtLikeSignal_QueuedEmitCrossThread )
     worker.wait();
 }
 
-//! Measures destroying N receivers that are all connected to one long-lived signal.
+//! Measures ending a connection through its handle.
 //!
-//! The scenario P7 was found in, kept in the comparison table because it is the one operation where
-//! the boost we replaced is still ahead of us. Teardown is quadratic if a disconnect has to search
-//! the signal's slot list, and quadratic again if it has to search the receiver's own list, so this
-//! row is where both of those come back if either regresses.
+//! The counterpart of the connect() row above, and the closest thing this table has to a
+//! like-for-like comparison with boost: a signal, a slot, and a handle, with no Object anywhere in
+//! the timed region. Connections are made through Signal::connect() rather than Object::connect(),
+//! so no receiver is involved and nothing here depends on how ~Object() behaves.
 //!
-//! Only the teardown is timed. Connecting is setup, and timing it too would blur what this measures.
-TEST( Performance, QtLikeSignal_TeardownAtScale )
+//! Only the disconnects are timed. Connecting is setup.
+TEST( Performance, QtLikeSignal_Disconnect )
 {
     using namespace QtLikeSignal;
 
     Signal<int> sig;
     long long received = 0;
 
-    std::vector<std::unique_ptr<Object> > receivers;
-    receivers.reserve( kTeardownResident );
-    for( int i = 0; i < kTeardownResident; ++i )
+    std::vector<Connection> handles;
+    handles.reserve( kDisconnectOps );
+    for( int i = 0; i < kDisconnectOps; ++i )
     {
-        receivers.push_back( std::unique_ptr<Object>( new Object() ) );
-        Object::connect( sig, receivers.back().get(), [&received]( int aValue )
+        handles.push_back( sig.connect( [&received]( int aValue )
             {
                 received += aValue;
-            }, ConnectionType::Direct );
+            } ) );
     }
 
     const auto start = std::chrono::steady_clock::now();
-    receivers.clear();
+    for( const auto& handle : handles )
+    {
+        handle.disconnect();
+    }
     const auto elapsed = std::chrono::steady_clock::now() - start;
 
-    record( "destroy N receivers", "QtLikeSignal",
-        std::chrono::duration<double, std::nano>( elapsed ).count() / kTeardownResident );
+    record( "disconnect()", "QtLikeSignal",
+        std::chrono::duration<double, std::nano>( elapsed ).count() / kDisconnectOps );
 
-    // Proves the destructors really did disconnect, so the row above is not the time to destroy
-    // N objects that were never attached to anything.
+    // Proves the handles really ended their connections, so the row above is not timing a no-op.
+    // Checked by emitting rather than by reading a slot count, so the same check can be written for
+    // every library in this table.
     sig.emit( 1 );
     EXPECT_EQ( received, 0 );
 }
@@ -330,29 +333,31 @@ TEST( Performance, QtMimic_QueuedEmitCrossThread )
     worker.wait();
 }
 
-//! Measures destroying N receivers that are all connected to one long-lived signal.
-TEST( Performance, QtMimic_TeardownAtScale )
+//! Measures ending a connection through its handle. See QtLikeSignal_Disconnect.
+TEST( Performance, QtMimic_Disconnect )
 {
     QtMimic::Signal<int> sig;
     long long received = 0;
 
-    std::vector<std::unique_ptr<QtMimic::Object> > receivers;
-    receivers.reserve( kTeardownResident );
-    for( int i = 0; i < kTeardownResident; ++i )
+    std::vector<QtMimic::Connection> handles;
+    handles.reserve( kDisconnectOps );
+    for( int i = 0; i < kDisconnectOps; ++i )
     {
-        receivers.push_back( std::unique_ptr<QtMimic::Object>( new QtMimic::Object() ) );
-        QtMimic::Object::connect( sig, receivers.back().get(), [&received]( int aValue )
+        handles.push_back( sig.connect( [&received]( int aValue )
             {
                 received += aValue;
-            }, QtMimic::ConnectionType::Direct );
+            } ) );
     }
 
     const auto start = std::chrono::steady_clock::now();
-    receivers.clear();
+    for( const auto& handle : handles )
+    {
+        handle.disconnect();
+    }
     const auto elapsed = std::chrono::steady_clock::now() - start;
 
-    record( "destroy N receivers", "QtMimic",
-        std::chrono::duration<double, std::nano>( elapsed ).count() / kTeardownResident );
+    record( "disconnect()", "QtMimic",
+        std::chrono::duration<double, std::nano>( elapsed ).count() / kDisconnectOps );
 
     sig.emit( 1 );
     EXPECT_EQ( received, 0 );
