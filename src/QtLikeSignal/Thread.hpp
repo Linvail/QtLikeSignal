@@ -13,6 +13,9 @@
 #ifndef QT_LIKE_SIGNAL_THREAD_HPP
 #define QT_LIKE_SIGNAL_THREAD_HPP
 
+// For ProcessEventsFlag, which appears in processEvents()'s default argument and so cannot be
+// forward declared.
+#include "QtLikeSignal/AbstractEventDispatcher.hpp"
 #include "QtLikeSignal/Object.hpp"
 #include "QtLikeSignal/Signal.hpp"
 
@@ -55,14 +58,27 @@ namespace QtLikeSignal
     class Thread : public Object
     {
     public:
-        //! Constructs an unstarted thread with an optional name.
+        //! Constructs an unstarted thread with an optional name and parent.
         //!
         //! The name is descriptive only -- it is not pushed to the OS and nothing keys off it. It
         //! exists so a thread can identify itself in a log or a test failure, which matters most
         //! exactly when several are running at once.
+        //!
+        //! **A parent owns the thread and will delete it**, as it would any other child, which for
+        //! a Thread means the destructor's quit() and wait() run from the parent's destructor. That
+        //! is safe here and is not in Qt: ~QThread() aborts with "Destroyed while thread is still
+        //! running", whereas ~Thread() stops the loop and joins.
+        //!
+        //! The cost of that safety is worth knowing before using it: deleting the parent **blocks**
+        //! until the thread finishes whatever it is doing. On a latency-sensitive teardown path,
+        //! stop the thread yourself first and let the parent's delete find it already finished.
+        //!
+        //! The parent must live in the thread that is constructing this one, which is the ordinary
+        //! parent-child rule; setParent() reports a refusal on stderr if it does not.
         explicit Thread
             (
-            const std::string& aName = std::string()
+            const std::string& aName = std::string(),
+            Object* aParent = nullptr
             );
 
         //! Virtual so a subclass overriding run() can be destroyed through a Thread*, which the
@@ -147,7 +163,11 @@ namespace QtLikeSignal
 
         static Thread* currentThread();
 
-        void processEvents();
+        void processEvents
+            (
+            AbstractEventDispatcher::ProcessEventsFlag aFlag
+                = AbstractEventDispatcher::ProcessEventsFlag::AllEvents
+            );
 
         void setWakeCallback
             (
@@ -158,7 +178,20 @@ namespace QtLikeSignal
 
         std::shared_ptr<AbstractEventDispatcher> eventDispatcher() const;
 
-        bool post
+        //! @return true if the task was queued; false if it was refused, in which case **it will
+        //! never run**.
+        //!
+        //! [[nodiscard]] because a discarded false is a task that silently disappears, and the
+        //! compiler is the only thing that can see every call site. A caller that genuinely does
+        //! not care must say so with a cast to void, so that the decision is visible in the source
+        //! rather than implied by its absence. The build promotes the diagnostic to an error --
+        //! /we4834 on MSVC, -Werror=unused-result elsewhere; see README.md, "Compiler
+        //! configuration".
+        //!
+        //! Refusal means the thread has no dispatcher and is not on its way to having one: it was
+        //! never started, or it has already finished. A post to a thread that is *starting* is
+        //! parked and delivered when its loop comes up, so that case does not refuse.
+        [[nodiscard]] bool post
             (
             std::function<void()> aTask
             );
@@ -182,7 +215,11 @@ namespace QtLikeSignal
         //! started itself can never be given one without a race. Qt's QThread::create() leaves the
         //! thread unstarted for exactly these reasons.
         template <typename Function, typename ... Args>
-        [[nodiscard]] static Thread* create( Function&& aF, Args&&... aArgs );
+        [[nodiscard]] static Thread* create
+            (
+            Function&& aF,
+            Args&&... aArgs
+            );
 
     protected:
         //! The body the new thread executes. Override to do something other than run an event
@@ -206,20 +243,7 @@ namespace QtLikeSignal
         //!
         //! Private for the same reason as Object::threadData(): it is the handle onto the
         //! dispatcher plumbing, not API. Object reaches it when adopting a thread's affinity.
-        std::shared_ptr<ThreadData> threadData() const
-        {
-            return mData;
-        }
-
-        //! The same data as a bare pointer, for callers that only want to *compare* it.
-        //!
-        // Exists because the same-thread test on every Auto emit was copying a shared_ptr -- an
-        // atomic increment and decrement -- to answer a pointer comparison.
-        //! Safe because it is not an ownership handle: mData is assigned once in the constructor and
-        //! never reassigned, and the only caller asks it of Thread::currentThread(), which is by
-        //! definition the calling thread and so cannot be destroyed underneath the comparison.
-        //! Anything that needs the data to stay alive must use threadData() above.
-        ThreadData* threadDataPtr() const
+        ThreadData* threadData() const
         {
             return mData.get();
         }

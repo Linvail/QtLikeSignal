@@ -10,9 +10,50 @@
 #include "QtLikeSignal/Event.hpp"
 
 #include <algorithm>
+#include <mutex>
+#include <vector>
 
 namespace QtLikeSignal
 {
+    namespace
+    {
+        //! Every ThreadData ever created, kept alive for the life of the process.
+        //!
+        //! Leaked on purpose, and the leak is the feature. A raw ThreadData* has to stay valid from
+        //! any thread at any time -- that is what lets Affinity hold one atomically instead of a
+        //! shared_ptr behind a 40-byte mutex -- so nothing may ever free one. A function-local
+        //! static would be destroyed at exit, in an order nothing here controls, while other
+        //! statics could still be tearing objects down; a deliberately leaked pointer cannot be.
+        //!
+        //! Reachable from this static, so LeakSanitizer does not report it. That is a happy
+        //! consequence rather than the reason: `waf --enable-asan` must stay clean, and a leak the
+        //! sanitizer *would* report is a leak that hides the next real one.
+        std::vector<std::shared_ptr<ThreadData> >& threadDataRegistry()
+        {
+            static std::vector<std::shared_ptr<ThreadData> >* registry =
+                new std::vector<std::shared_ptr<ThreadData> >();
+            return *registry;
+        }
+
+        //! Guards threadDataRegistry(). Taken once per Thread construction, never on a hot path.
+        std::mutex& threadDataRegistryMutex()
+        {
+            static std::mutex mutex;
+            return mutex;
+        }
+    }
+
+    //! Creates a ThreadData and files it in the registry. See the declaration.
+    std::shared_ptr<ThreadData> ThreadData::create()
+    {
+        std::shared_ptr<ThreadData> data = std::make_shared<ThreadData>();
+        {
+            std::lock_guard<std::mutex> lock( threadDataRegistryMutex() );
+            threadDataRegistry().push_back( data );
+        }
+        return data;
+    }
+
     //! Frees any events parked for a dispatcher that never arrived.
     ThreadData::~ThreadData()
     {
@@ -130,4 +171,5 @@ namespace QtLikeSignal
             } );
         mParkedEvents.erase( it, mParkedEvents.end() );
     }
-}
+
+} // namespace QtLikeSignal

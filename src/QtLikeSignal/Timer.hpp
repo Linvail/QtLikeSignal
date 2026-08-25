@@ -40,7 +40,7 @@ namespace QtLikeSignal
     public:
         explicit Timer
             (
-            Thread* aThread = nullptr
+            Object* aParent = nullptr
             );
 
         virtual ~Timer() override;
@@ -140,11 +140,6 @@ namespace QtLikeSignal
             int aMsec             //!< The requested interval, in milliseconds.
             );
 
-        // Deliberately unsynchronised, matching QTimer, which has no locking of any kind. Every
-        // member here is only ever touched from the timer's own thread: start()/stop() are
-        // thread-confined because they go through Object::startTimer()/killTimer(), and timerEvent()
-        // is delivered by that same thread's event loop. Adding a mutex would only paper over misuse
-        // that the thread-confinement rules already forbid.
         //! Emitted, on the timer's own thread, each time the interval elapses.
         //!
         //! Private, and handed out only as a view: firing a timer's timeout is the timer's job, and
@@ -152,10 +147,18 @@ namespace QtLikeSignal
         //! Same reasoning as Thread's mStarted/mFinished.
         Signal<> mTimeout;
 
-        int mInterval { 0 };        //!< The configured interval, in milliseconds.
-        int mTimerId { -1 };        //!< The underlying Object timer id, or -1 if inactive.
-        bool mSingleShot { false }; //!< True if the timer stops itself after firing once.
-        bool mActive { false };     //!< True while the timer is running.
+        // Deliberately unsynchronised, matching QTimer, which has no locking of any kind. Every
+        // member here is only ever touched from the timer's own thread: start()/stop() are
+        // thread-confined because they go through Object::startTimer()/killTimer(), and timerEvent()
+        // is delivered by that same thread's event loop. Adding a mutex would only paper over misuse
+        // that the thread-confinement rules already forbid.
+        int mInterval { 0 };         //!< The configured interval, in milliseconds.
+
+        int mTimerId { -1 };         //!< The underlying Object timer id, or -1 if inactive.
+
+        bool mSingleShot { false };  //!< True if the timer stops itself after firing once.
+
+        bool mActive { false };      //!< True while the timer is running.
     };
 
     //! Runs a functor once on the calling thread after a delay.
@@ -239,9 +242,9 @@ namespace QtLikeSignal
             return;
         }
 
-        const std::shared_ptr<ThreadData> contextData = aContext->threadData();
-        const std::weak_ptr<int> contextLife = aContext->mLife;
-        if( !contextData || contextData->thread() == nullptr || contextLife.expired() )
+        ThreadData* const contextData = aContext->threadData();
+        const std::shared_ptr<Affinity> contextLife = aContext->mAffinity;
+        if( !contextData || contextData->thread() == nullptr || !contextLife->isObjectAlive() )
         {
             // Detached object: no loop would ever deliver the timer, so there is nothing to arm.
             return;
@@ -253,12 +256,12 @@ namespace QtLikeSignal
         public:
             SingleShotContextHelper
                 (
-                std::shared_ptr<ThreadData> aOwnerData,
-                std::weak_ptr<int> aContextLife,
+                ThreadData* aOwnerData,
+                std::shared_ptr<Affinity> aContextLife,
                 int aMs,
                 Functor aFn
                 )
-                : Object( std::move( aOwnerData ) )
+                : Object( aOwnerData )
                 , mContextLife( std::move( aContextLife ) )
                 , mFn( std::move( aFn ) )
                 , mInterval( aMs )
@@ -270,7 +273,7 @@ namespace QtLikeSignal
             //! Public only so the posted task below can target it; it is not part of any API.
             void arm()
             {
-                if( mContextLife.expired() )
+                if( !mContextLife->isObjectAlive() )
                 {
                     delete this;
                     return;
@@ -297,7 +300,7 @@ namespace QtLikeSignal
                 killTimer( mId );  // see SingleShotHelper::timerEvent() for why this is not deferred
                 mId = -1;
 
-                if( !mContextLife.expired() )
+                if( mContextLife->isObjectAlive() )
                 {
                     mFn();
                 }
@@ -305,7 +308,7 @@ namespace QtLikeSignal
             }
 
         private:
-            std::weak_ptr<int> mContextLife;
+            std::shared_ptr<Affinity> mContextLife;
             Functor mFn;
             int mInterval { 0 };
             int mId { -1 };
@@ -345,12 +348,14 @@ namespace QtLikeSignal
         {
             return;
         }
+
         auto bound = [aReceiver, aMethod]()
             {
                 ( const_cast<Receiver*>( aReceiver )->*aMethod )();
             };
         singleShot( aMsec, static_cast<const Object*>( aReceiver ), bound );
     }
-}
+
+} // namespace QtLikeSignal
 
 #endif // QT_LIKE_SIGNAL_TIMER_HPP

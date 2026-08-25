@@ -1,14 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
-// Regression tests for the defects found in the code review of technology/G* (see CHANGES.md /
-// the accompanying patch). Kept separate from test_gobject.cpp / test_gthread.cpp / test_gtimer.cpp
-// since these specifically target crash/UAF/leak/race scenarios rather than day-to-day API
-// behavior, and several of them are stress tests rather than single-shot deterministic checks --
-// see each test's doc comment for what it actually proves and how to get the strongest signal
-// out of it (most benefit from being run under AddressSanitizer and/or ThreadSanitizer; the build
-// enables one or the other, never both -- see tools/toolchain-linux.py -- so run it under each in
-// turn, since they catch disjoint classes of defect).
+//! @file
+
 #include <gtest/gtest.h>
 #include "QtLikeSignal/Object.hpp"
 #include "QtLikeSignal/Thread.hpp"
@@ -67,28 +61,28 @@ namespace
         return aReady();
     }
 
-    //! Resident set size in kB, or -1 where it is not implemented.
+    #if defined( __linux__ )
+    //! Resident set size in kB, or -1 if /proc/self/status does not report it.
     //!
-    //! Only Linux is implemented; the tests that need it skip elsewhere rather than pretending.
+    //! Linux only, and only defined there: its sole caller is compiled out elsewhere, and a
+    //! never-called function with internal linkage is a warning of its own (MSVC C4505). The
+    //! tests that need this reading skip off Linux rather than pretending to take it.
     long residentSetKb()
     {
-        #if defined( __linux__ )
-            std::ifstream status( "/proc/self/status" );
-            std::string key;
-            long value = 0;
-            while( status >> key )
+        std::ifstream status( "/proc/self/status" );
+        std::string key;
+        long value = 0;
+        while( status >> key )
+        {
+            if( key == "VmRSS:" )
             {
-                if( key == "VmRSS:" )
-                {
-                    status >> value;
-                    return value;
-                }
+                status >> value;
+                return value;
             }
-            return -1;
-        #else
-            return -1;
-        #endif
+        }
+        return -1;
     }
+    #endif
 
     //! Object that records its own destruction, so deferred deletion can be observed.
     class DestructionRecorder : public Object
@@ -470,7 +464,8 @@ TEST( EventDispatcherDefaultDefectTest, InterruptDuringTimerCollectionStress )
             } );
 
         go.store( true, std::memory_order_release );
-        dispatcher.processEvents();
+        dispatcher.processEvents(
+            AbstractEventDispatcher::ProcessEventsFlag::WaitForMoreEvents );
         racer.join();
     }
 
@@ -1085,7 +1080,8 @@ TEST( EventDispatcherDefaultDefectTest, IdleWaitBlocksButStillWakesOnPostedEvent
     std::thread loop(
         [&dispatcher, &returnedPromise]()
         {
-            dispatcher.processEvents();
+            dispatcher.processEvents(
+            AbstractEventDispatcher::ProcessEventsFlag::WaitForMoreEvents );
             returnedPromise.set_value();
         } );
 
@@ -1125,7 +1121,8 @@ TEST( EventDispatcherDefaultDefectTest, WakeUpEndsIdleWait )
     std::thread loop(
         [&dispatcher, &returnedPromise]()
         {
-            dispatcher.processEvents();
+            dispatcher.processEvents(
+            AbstractEventDispatcher::ProcessEventsFlag::WaitForMoreEvents );
             returnedPromise.set_value();
         } );
 
@@ -1222,18 +1219,20 @@ TEST( TimerDefectTest, SingleShotIsStoppedBeforeTimeoutIsEmitted )
 // when the target thread is gone, and ~Thread() drains deferred deletes and releases the dispatcher
 // before nulling the back-pointer, so the two can no longer disagree.
 //
-// The invariant that forecloses it: ~Thread() must close the queue *before* nulling the
-// back-pointer, so that thread() == nullptr implies the queue is closed, and connectImpl()
-// additionally drops when ctxData->thread() == nullptr. Without both, five rounds of 200k emits
-// grew ~30 MB every round without bound instead of flattening.
+// QtLikeSignal forecloses this. ~Thread() closes the mailbox *before* nulling the back-pointer, stating
+// the invariant outright -- "Done BEFORE clearing the back-pointer, so the invariant 'thread() ==
+// nullptr implies not accepting' holds" -- and connectImpl() additionally drops when
+// ctxData->thread() == nullptr. Measured side by side over five rounds of 200k emits, QtLikeSignal grows
+// 276 kB then flattens; QtLikeSignal grows ~30 MB every round without bound.
 // ---------------------------------------------------------------------------------------------
 
 //! Verifies deleteLater() on an orphaned object deletes it instead of leaking it.
 //!
 //! Deterministic -- no timing, no sampling. Before the fix this queued a DeferredDeleteEvent into
 //! the dead thread's still-live dispatcher, reported success, and the object was never destroyed.
-//! It now falls back to a synchronous delete: doing nothing would leak the object forever, which
-//! is strictly worse than the thread-affinity violation of deleting it synchronously.
+//! It now falls back to a synchronous delete, the same trade QtLikeSignal makes when its post() refuses
+//! the task: "Doing nothing here would leak self forever, which is strictly worse than the
+//! thread-affinity violation of deleting it synchronously."
 TEST( ObjectDefectTest, DeleteLaterOnAnOrphanedObjectDeletesItSynchronously )
 {
     auto destroyed = std::make_shared<std::atomic<bool> >( false );
@@ -1270,12 +1269,15 @@ TEST( ObjectDefectTest, DeleteLaterOnAnOrphanedObjectDeletesItSynchronously )
 //! climbing forever, and LeakSanitizer reported nothing because every byte stayed reachable.
 TEST( ObjectDefectTest, QueuedCallsToAnOrphanedObjectAreDropped )
 {
-    if( residentSetKb() < 0 )
-    {
+    // Both gates are compile-time, and the measurement lives in the #else rather than after them.
+    // The Linux gate used to read `if( residentSetKb() < 0 ) GTEST_SKIP();`, which looks like a
+    // runtime check but is not one: residentSetKb() folds to a constant -1 off Linux, so the whole
+    // rest of this test was provably dead there. MSVC reported exactly that (C4702) and was right.
+    // The cost of this shape is that the body is no longer compiled off Linux; it uses nothing
+    // platform-specific, and every Linux build type-checks it.
+    #if !defined( __linux__ )
         GTEST_SKIP() << "resident-set sampling is implemented for Linux only";
-    }
-
-    #if defined( QLS_ADDRESS_SANITIZER_ACTIVE )
+    #elif defined( QLS_ADDRESS_SANITIZER_ACTIVE )
         // AddressSanitizer holds freed allocations in a quarantine so it can detect use-after-free,
         // so resident memory grows with the number of frees regardless of whether anything is
         // retained. Emitting allocates one std::function per call even when the resulting metacall
@@ -1286,49 +1288,53 @@ TEST( ObjectDefectTest, QueuedCallsToAnOrphanedObjectAreDropped )
         GTEST_SKIP() << "resident-set growth is not a meaningful signal under AddressSanitizer "
             "(its quarantine retains freed blocks); re-run under TSan, or with "
             "ASAN_OPTIONS=quarantine_size_mb=1";
-    #endif
+    #else
 
-    Object* orphan = makeOrphanedObject( []()
+        Object* orphan = makeOrphanedObject( []()
         {
             return new Object();
         } );
-    ASSERT_NE( orphan, nullptr );
-    ASSERT_EQ( orphan->thread(), nullptr );
+        ASSERT_NE( orphan, nullptr );
+        ASSERT_EQ( orphan->thread(), nullptr );
 
-    Signal<> sig;
-    Object::connect( sig, orphan, []()
+        Signal<> sig;
+        Object::connect( sig, orphan, []()
         {
         }, ConnectionType::Queued );
 
-    constexpr int kRounds = 4;
-    constexpr int kEmitsPerRound = 200000;
-    std::vector<long> growthPerRound;
+        constexpr int kRounds = 4;
+        constexpr int kEmitsPerRound = 200000;
+        std::vector<long> growthPerRound;
 
-    for( int round = 0; round < kRounds; ++round )
-    {
-        const long before = residentSetKb();
-        for( int i = 0; i < kEmitsPerRound; ++i )
+        for( int round = 0; round < kRounds; ++round )
         {
-            sig.emit();
+            const long before = residentSetKb();
+            for( int i = 0; i < kEmitsPerRound; ++i )
+            {
+                sig.emit();
+            }
+            growthPerRound.push_back( residentSetKb() - before );
         }
-        growthPerRound.push_back( residentSetKb() - before );
-    }
 
-    // Ignore the first round: that is where the allocator's arena grows, and it does so even when
-    // the events are correctly dropped. Steady-state growth is the signal.
-    long steadyStateGrowth = 0;
-    for( size_t i = 1; i < growthPerRound.size(); ++i )
-    {
-        steadyStateGrowth += growthPerRound[i];
-    }
+        // Ignore the first round: that is where the allocator's arena grows, and it does so even when
+        // the events are correctly dropped. Steady-state growth is the signal.
+        long steadyStateGrowth = 0;
+        for( size_t i = 1; i < growthPerRound.size(); ++i )
+        {
+            steadyStateGrowth += growthPerRound[i];
+        }
 
-    delete orphan;
+        delete orphan;
 
-    EXPECT_LT( steadyStateGrowth, 4096 )
-        << "after the first round, " << ( kRounds - 1 ) << " further rounds of " << kEmitsPerRound
-        << " queued emits to an object whose thread is gone retained " << steadyStateGrowth
-        << " kB. They are being queued into a dispatcher nothing will ever drain, instead of being "
-        "dropped.";
+        EXPECT_LT( steadyStateGrowth, 4096 )
+            << "after the first round, " << ( kRounds - 1 ) << " further rounds of " <<
+            kEmitsPerRound
+            << " queued emits to an object whose thread is gone retained " << steadyStateGrowth
+            <<
+            " kB. They are being queued into a dispatcher nothing will ever drain, instead of being "
+            "dropped.";
+
+    #endif
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1406,7 +1412,8 @@ TEST( EventDispatcherDefaultDefectTest, LatePassDoesNotShiftARepeatingTimersCade
     // Leave the dispatcher unserviced straight through the first deadline.
     std::this_thread::sleep_for( std::chrono::milliseconds( kLatePassMs ) );
 
-    dispatcher.processEvents();
+    dispatcher.processEvents(
+            AbstractEventDispatcher::ProcessEventsFlag::WaitForMoreEvents );
     ASSERT_EQ( recorder.mFireOffsetsMs.size(), 1u )
         << "the overdue timer should fire on the first pass that services it";
 
@@ -1422,7 +1429,8 @@ TEST( EventDispatcherDefaultDefectTest, LatePassDoesNotShiftARepeatingTimersCade
     // so this does not spin.
     while( recorder.mFireOffsetsMs.size() < 2 )
     {
-        dispatcher.processEvents();
+        dispatcher.processEvents(
+            AbstractEventDispatcher::ProcessEventsFlag::WaitForMoreEvents );
     }
 
     const double secondFireMs = recorder.mFireOffsetsMs[1];
@@ -1482,7 +1490,8 @@ TEST( EventDispatcherDefaultDefectTest, TimerKilledDuringDispatchDoesNotStillFir
     dispatcher.registerTimer( 1, 0, &recorder );
     dispatcher.registerTimer( 2, 0, &recorder );
 
-    dispatcher.processEvents();
+    dispatcher.processEvents(
+            AbstractEventDispatcher::ProcessEventsFlag::WaitForMoreEvents );
 
     EXPECT_EQ( recorder.mFiredIds.size(), 1u )
         << "timer 2 was killed from inside timer 1's handler but still fired in the same pass, "
@@ -1829,10 +1838,17 @@ TEST( EventDispatcherDefaultDefectTest, WakeCallbackMayReEnterTheDispatcherFromE
 // ---------------------------------------------------------------------------------------------
 
 //! Records which thread ran it, through a pointer the test owns so it survives anything.
+//!
+//! The storage is atomic because this is the one member of this helper that is genuinely shared:
+//! onCall() runs on the worker, while the test's waitFor() polls the same variable from the main
+//! thread with no lock between them. As a plain Thread* that was a data race -- reported by
+//! ThreadSanitizer under linux64-clang, and filed as R33 in OPEN-RISKS-20260816.md. The tests still
+//! passed, because gtest checks assertions rather than thread safety, which is exactly why the
+//! sanitizer signal on the test binaries is worth keeping clean.
 class ThreadRecordingReceiver : public Object
 {
 public:
-    Thread** mRanOn { nullptr };  //!< Points at the test's own storage.
+    std::atomic<Thread*>* mRanOn { nullptr };  //!< Points at the test's own storage.
 
     void onCall
         (
@@ -1842,7 +1858,7 @@ public:
         ( void )aValue;
         if( mRanOn )
         {
-            *mRanOn = Thread::currentThread();
+            mRanOn->store( Thread::currentThread() );
         }
     }
 
@@ -1864,7 +1880,7 @@ TEST( ObjectDefectTest, MoveToThreadCarriesAlreadyPostedEventsToTheNewThread )
             return worker.eventDispatcher() != nullptr;
         } ) );
 
-    Thread* ranOn = nullptr;
+    std::atomic<Thread*> ranOn { nullptr };
     Signal<int> signal;
     ThreadRecordingReceiver receiver;   // lives on this thread
     receiver.mRanOn = &ranOn;
@@ -1876,21 +1892,21 @@ TEST( ObjectDefectTest, MoveToThreadCarriesAlreadyPostedEventsToTheNewThread )
 
     ASSERT_TRUE( waitFor( [&ranOn]()
         {
-            return ranOn != nullptr;
+            return ranOn.load() != nullptr;
         } ) )
         << "the queued call never ran at all after the move.";
 
-    EXPECT_EQ( ranOn, &worker )
+    EXPECT_EQ( ranOn.load(), &worker )
         << "the call was posted while the receiver lived on this thread, and ran there even though "
         "the receiver had moved. moveToThread() must carry already-posted events across, as Qt's "
         "setThreadData_helper() does; a queued connection promises the slot runs on the receiver's "
         "thread, and this is the one case where that promise was silently broken.";
 
     // Hand it back so the stack object is destroyed on its own thread.
-    worker.post( [&receiver]()
+    ASSERT_TRUE( worker.post( [&receiver]()
         {
             receiver.moveToThread( nullptr );
-        } );
+        } ) );
     worker.quit();
     worker.wait();
 }
@@ -1957,7 +1973,7 @@ TEST( ObjectDefectTest, EventsMovedToAnUnstartedThreadAreDeliveredWhenItStarts )
 {
     Thread worker( "r32-unstarted-worker" );      // deliberately not started yet
 
-    Thread* ranOn = nullptr;
+    std::atomic<Thread*> ranOn { nullptr };
     Signal<int> signal;
     ThreadRecordingReceiver receiver;
     receiver.mRanOn = &ranOn;
@@ -1966,22 +1982,227 @@ TEST( ObjectDefectTest, EventsMovedToAnUnstartedThreadAreDeliveredWhenItStarts )
 
     signal.emit( 1 );
     ASSERT_TRUE( receiver.moveToThread( &worker ) );
-    EXPECT_EQ( ranOn, nullptr ) << "nothing should have run before the thread exists";
+    EXPECT_EQ( ranOn.load(), nullptr ) << "nothing should have run before the thread exists";
 
     worker.start();
 
     ASSERT_TRUE( waitFor( [&ranOn]()
         {
-            return ranOn != nullptr;
+            return ranOn.load() != nullptr;
         } ) )
         << "the event was posted before the destination had a dispatcher, and was dropped instead "
         "of being held until one existed.";
-    EXPECT_EQ( ranOn, &worker );
+    EXPECT_EQ( ranOn.load(), &worker );
 
-    worker.post( [&receiver]()
+    ASSERT_TRUE( worker.post( [&receiver]()
         {
             receiver.moveToThread( nullptr );
-        } );
+        } ) );
+    worker.quit();
+    worker.wait();
+}
+
+//! Verifies destroying a receiver whose events are parked on an unstarted thread drops them --
+//! and only them.
+//!
+//! The other end of the test above. Parked events live in the destination's ThreadData rather than
+//! in any dispatcher, so ~Object()'s usual strip -- removeEventsForReceiver() on the dispatcher --
+//! cannot see them; ThreadData::removeParkedEventsFor() is the second call that can. Until this
+//! test the sweep ran but never matched anything, so the branch that actually frees a parked event
+//! had never executed: a leak, and then a delivery into a destroyed object once the thread
+//! started. Under AddressSanitizer a regression shows up as both.
+//!
+//! Two receivers park on the same thread and only one is destroyed, so the sweep has to be
+//! selective: over-collecting would be the opposite defect, and a sweep that dropped everything
+//! would pass a test that only ever parked one.
+TEST( ObjectDefectTest, EventsParkedForADestroyedReceiverAreDropped )
+{
+    Thread worker( "r32-parked-receiver-dies" );  // deliberately not started yet
+
+    std::atomic<Thread*> doomedRanOn { nullptr };
+    std::atomic<Thread*> survivorRanOn { nullptr };
+    Signal<int> doomedSignal;
+    Signal<int> survivorSignal;
+
+    ThreadRecordingReceiver survivor;
+    survivor.mRanOn = &survivorRanOn;
+    Object::connect( survivorSignal, &survivor, &ThreadRecordingReceiver::onCall,
+        ConnectionType::Queued );
+    survivorSignal.emit( 2 );
+    ASSERT_TRUE( survivor.moveToThread( &worker ) );
+
+    {
+        ThreadRecordingReceiver doomed;
+        doomed.mRanOn = &doomedRanOn;
+        Object::connect( doomedSignal, &doomed, &ThreadRecordingReceiver::onCall,
+            ConnectionType::Queued );
+
+        doomedSignal.emit( 1 );
+        ASSERT_TRUE( doomed.moveToThread( &worker ) );
+
+        // doomed is destroyed here, with its event parked alongside the survivor's on a thread
+        // that has no dispatcher.
+    }
+
+    worker.start();
+    ASSERT_TRUE( waitFor( [&worker]()
+        {
+            return worker.eventDispatcher() != nullptr;
+        } ) );
+
+    // The dispatcher exists, so everything the ThreadData was still holding has been handed to it.
+    ASSERT_TRUE( waitFor( [&survivorRanOn]()
+        {
+            return survivorRanOn.load() != nullptr;
+        } ) )
+        << "the surviving receiver's parked event was dropped along with the destroyed one's.";
+    EXPECT_EQ( survivorRanOn.load(), &worker );
+
+    // Give the loop a few more turns, which is the window the failure would show up in.
+    std::this_thread::sleep_for( std::chrono::milliseconds( 30 ) );
+    EXPECT_EQ( doomedRanOn.load(), nullptr )
+        << "an event parked for a destroyed receiver was delivered once the thread started.";
+
+    ASSERT_TRUE( worker.post( [&survivor]()
+        {
+            survivor.moveToThread( nullptr );
+        } ) );
+    worker.quit();
+    worker.wait();
+}
+
+//! Verifies moveToThread(nullptr) discards the events already queued for the object.
+//!
+//! Detaching means "this object stops processing events", so there is no later at which a queued
+//! metacall could run -- Qt parks them on an orphan QThreadData whose loop never runs, which comes
+//! to the same thing. They have to be freed rather than left in the queue of a thread that goes on
+//! draining it, and the freeing is what had never been exercised: every earlier detach test
+//! detached an object whose queue was empty. Under AddressSanitizer a regression shows up as a
+//! leak.
+TEST( ObjectDefectTest, DetachingAnObjectDiscardsItsQueuedEvents )
+{
+    Thread worker( "detach-drops-queued" );
+    worker.start();
+    ASSERT_TRUE( waitFor( [&worker]()
+        {
+            return worker.eventDispatcher() != nullptr;
+        } ) );
+
+    std::atomic<int> delivered { 0 };
+    Signal<int> signal;
+    Object receiver;
+    // Built here and pushed: Object takes a parent now, not a thread.
+    ASSERT_TRUE( receiver.moveToThread( &worker ) );
+    Object::connect( signal, &receiver, [&delivered]( int )
+        {
+            delivered.fetch_add( 1 );
+        }, ConnectionType::Queued );
+
+    // The detach has to run on the worker -- moveToThread() is push-only -- and it has to run
+    // *before* the queued metacalls are dispatched. Both are arranged by doing it from inside a
+    // task that already occupies the loop: the emits below queue up behind it, and the task
+    // detaches once the test releases it.
+    std::atomic<bool> blocked { false };
+    std::atomic<bool> release { false };
+    std::atomic<bool> detachResult { false };
+    std::atomic<bool> detachDone { false };
+
+    ASSERT_TRUE( worker.post( [&]()
+        {
+            blocked.store( true );
+            while( !release.load() )
+            {
+                std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+            }
+            detachResult.store( receiver.moveToThread( nullptr ) );
+            detachDone.store( true );
+        } ) );
+    ASSERT_TRUE( waitFor( [&blocked]()
+        {
+            return blocked.load();
+        } ) ) << "the worker never reached the blocking task.";
+
+    signal.emit( 1 );
+    signal.emit( 2 );
+
+    release.store( true );
+    ASSERT_TRUE( waitFor( [&detachDone]()
+        {
+            return detachDone.load();
+        } ) );
+    EXPECT_TRUE( detachResult.load() ) << "the detach was refused on the object's own thread.";
+    EXPECT_EQ( receiver.thread(), nullptr );
+
+    worker.quit();
+    worker.wait();
+
+    EXPECT_EQ( delivered.load(), 0 )
+        << "an event queued before the detach was still delivered afterwards.";
+}
+
+//! Verifies deleteLater() deletes on the spot once the dispatcher has stopped accepting events.
+//!
+//! The shutdown race close() exists to close: a deleteLater() landing between "the loop drained its
+//! deferred deletes" and "the dispatcher went away" used to be accepted by a queue nothing would
+//! ever drain again, so the object was neither run nor deleted -- leaked outright. postEvent() now
+//! refuses after close(), and deleteLater() falls back to deleting synchronously on the calling
+//! thread, which is the lesser of the two evils.
+//!
+//! The suite did reach this path before, but only by luck: it is a race, and it resolved the
+//! interesting way in roughly one run in three. That is why the measured line coverage moved
+//! between runs that had changed nothing at all. Driving close() directly pins it down.
+TEST( ObjectDefectTest, DeleteLaterFallsBackToASynchronousDeleteAfterClose )
+{
+    //! Counts its own destruction into storage the test owns, so the count outlives it.
+    class DeathProbe : public Object
+    {
+    public:
+        DeathProbe
+            (
+            Thread* aThread,
+            std::atomic<int>& aCount
+            )
+            : Object()
+            , mCount( aCount )
+        {
+            // Built here and pushed: Object no longer takes a Thread*.
+            if( aThread != nullptr )
+            {
+                ( void )moveToThread( aThread );
+            }
+        }
+
+        virtual ~DeathProbe() override
+        {
+            mCount.fetch_add( 1 );
+        }
+
+    private:
+        std::atomic<int>& mCount;
+    };
+
+    Thread worker( "deletelater-after-close" );
+    worker.start();
+    ASSERT_TRUE( waitFor( [&worker]()
+        {
+            return worker.eventDispatcher() != nullptr;
+        } ) );
+
+    std::atomic<int> destroyed { 0 };
+    auto* victim = new DeathProbe( &worker, destroyed );
+
+    // Closed while the thread is still very much alive, so deleteLater() below finds a live
+    // thread and a live dispatcher and still gets refused -- which is the only combination that
+    // reaches the fallback.
+    worker.eventDispatcher()->close();
+
+    victim->deleteLater();
+    EXPECT_EQ( destroyed.load(), 1 )
+        << "deleteLater() left the object queued on a dispatcher that had stopped accepting "
+        "events, which is the leak close() exists to prevent.";
+
+    // close() only refuses posts; interrupt()/wakeUp() still work, so the loop can still be
+    // stopped the ordinary way.
     worker.quit();
     worker.wait();
 }
@@ -1998,12 +2219,16 @@ namespace
     //! Posts a marker task and blocks until it has run, proving the thread's loop is up and
     //! draining.
     //!
-    //! Needed because post() now goes through the thread's event dispatcher, which threadBody()
-    //! creates as it starts; a post() issued between start() returning and that dispatcher existing
-    //! is refused rather than queued. Retrying is the documented way to wait it out -- the shared
-    //! suites' waitUntilRunning() does exactly this. Before the dispatcher port these tests could
-    //! post straight after start(), because the mailbox lived in ThreadData and existed from
-    //! construction.
+    //! A duplicate of the shared suites' waitUntilRunning(); this file does not include
+    //! -test-types.hpp, and the two must stay in step.
+    //!
+    //! This comment used to say that a post() issued between start() returning and the dispatcher
+    //! existing "is refused rather than queued", and that "retrying is the documented way to wait
+    //! it out". Both halves were wrong, and writing them down is most of why the defect survived.
+    //! The refusal was a regression from the dispatcher port -- before it, the mailbox lived in
+    //! ThreadData and existed from construction, so a post straight after start() worked -- and a
+    //! call the library accepts and then discards is a defect, not a documented state to spin on.
+    //! Such a post is parked now, so there is nothing to retry and a refusal fails the test.
     inline bool waitUntilRunning
         (
         Thread& aThread,       //!< The thread to wait for.
@@ -2012,19 +2237,13 @@ namespace
     {
         std::promise<void> ran;
         std::future<void> ranFuture = ran.get_future();
-        const auto deadline = std::chrono::steady_clock::now()
-            + std::chrono::milliseconds( aTimeoutMs );
 
-        while( !aThread.post( [&ran]()
+        if( !aThread.post( [&ran]()
             {
                 ran.set_value();
             } ) )
         {
-            if( std::chrono::steady_clock::now() > deadline )
-            {
-                return false;
-            }
-            std::this_thread::yield();
+            return false;
         }
         return ranFuture.wait_for( std::chrono::milliseconds( aTimeoutMs ) ) ==
                std::future_status::ready;
@@ -2065,10 +2284,13 @@ namespace
 
                 std::promise<void> firstRanPromise;
                 auto firstRanFuture = firstRanPromise.get_future();
-                thread.post( [&firstRanPromise]()
+                if( !thread.post( [&firstRanPromise]()
                     {
                         firstRanPromise.set_value();
-                    } );
+                    } ) )
+                {
+                    return false; // the post was refused; nothing further to check this cycle
+                }
                 if( firstRanFuture.wait_for( 5s ) != std::future_status::ready )
                 {
                     return false; // first task never ran; nothing further to check this cycle
@@ -2079,10 +2301,13 @@ namespace
 
                 std::promise<void> secondRanPromise;
                 auto secondRanFuture = secondRanPromise.get_future();
-                thread.post( [&secondRanPromise]()
+                if( !thread.post( [&secondRanPromise]()
                     {
                         secondRanPromise.set_value();
-                    } );
+                    } ) )
+                {
+                    return false; // the post was refused; nothing further to check this cycle
+                }
                 const bool secondRan = secondRanFuture.wait_for( 5s ) == std::future_status::ready;
 
                 thread.quit();
@@ -2117,10 +2342,10 @@ namespace
         // before quit() is requested below.
         std::promise<void> firstRanPromise;
         auto firstRanFuture = firstRanPromise.get_future();
-        thread.post( [&firstRanPromise]()
+        ASSERT_TRUE( thread.post( [&firstRanPromise]()
             {
                 firstRanPromise.set_value();
-            } );
+            } ) );
         ASSERT_EQ( firstRanFuture.wait_for( 5s ), std::future_status::ready );
 
         thread.quit();
@@ -2140,10 +2365,10 @@ namespace
 
         std::promise<void> secondRanPromise;
         auto secondRanFuture = secondRanPromise.get_future();
-        thread.post( [&secondRanPromise]()
+        ASSERT_TRUE( thread.post( [&secondRanPromise]()
             {
                 secondRanPromise.set_value();
-            } );
+            } ) );
         EXPECT_EQ( secondRanFuture.wait_for( 5s ), std::future_status::ready )
             << "restarted thread never processed the posted task.";
 
@@ -2344,7 +2569,9 @@ namespace
         worker->start();
         ASSERT_TRUE( waitUntilRunning( *worker ) );
 
-        auto* obj = new Object( worker );
+        auto* obj = new Object();
+        // Built here and pushed: Object takes a parent now, not a thread.
+        ASSERT_TRUE( obj->moveToThread( worker ) );
         Object::connect( sig, obj, []
             {
             }, ConnectionType::Queued );
@@ -2439,8 +2666,14 @@ namespace
             (
             Thread* aThread
             )
-            : Object( aThread )
+            : Object()
         {
+            // Built here and pushed, rather than constructed on that
+            // thread's affinity: Object no longer takes a Thread*.
+            if( aThread != nullptr )
+            {
+                ( void )moveToThread( aThread );
+            }
         }
 
         void onProbe

@@ -107,27 +107,34 @@ namespace QtLikeSignal
         int TimerIdPool::sNextFresh = 1;
     }
 
-    //! Constructs an object living in the given thread, or in the calling thread if none is given.
+    //! Constructs an object in the calling thread, optionally attaching it to a parent.
+    //!
+    //! The affinity is resolved first and the attach happens second, which is the order that makes
+    //! setParent()'s cross-thread check meaningful here: this object belongs to the calling thread
+    //! at that point, so a parent living elsewhere is refused rather than silently pulling this
+    //! object into another thread. A constructor cannot report that, so setParent() warns and this
+    //! object is simply left parentless -- which is exactly what Qt's check_parent_thread() does.
     Object::Object
         (
-        Thread* aThread  //!< Thread this object lives in; null means the calling thread.
+        Object* aParent  //!< Parent that will own this object; null for none.
         )
-    // Store the thread's ThreadData, not the Thread itself: it outlives the Thread, so this
-    // object's affinity can never become a dangling pointer. Held in an Affinity box read at emit
-    // time, so a later moveToThread() redirects existing connections too.
-        : Object( aThread ? aThread->threadData()
-            : ( Thread::currentThread() ? Thread::currentThread()->threadData()
-            : std::shared_ptr<ThreadData>() ) )
+        : Object( Thread::currentThread() ? Thread::currentThread()->threadData()
+            : nullptr )
     {
+        if( aParent != nullptr )
+        {
+            // Discarded deliberately: a refusal has already been reported on stderr, and there is
+            // no way to return it from here. The object is usable either way, just parentless.
+            ( void )setParent( aParent );
+        }
     }
 
     //! Constructs an object directly on the given thread data. See the declaration.
     Object::Object
         (
-        std::shared_ptr<ThreadData> aThreadData  //!< Affinity to start with; may be null.
+        ThreadData* aThreadData  //!< Affinity to start with; may be null.
         )
-        : mLife( std::make_shared<int>( 0 ) )
-        , mAffinity( std::make_shared<Affinity>( std::move( aThreadData ) ) )
+        : mAffinity( std::make_shared<Affinity>( std::move( aThreadData ) ) )
     {
     }
 
@@ -153,11 +160,15 @@ namespace QtLikeSignal
         // before this base destructor runs, so the flag is already clear by the time we get here
         // regardless of which thread ends up calling delete on it.
         //
-        // Everything here is read through the ThreadData, which this scope keeps alive, and the
-        // Thread* is only ever *compared*, never dereferenced. Asking the Thread itself
-        // (owner->isRunning()) would have reintroduced exactly the dangling-pointer hazard the
-        // Affinity indirection exists to remove: thread() can hand back a pointer that a
-        // concurrent ~Thread() frees before the call lands.
+        // Everything here is read through the ThreadData, which the Affinity's own mutex keeps
+        // alive for the duration of the question, and the Thread* is only ever *compared*, never
+        // dereferenced. Asking the Thread itself (owner->isRunning()) would have reintroduced
+        // exactly the dangling-pointer hazard the Affinity indirection exists to remove: thread()
+        // can hand back a pointer that a concurrent ~Thread() frees before the call lands.
+        //
+        // Asked as one question rather than by copying the ThreadData out and reading it here.
+        // The copy was two atomic read-modify-writes to keep alive, for the length of two atomic
+        // loads, something the mutex already held. See Affinity::namesOtherRunningThread().
         //
         // Asked with currentThreadOrNull(), never currentThread(): the latter adopts the calling
         // thread when it has no Thread yet, and this runs during thread_local teardown -- an
@@ -165,10 +176,8 @@ namespace QtLikeSignal
         // the unique_ptr already being destroyed. A diagnostic must not allocate. A null answer
         // means the caller is not registered, in which case there is nothing to compare and
         // nothing to warn about.
-        const std::shared_ptr<ThreadData> ownerData = mAffinity->data();
         Thread* const callerThread = Thread::currentThreadOrNull();
-        if( ownerData && callerThread && ownerData->isThreadRunning()
-            && ownerData->thread() != callerThread )
+        if( callerThread && mAffinity->namesOtherRunningThread( callerThread ) )
         {
             std::fprintf( stderr,
                 "Object::~Object: object destroyed from a thread other than the one it lives "
@@ -176,16 +185,36 @@ namespace QtLikeSignal
                 "deleteLater() to destroy an object from another thread.\n" );
         }
 
-        // Invalidate the life token first. connect()/callLater() wrappers running on other threads
-        // check objectLife().lock() before posting a call to this object; resetting mLife up front
-        // shrinks the window in which such a wrapper can still observe this object as "alive" to
-        // the check-then-post race itself, instead of the whole destructor body (which below runs
-        // arbitrary user cleanup-callback code).
+        // Invalidate the life flag first. connect()/callLater() wrappers running on other threads
+        // check it before posting a call to this object; clearing it up front shrinks the window in
+        // which such a wrapper can still observe this object as "alive" to the check-then-post race
+        // itself, instead of the whole destructor body (which below runs arbitrary user
+        // cleanup-callback code).
         //
         // Doing it before the disconnect loop below is also what keeps that loop re-entrancy-free:
-        // disconnect() reaches pruneReceiver(), which checks this very token and bails out rather
+        // disconnect() reaches pruneReceiver(), which checks this very flag and bails out rather
         // than asking for mIncomingMutex while we are already tearing the list down.
-        mLife.reset();
+        //
+        // The flag lives in the affinity box rather than in a shared_ptr<int> of its own; see
+        // Affinity::isObjectAlive(). The box outlives us, which is exactly what a life token has to
+        // do, so it was already the right place for it.
+        mAffinity->markObjectDead();
+
+        // Unlink from our own parent, before anything below can run user code.
+        //
+        // Qt does this last instead (qobject.cpp:1185), and the reason is specific: ~QObject emits
+        // destroyed(this) near the top, and a handler may still ask the dying object for its
+        // parent, so the link has to outlive that emission. We have no destroyed() signal -- see
+        // D8 in ForAI/mission-parent-child-relationship.md, where the decision not to add one is
+        // recorded together with this dependency on it. With no such consumer, unlinking first is
+        // strictly better: it shrinks the window in which a findChild() from some handler can hand
+        // back an object that is already half destroyed, which is a weakness Qt documents and
+        // lives with rather than one we have to inherit.
+        //
+        // Safe to touch the parent's list from here because the tree is thread-confined and this
+        // object lives in the same thread as its parent, which is the thread the diagnostic above
+        // has just checked we are on.
+        detachFromParent();
 
         // Disconnect every connection where this object is the receiver, so the sender stops
         // holding a slot that can never do anything again. The life token above already makes such
@@ -204,7 +233,7 @@ namespace QtLikeSignal
         // fail: every node is created by make_shared.
         std::vector<std::shared_ptr<Private::ConnectionNode> > incoming;
         {
-            std::lock_guard<std::mutex> lock( mIncomingMutex );
+            std::lock_guard<Lock> lock( mIncomingMutex );
             incoming.reserve( mIncomingCount );
             for( Private::ConnectionNode* node = mIncomingHead; node != nullptr; )
             {
@@ -232,6 +261,17 @@ namespace QtLikeSignal
             }
         }
 
+        // Destroy this object's children. A parent owns them: this is the statement that makes
+        // `delete window` free a whole subtree, which is the entire point of the tree.
+        //
+        // The position is chosen twice over. After the disconnect above, so no child destructor can
+        // deliver a signal into a parent that is already half torn down. Before the three strips
+        // below, so that anything such a destructor posts back at the parent -- a callLater, a
+        // queued call, a deleteLater -- is caught by them rather than left in a queue naming an
+        // object about to be freed. That second reason is the whole of why this does not simply go
+        // last, which is where Qt puts it.
+        deleteChildren();
+
         // Only objects that have actually used callLater() can have entries to drop.
         //
         // The scan below is O(every pending callLater in the process) and takes a lock shared by
@@ -243,7 +283,7 @@ namespace QtLikeSignal
         // The flag is only ever set, never cleared: an object that used the feature once keeps
         // paying the scan, which is the honest trade. Making it exact would mean counting entries
         // per object, which is the deeper fix P1 describes and is not worth it for a bool.
-        if( mUsedCallLater.load( std::memory_order_acquire ) )
+        if( hasFlag( kUsedCallLater ) )
         {
             std::lock_guard<std::mutex> lock( CallLaterRegistry::sMutex );
             auto& pending = CallLaterRegistry::sPending;
@@ -262,10 +302,24 @@ namespace QtLikeSignal
 
         // Taken before the strip below, because whether this object owns any timer is half of what
         // decides if that strip has anything to do.
+        //
+        // Guarded by the same kind of set-once flag as the two scans above, and for the same
+        // reason: an object that never started a timer has nothing to swap, and taking the mutex to
+        // discover that cost every destruction in the program an uncontended lock and unlock. See
+        // kUsedTimers.
         std::vector<int> outstandingTimerIds;
+        if( hasFlag( kUsedTimers ) )
         {
-            std::lock_guard<std::mutex> lock( mRunningTimerIdsMutex );
-            outstandingTimerIds.swap( mRunningTimerIds );
+            // The flag is only ever set after the box exists, so this cannot be null here; read
+            // through the pointer rather than asserting, because a diagnostic is not worth a branch
+            // that can never be taken.
+            if( Extras* extras = mExtras.load( std::memory_order_acquire ) )
+            {
+                if( extras->mRunningTimerIds )
+                {
+                    outstandingTimerIds.swap( *extras->mRunningTimerIds );
+                }
+            }
         }
 
         // The other O(backlog) scan the destructor used to run for every object, whether or not it
@@ -273,9 +327,9 @@ namespace QtLikeSignal
         // queue and the whole timer list under the dispatcher's lock. An object that never received
         // a queued call and never started a timer -- which is most of them -- has nothing there.
         // Qt guards the same call the same way, with `if (d->postedEvents)` in ~QObject().
-        if( mMayHaveQueuedWork.load( std::memory_order_acquire ) || !outstandingTimerIds.empty() )
+        if( hasFlag( kMayHaveQueuedWork ) || !outstandingTimerIds.empty() )
         {
-            std::shared_ptr<ThreadData> threadDataCopy = mAffinity->data();
+            ThreadData* const threadDataCopy = mAffinity->data();
             if( threadDataCopy )
             {
                 if( auto dispatcher = threadDataCopy->dispatcher() )
@@ -296,6 +350,11 @@ namespace QtLikeSignal
         {
             TimerIdPool::release( timerId );
         }
+
+        // Last, because everything above may still read through it. Exchanged rather than loaded
+        // and deleted so the pointer is null before the box is freed, which keeps a stray read
+        // during teardown a null check rather than a use-after-free.
+        delete mExtras.exchange( nullptr, std::memory_order_acq_rel );
     }
 
     //! Gets the thread this object currently lives in, or nullptr if it has none -- or if the
@@ -306,7 +365,7 @@ namespace QtLikeSignal
     //! rather than caching it.
     Thread* Object::thread() const
     {
-        const std::shared_ptr<ThreadData> data = mAffinity->data();
+        ThreadData* const data = mAffinity->data();
         return data ? data->thread() : nullptr;
     }
 
@@ -355,6 +414,82 @@ namespace QtLikeSignal
             return false;
         }
 
+        // A child cannot be moved on its own. Its affinity is its parent's, and the tree is
+        // thread-confined on exactly that invariant -- moving one node out would leave a parent and
+        // a child in different threads, with the child's links then reachable from two of them.
+        // Move the parent and the subtree follows; or detach first and move the object afterwards.
+        // Qt refuses the same call for the same reason (qobject.cpp:1715).
+        if( parent() != nullptr )
+        {
+            std::fprintf( stderr,
+                "Object::moveToThread: object has a parent; move the parent instead, or "
+                "setParent(nullptr) first\n" );
+            return false;
+        }
+
+        // Every refusal is behind us, so nothing below can fail.
+        moveSubtreeToThread( aThread );
+        return true;
+    }
+
+    //! Applies a move to this object and everything under it. See moveToThread().
+    //!
+    //! Recursive, like Qt's moveToThread_helper(), but **children first and this object last**, and
+    //! that order is load-bearing rather than stylistic.
+    //!
+    //! Re-homing an object arms the destination thread against it: moveSelfToThread() ends by
+    //! migrating the object's posted events, and the moment they land in the destination queue that
+    //! thread may run them. If one of them is a DeferredDeleteEvent -- an ordinary deleteLater()
+    //! issued before the move -- the object is destroyed there and then, and destroying it destroys
+    //! its children too. So after this object has been moved, neither it nor anything under it may
+    //! be touched again.
+    //!
+    //! Moving the children first means nothing needs to be. The first version of this did the
+    //! reverse, moved self and then read firstChild(), and ThreadSanitizer caught it against
+    //! ObjectDefectTest.MoveToThreadCarriesAPendingDeleteLaterToTheNewThread: a use-after-free with
+    //! every test still passing, because the read usually won the race.
+    //!
+    //! This is also the answer to the question the plan left open -- collect the subtree first, or
+    //! migrate node by node -- and the reason is not the one it guessed. It is not about being
+    //! atomic against a failure part-way through; every refusal happens in moveToThread() before
+    //! any of this runs. It is about not touching an object one has just handed to another thread.
+    //!
+    //! `next` is read before the child is moved, for the same reason: that child may be gone by the
+    //! time the loop wants its sibling. What is *not* covered, here or in Qt, is a destructor that
+    //! deletes its own siblings while this walk is in progress; a queued delete arriving mid-walk is
+    //! ordinary, that is not.
+    void Object::moveSubtreeToThread
+        (
+        Thread* aThread  //!< The thread the whole subtree moves to; nullptr clears affinity.
+        )
+    {
+        for( Object* child = firstChild(); child != nullptr; )
+        {
+            Object* const next = child->nextSibling();
+            child->moveSubtreeToThread( aThread );
+            child = next;
+        }
+
+        // Last, and nothing below this line may touch this object.
+        moveSelfToThread( aThread );
+    }
+
+    //! Re-homes this one object, without touching its children. See moveToThread().
+    //!
+    //! Split out of moveToThread() when the move learned to carry a subtree: the checks belong to
+    //! the call, and this is the work, which every node in the subtree needs done to it.
+    void Object::moveSelfToThread
+        (
+        Thread* aThread  //!< The thread this object moves to; nullptr clears affinity.
+        )
+    {
+        if( thread() == aThread )
+        {
+            // Already there. Reached for a child whose affinity somehow already matches; skipping
+            // it avoids taking its timers off a dispatcher only to hand them straight back.
+            return;
+        }
+
         // Take any active timers off the outgoing dispatcher before the affinity changes. Qt documents
         // this behaviour ("all active timers for the object will be reset ... stopped in the current
         // thread and restarted, with the same interval, in the targetThread"); without it the timers
@@ -363,7 +498,7 @@ namespace QtLikeSignal
         // this cannot race its loop's own delivery pass.
         std::vector<AbstractEventDispatcher::TimerRegistration> timersToMove;
         {
-            std::shared_ptr<ThreadData> oldData = mAffinity->data();
+            ThreadData* const oldData = mAffinity->data();
             if( oldData )
             {
                 if( auto oldDispatcher = oldData->dispatcher() )
@@ -376,8 +511,8 @@ namespace QtLikeSignal
         // Resolve the new thread's data and store it in the Affinity box in one step, so concurrent
         // readers of thread()/threadData() (notably a connect() wrapper resolving affinity at emit
         // time) never see a half-updated pairing of thread and dispatcher.
-        const std::shared_ptr<ThreadData> oldData = mAffinity->data();
-        std::shared_ptr<ThreadData> newData = aThread ? aThread->threadData() : nullptr;
+        ThreadData* const oldData = mAffinity->data();
+        ThreadData* const newData = aThread ? aThread->threadData() : nullptr;
         mAffinity->setData( newData );
 
         migratePostedEvents( oldData, newData );
@@ -396,7 +531,7 @@ namespace QtLikeSignal
                     forgetTimerId( timer.mTimerId );
                     TimerIdPool::release( timer.mTimerId );
                 }
-                return true;
+                return;
             }
 
             // Re-register on the destination thread rather than from here: registerTimer() must run
@@ -415,15 +550,40 @@ namespace QtLikeSignal
                             for( const auto& timer : timersToMove )
                             {
                                 dispatcher->registerTimer( timer.mTimerId, timer.mIntervalMs,
-                                    this );
+                                this );
                             }
                         }
                     }
                 },
                 ConnectionType::Queued );
         }
+    }
 
-        return true;
+    //! Returns the extras box, creating it the first time anything needs it.
+    //!
+    //! See Object::Extras for why the members live behind a pointer at all. Both callers --
+    //! setObjectName() and startTimer() -- are thread-confined to this object's own thread, so two
+    //! threads should never arrive here at once.
+    //!
+    //! The compare-exchange is there anyway, and costs nothing on the path that matters: an object
+    //! that already has a box returns on the first load. It only runs on the one allocation per
+    //! object, and it turns a contract violation from "two live boxes, one of them silently
+    //! orphaned with the name in it" into "one box, no leak". A cheap way to make misuse boring.
+    Object::Extras& Object::ensureExtras()
+    {
+        if( Extras* existing = mExtras.load( std::memory_order_acquire ) )
+        {
+            return *existing;
+        }
+
+        std::unique_ptr<Extras> fresh( new Extras() );
+        Extras* expected = nullptr;
+        if( mExtras.compare_exchange_strong( expected, fresh.get(),
+            std::memory_order_release, std::memory_order_acquire ) )
+        {
+            return *fresh.release();
+        }
+        return *expected;   // somebody else won; ours is freed on the way out
     }
 
     //! Gets the object's descriptive name, empty unless one was set.
@@ -431,10 +591,14 @@ namespace QtLikeSignal
     //! **Not thread-safe: must be called from this object's own thread.** The name is a plain
     //! std::string with no lock, so a concurrent setObjectName() is a data race -- exactly as
     //! QObject::objectName() has no locking either. See mObjectName for why it is unguarded.
-    // This said "Thread-safe" until 2026-08-13 and was never true; see R15.
     std::string Object::objectName() const
     {
-        return mObjectName;
+        const Extras* extras = mExtras.load( std::memory_order_acquire );
+        if( extras == nullptr || !extras->mObjectName )
+        {
+            return std::string();
+        }
+        return *extras->mObjectName;
     }
 
     //! Gives this object a descriptive name, for logs and diagnostics. Nothing keys off it.
@@ -446,7 +610,243 @@ namespace QtLikeSignal
         const std::string& aName  //!< The new object name.
         )
     {
-        mObjectName = aName;
+        std::unique_ptr<std::string>& name = ensureExtras().mObjectName;
+        if( name )
+        {
+            *name = aName;
+        }
+        else
+        {
+            name.reset( new std::string( aName ) );
+        }
+    }
+
+    //! Gets this object's parent, or nullptr. See the declaration.
+    Object* Object::parent() const
+    {
+        const Extras* extras = extrasOrNull();
+        return extras ? extras->mParent : nullptr;
+    }
+
+    //! Gets the first of this object's children, or nullptr. See the declaration.
+    Object* Object::firstChild() const
+    {
+        const Extras* extras = extrasOrNull();
+        return extras ? extras->mFirstChild : nullptr;
+    }
+
+    //! Gets the next child of this object's parent, or nullptr. See the declaration.
+    Object* Object::nextSibling() const
+    {
+        const Extras* extras = extrasOrNull();
+        return extras ? extras->mNextSibling : nullptr;
+    }
+
+    //! Counts this object's direct children. See the declaration.
+    std::size_t Object::childCount() const
+    {
+        std::size_t count = 0;
+        for( const Object* child = firstChild(); child != nullptr; child = child->nextSibling() )
+        {
+            ++count;
+        }
+        return count;
+    }
+
+    //! Re-parents this object, refusing rather than silently orphaning. See the declaration.
+    bool Object::setParent
+        (
+        Object* aParent  //!< The new parent, or nullptr to detach.
+        )
+    {
+        if( aParent == parent() )
+        {
+            // Already there -- including the nullptr-to-nullptr case. Nothing to do and nothing to
+            // refuse, matching moveToThread()'s treatment of a move to the thread it already lives
+            // in.
+            return true;
+        }
+
+        if( aParent != nullptr )
+        {
+            // A parent part-way through its own destructor frees its extras box on the last line of
+            // it, so linking into that box now would leave this object pointing at storage about to
+            // be released -- and its child list is being emptied at the same moment. Refusing here
+            // is also what stops ~Object()'s child loop from running forever if a child's
+            // destructor tries to attach something new to the parent that is destroying it: the
+            // life flag is cleared before that loop runs, so this returns false instead.
+            if( !aParent->mAffinity->isObjectAlive() )
+            {
+                std::fprintf( stderr,
+                    "Object::setParent: the requested parent is being destroyed; the parent is "
+                    "unchanged\n" );
+                return false;
+            }
+
+            // A child lives in its parent's thread. That invariant is what lets the whole tree go
+            // unguarded (see Extras::mParent), so a link that would break it is refused rather
+            // than accepted and worked around. Qt refuses it too (qobject.cpp:2341) -- but leaves
+            // the object with *no* parent at all, which neither honours the request nor keeps the
+            // previous state, and silently leaks anything that was relying on the old parent to
+            // free it. Keeping the old parent is the whole reason this function returns a bool.
+            if( aParent->thread() != thread() )
+            {
+                std::fprintf( stderr,
+                    "Object::setParent: the requested parent lives in a different thread; the "
+                    "parent is unchanged\n" );
+                return false;
+            }
+
+            // Walking up from the proposed parent reaches this object exactly when the new link
+            // would close a cycle, which covers setParent(this) on the first step. O(depth), on a
+            // path taken once per re-parent. Qt looks for the same thing by depth limit
+            // (CheckForParentChildLoopsWarnDepth, 4096) in debug builds only, and warns rather
+            // than refusing; a cycle makes the destructor recurse forever, so it is worth catching
+            // in release too.
+            for( Object* ancestor = aParent; ancestor != nullptr; ancestor = ancestor->parent() )
+            {
+                if( ancestor == this )
+                {
+                    std::fprintf( stderr,
+                        "Object::setParent: the requested parent is this object or one of its "
+                        "descendants; the parent is unchanged\n" );
+                    return false;
+                }
+            }
+        }
+
+        // Both refusals are behind us, so the old link can go before the new one is made. Detaching
+        // first keeps the object in exactly one child list at every point in between.
+        detachFromParent();
+        if( aParent != nullptr )
+        {
+            attachToParent( aParent );
+        }
+        return true;
+    }
+
+    //! Links this object into aParent's child list. See the declaration.
+    //!
+    //! At the head, because the order of the list is not part of the contract -- the same reason
+    //! ConnectionNode::registerWithReceiver() does it, and what keeps this O(1).
+    void Object::attachToParent
+        (
+        Object* aParent  //!< The new parent; never null, and never this object's current one.
+        )
+    {
+        Extras& parentExtras = aParent->ensureExtras();
+        Extras& selfExtras   = ensureExtras();
+
+        selfExtras.mParent      = aParent;
+        selfExtras.mPrevSibling = nullptr;
+        selfExtras.mNextSibling = parentExtras.mFirstChild;
+        if( parentExtras.mFirstChild != nullptr )
+        {
+            // The existing head is a child, so it has a box already; this is a read, not a create.
+            parentExtras.mFirstChild->extrasOrNull()->mPrevSibling = this;
+        }
+        parentExtras.mFirstChild = this;
+    }
+
+    //! Unlinks this object from its parent's child list. See the declaration.
+    void Object::detachFromParent()
+    {
+        Extras* selfExtras = extrasOrNull();
+        if( selfExtras == nullptr || selfExtras->mParent == nullptr )
+        {
+            return;
+        }
+
+        // Everything reachable from here has a box: this object has one (it has a parent), the
+        // parent has one (it has a child), and so does every sibling.
+        Extras* parentExtras = selfExtras->mParent->extrasOrNull();
+        if( selfExtras->mPrevSibling != nullptr )
+        {
+            selfExtras->mPrevSibling->extrasOrNull()->mNextSibling = selfExtras->mNextSibling;
+        }
+        else
+        {
+            parentExtras->mFirstChild = selfExtras->mNextSibling;
+        }
+        if( selfExtras->mNextSibling != nullptr )
+        {
+            selfExtras->mNextSibling->extrasOrNull()->mPrevSibling = selfExtras->mPrevSibling;
+        }
+
+        selfExtras->mPrevSibling = nullptr;
+        selfExtras->mNextSibling = nullptr;
+        selfExtras->mParent      = nullptr;
+    }
+
+    namespace
+    {
+        //! Writes one node and everything under it, indented by @p aDepth.
+        void dumpSubtree
+            (
+            const Object* aNode,  //!< Node to write; never null.
+            int aDepth            //!< How far down the tree it sits, for the indent.
+            )
+        {
+            const std::string name = aNode->objectName();
+            std::fprintf( stderr, "%*s%s%s%s (%p)\n",
+                aDepth * 4, "",
+                name.empty() ? "" : "\"",
+                name.c_str(),
+                name.empty() ? "" : "\" ",
+                static_cast<const void*>( aNode ) );
+
+            for( const Object* child = aNode->firstChild(); child != nullptr;
+                child = child->nextSibling() )
+            {
+                dumpSubtree( child, aDepth + 1 );
+            }
+        }
+    }
+
+    //! Writes this object's subtree to stderr. See the declaration.
+    void Object::dumpObjectTree() const
+    {
+        dumpSubtree( this, 0 );
+    }
+
+    //! Destroys every child of this object. See the declaration.
+    //!
+    //! **Unlink first, then delete**, and re-read the head rather than holding a `next` pointer.
+    //! Those two choices are what make this safe against a child destructor that touches its
+    //! siblings, and they are why this needs no equivalent of Qt's currentChildBeingDeleted
+    //! (qobject_p.h:219-222).
+    //!
+    //! Qt has that member because deleteChildren() walks a QList by index: it must mark the slot it
+    //! is currently inside so that a sibling deleted from within that destructor finds an entry
+    //! already cleared rather than corrupting the walk. An intrusive list has no index to
+    //! invalidate. Detaching the child before deleting it leaves the list wholly consistent at the
+    //! moment the destructor runs, so a sibling deleted from there unlinks itself normally, and
+    //! re-reading mFirstChild afterwards picks up whatever is left.
+    //!
+    //! The loop terminates even against a destructor that tries to attach something new to the
+    //! parent being destroyed: ~Object() clears the life flag before it gets here, and setParent()
+    //! refuses a dead parent. Qt tolerates that append instead, by re-reading children.size().
+    //!
+    //! The child's own ~Object() calls detachFromParent() too; it is a no-op by then, because this
+    //! already unlinked it and cleared its parent pointer.
+    //!
+    //! **A child must be heap-allocated.** This calls `delete` on it. Standard C++ cannot ask
+    //! whether a pointer names automatic or dynamic storage, so nothing here can check it -- Qt
+    //! documents the same hazard and warns rather than preventing it ("If any of these objects are
+    //! on the stack or global, sooner or later your program will crash", qobject.cpp:1030).
+    void Object::deleteChildren()
+    {
+        Extras* selfExtras = extrasOrNull();
+        if( selfExtras == nullptr )
+        {
+            return;
+        }
+
+        while( Object* child = selfExtras->mFirstChild )
+        {
+            child->detachFromParent();
+            delete child;
+        }
     }
 
     //! Schedules this object for deletion in the event loop. Thread-safe.
@@ -466,13 +866,17 @@ namespace QtLikeSignal
         // are still queued. What the guard adds is that the invariant "at most one deferred delete
         // exists per object" holds at the source, rather than depending on two separate downstream
         // mechanisms to keep covering every interleaving -- plus it skips a redundant allocation.
-        if( mDeleteLaterPosted.exchange( true ) )
+        // fetch_or rather than the load-then-set setFlag() uses: this is the one flag whose
+        // caller needs to know whether it was the one that set it, so the read-modify-write is the
+        // operation, not an optimisation to skip.
+        if( ( mFlags.fetch_or( kDeleteLaterPosted, std::memory_order_acq_rel )
+            & kDeleteLaterPosted ) != 0 )
         {
             return;
         }
 
         auto* event = new DeferredDeleteEvent();
-        if( const std::shared_ptr<ThreadData> tData = threadData() )
+        if( ThreadData* const tData = threadData() )
         {
             // Queue only if there is a live thread to dispatch it. A destroyed Thread leaves its
             // ThreadData -- and that ThreadData's still-working dispatcher -- behind, so without
@@ -488,7 +892,7 @@ namespace QtLikeSignal
                     // A refusal means the dispatcher is closing, so nothing would ever drain this
                     // event; postEvent() has already freed it. Fall through to the synchronous
                     // delete rather than leaking the object.
-                    mMayHaveQueuedWork.store( true, std::memory_order_release );
+                    setFlag( kMayHaveQueuedWork );
                     if( disp->postEvent( this, static_cast<Event*>( event ) ) )
                     {
                         return;
@@ -546,7 +950,7 @@ namespace QtLikeSignal
             return -1;
         }
 
-        const std::shared_ptr<ThreadData> data = threadData();
+        ThreadData* const data = threadData();
         if( !data )
         {
             std::fprintf( stderr,
@@ -574,9 +978,20 @@ namespace QtLikeSignal
 
         dispatcher->registerTimer( timerId, aIntervalMs, this );
         {
+            // The box first, then the flag: ~Object() tests the flag and then reads the box, so
+            // publishing them in this order is what makes "flag set implies box exists" true.
+            Extras& extras = ensureExtras();
+
+            // Set before the push, so a destructor that reads it as false cannot be racing a push
+            // it will then miss. See kUsedTimers.
+            setFlag( kUsedTimers );
+
             // Recorded so ~Object() can hand the id back even if the timer is never killed.
-            std::lock_guard<std::mutex> lock( mRunningTimerIdsMutex );
-            mRunningTimerIds.push_back( timerId );
+            if( !extras.mRunningTimerIds )
+            {
+                extras.mRunningTimerIds.reset( new std::vector<int>() );
+            }
+            extras.mRunningTimerIds->push_back( timerId );
         }
         return timerId;
     }
@@ -596,7 +1011,7 @@ namespace QtLikeSignal
 
         const bool wasOurs = forgetTimerId( aTimerId );
 
-        if( const std::shared_ptr<ThreadData> data = threadData() )
+        if( ThreadData* const data = threadData() )
         {
             if( auto dispatcher = data->dispatcher() )
             {
@@ -629,13 +1044,21 @@ namespace QtLikeSignal
         int aTimerId  //!< The timer ID to forget.
         )
     {
-        std::lock_guard<std::mutex> lock( mRunningTimerIdsMutex );
-        auto it = std::find( mRunningTimerIds.begin(), mRunningTimerIds.end(), aTimerId );
-        if( it == mRunningTimerIds.end() )
+        // No box, or no list in it, means no timer was ever started on this object, so there is
+        // nothing to forget.
+        Extras* extras = mExtras.load( std::memory_order_acquire );
+        if( extras == nullptr || !extras->mRunningTimerIds )
         {
             return false;
         }
-        mRunningTimerIds.erase( it );
+
+        std::vector<int>& ids = *extras->mRunningTimerIds;
+        auto it = std::find( ids.begin(), ids.end(), aTimerId );
+        if( it == ids.end() )
+        {
+            return false;
+        }
+        ids.erase( it );
         return true;
     }
 
@@ -654,7 +1077,7 @@ namespace QtLikeSignal
 
         // Marked before the entry exists, so ~Object() can never see the entry without the flag.
         // The reverse -- flag set, entry already gone -- costs one wasted scan and nothing else.
-        aContext->mUsedCallLater.store( true, std::memory_order_release );
+        aContext->setFlag( kUsedCallLater );
 
         std::shared_ptr<CallLaterNode> node;
         bool isNew = false;
@@ -682,8 +1105,8 @@ namespace QtLikeSignal
 
         if( isNew )
         {
-            std::weak_ptr<int> weakLife = aContext->objectLife();
-            auto metaCall = [aKey, node, weakLife]()
+            std::shared_ptr<Affinity> ctxAffinity = aContext->mAffinity;
+            auto metaCall = [aKey, node, ctxAffinity]()
                 {
                     std::function<void()> fnToRun;
                     {
@@ -698,7 +1121,8 @@ namespace QtLikeSignal
                     {
                         // expired(), not lock(): see objectLife(). Equally safe, and a plain
                         // load rather than an atomic read-modify-write.
-                        if( !weakLife.expired() )
+                        // A plain atomic load; see Affinity::isObjectAlive().
+                        if( ctxAffinity->isObjectAlive() )
                         {
                             fnToRun();
                         }
@@ -726,13 +1150,14 @@ namespace QtLikeSignal
     //! inline connect machinery there has to make exactly this test at emit time.
     bool Object::isCurrentThread
         (
-        const std::shared_ptr<ThreadData>& aData
+        ThreadData* aData
         )
     {
-        // Compared as bare pointers. Asking for the shared_ptr instead cost an atomic increment and
-        // decrement on every Auto emit, to answer a question that never needed ownership: the
-        // caller already holds aData alive, and the other side is this very thread's own data.
-        return aData.get() == Thread::currentThread()->threadDataPtr();
+        // Bare pointers on both sides, and no ownership anywhere near this. It used to take a
+        // shared_ptr by reference and call .get(), which was already avoiding an atomic increment
+        // and decrement per Auto emit; now Affinity hands out a raw pointer and there is nothing
+        // left to avoid.
+        return aData == Thread::currentThread()->threadData();
     }
 
     //! Gets the thread data container holding this object's event dispatcher.
@@ -742,7 +1167,7 @@ namespace QtLikeSignal
     //! dispatcher is reached, so exposing it hands out the machinery every other access-control
     //! decision in this class exists to protect. Returns nullptr if this object has no affinity.
     //! Thread-safe.
-    std::shared_ptr<ThreadData> Object::threadData() const
+    ThreadData* Object::threadData() const
     {
         return mAffinity->data();
     }
@@ -765,8 +1190,8 @@ namespace QtLikeSignal
     //! QObjectPrivate::setThreadData_helper().
     void Object::migratePostedEvents
         (
-        const std::shared_ptr<ThreadData>& aOldData,  //!< Thread the object is leaving; may be null.
-        const std::shared_ptr<ThreadData>& aNewData   //!< Thread it now lives on; may be null.
+        ThreadData* aOldData,  //!< Thread the object is leaving; may be null.
+        ThreadData* aNewData   //!< Thread it now lives on; may be null.
         )
     {
         if( aOldData == aNewData )
@@ -912,26 +1337,65 @@ namespace QtLikeSignal
     //!
     //! Returns true if the call was queued; false if @p aData is null or its thread has no
     //! dispatcher, in which case the call is dropped.
-    // TODO: consider moving this function to ThreadData.
     bool Object::dispatchMetaCallTo
         (
-        const std::shared_ptr<ThreadData>& aData,  //!< Thread to deliver on; null means nowhere.
+        ThreadData* aData,  //!< Thread to deliver on; null means nowhere.
         Object* aReceiver,                          //!< Receiver; the queue key here.
         std::function<void()> aSlot                 //!< Callback function.
         )
     {
+        if( !aData )
+        {
+            return false;
+        }
+
+        // A thread that is running but has not installed a dispatcher yet is in the window between
+        // start() -- which publishes isThreadRunning() before the OS thread exists -- and run()
+        // creating the dispatcher on that new thread. A call posted into that window used to be
+        // dropped on the floor: this function asked for dispatcher(), got null, and returned false.
+        // Thread::post() passes that false straight back to a caller that has no way to retry,
+        // every queued emit and every callLater() goes through here, and none of them expects a
+        // call to simply vanish because the receiving thread was still starting up. Park instead,
+        // and setDispatcher() hands the queue over the moment the dispatcher appears.
+        //
+        // Gated on isThreadRunning() rather than parking whenever there is no dispatcher, because
+        // the *other* way to have no dispatcher is to have finished: run() clears the running flag
+        // (Thread.cpp:193) before it releases the dispatcher (Thread.cpp:222), so a stopped thread
+        // still reports false here and keeps the old refuse-and-report behaviour. Parking there
+        // would accept work into a queue nothing will ever drain, which is precisely the leak
+        // deleteLater() takes its own separate path to avoid.
+        const bool threadIsComingUp = aData->isThreadRunning();
+
         // Moved, not copied: aSlot is a by-value parameter and is dead after this line, and
         // MetaCallEvent's constructor also takes by value and moves, so copying here bought a
         // second heap allocation on every queued emit for nothing.
-        if( auto disp = aData ? aData->dispatcher() : nullptr )
+        auto* event = new MetaCallEvent( std::move( aSlot ) );
+
+        // Set before the event is handed anywhere, parked or queued, because it is what tells
+        // ~Object() that this receiver may have work to strip -- and the strip covers the parked
+        // list as well as the dispatcher's queue.
+        if( aReceiver )
         {
-            auto* event = new MetaCallEvent( std::move( aSlot ) );
-            if( aReceiver )
+            aReceiver->setFlag( kMayHaveQueuedWork );
+        }
+
+        if( threadIsComingUp )
+        {
+            // Takes ownership of the event only when it parks; a dispatcher that appeared while we
+            // were getting here is handed back instead, and then the post below is the normal path.
+            if( auto disp = aData->dispatcherOrPark( aReceiver, event ) )
             {
-                aReceiver->mMayHaveQueuedWork.store( true, std::memory_order_release );
+                return disp->postEvent( aReceiver, static_cast<Event*>( event ) );
             }
+            return true;
+        }
+
+        if( auto disp = aData->dispatcher() )
+        {
             return disp->postEvent( aReceiver, static_cast<Event*>( event ) );
         }
+
+        delete event;
         return false;
     }
 
@@ -943,12 +1407,12 @@ namespace QtLikeSignal
     {
         // No receiver, or one already being destroyed. Signal::connect() takes the first branch:
         // a slot subscribed without an Object has no incoming list to appear in.
-        if( mOwner == nullptr || mLife.expired() )
+        if( mOwner == nullptr || !mOwnerLife || !mOwnerLife->isObjectAlive() )
         {
             return;
         }
 
-        std::lock_guard<std::mutex> lock( mOwner->mIncomingMutex );
+        std::lock_guard<Object::Lock> lock( mOwner->mIncomingMutex );
         if( mIncomingDone )
         {
             return;
@@ -972,14 +1436,14 @@ namespace QtLikeSignal
     {
         // The receiver is gone or already being destroyed; ~Object() has taken the list over and
         // touching mOwner here would be a use-after-free. This is also what makes ~Object()'s own
-        // disconnect loop non-re-entrant: it resets the life token before disconnecting, so this
+        // disconnect loop non-re-entrant: it clears the life flag before disconnecting, so this
         // returns before it can ask for a mutex ~Object() is holding.
-        if( mOwner == nullptr || mLife.expired() )
+        if( mOwner == nullptr || !mOwnerLife || !mOwnerLife->isObjectAlive() )
         {
             return;
         }
 
-        std::lock_guard<std::mutex> lock( mOwner->mIncomingMutex );
+        std::lock_guard<Object::Lock> lock( mOwner->mIncomingMutex );
         mIncomingDone = true;
         if( !mInIncoming )
         {

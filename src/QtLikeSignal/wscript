@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: 2026 Evan
+# SPDX-License-Identifier: MIT
+
+def build(bld):
+    """
+    Build the QtLikeSignal library: the event loop, the threads, the timers and the signals.
+    """
+    kw = {}
+    kw["use"] = []
+    kw["features"] = ["cxx"]
+    kw["source"] = bld.path.ant_glob(
+        "*.cpp",
+        excl=[
+            "ThreadWin.cpp",
+            "ThreadPosix.cpp",
+            "EventDispatcherWin32.cpp",
+            "EventDispatcherLinux.cpp",
+        ],
+    )
+    if bld.env.DEST_OS == "win32":
+        kw["source"].append(bld.path.find_node("ThreadWin.cpp"))
+        kw["source"].append(bld.path.find_node("EventDispatcherWin32.cpp"))
+    elif bld.env.DEST_OS == "linux":
+        kw["source"].append(bld.path.find_node("ThreadPosix.cpp"))
+        kw["source"].append(bld.path.find_node("EventDispatcherLinux.cpp"))
+    # ".." is src/, the directory holding this one, and it is what goes on the include path -- so
+    # every include of a QtLikeSignal header reads "QtLikeSignal/Object.hpp" rather than "Object.hpp". All
+    # thirteen header names also exist in QtMimic, so an unprefixed include would resolve by
+    # include-path order rather than by intent.
+    kw["includes"] = ".."
+    kw["export_includes"] = ".."
+
+    build_shared_lib = getattr(bld.env, "QT_LIKE_SIGNAL_BUILD_SHARED_LIB", False)
+    if build_shared_lib and bld.env.DEST_OS != "win32":
+        kw["features"].append("cxxshlib")
+
+    bld(target="QtLikeSignal", **kw)

@@ -186,10 +186,6 @@ namespace QtLikeSignal
 
             // Invoke platform callbacks unlocked, before re-acquiring. Index 0 is the wakeup FD and
             // is deliberately skipped -- it is ours, not a user source.
-            // Resolved immediately before it is called, so a source unregistered by an earlier callback in
-            // this same round is not then called itself. That is what makes unregisterEventSource()
-            // synchronous on this thread, and it is the rule the dispatch batches follow too: re-check
-            // under the lock, act outside it.
             for( size_t i = 1; i < pollSet.size(); ++i )
             {
                 if( pollSet[i].revents == 0 )
@@ -197,6 +193,10 @@ namespace QtLikeSignal
                     continue;
                 }
 
+                // Resolved immediately before it is called, so a source unregistered by an earlier callback in
+                // this same round is not then called itself. That is what makes unregisterEventSource()
+                // synchronous on this thread, and it is the rule the dispatch batches follow too: re-check
+                // under the lock, act outside it.
                 const EventSourceCallback callback
                     = callbackIfStillRegistered( pollSet[i].fd, generations[i] );
                 if( callback )

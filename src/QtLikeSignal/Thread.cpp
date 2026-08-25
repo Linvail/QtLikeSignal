@@ -26,12 +26,13 @@ namespace QtLikeSignal
     //! Constructs a new thread object with an optional descriptive name.
     Thread::Thread
         (
-        const std::string& aName  //!< Descriptive name; empty by default.
+        const std::string& aName,  //!< Descriptive name; empty by default.
+        Object* aParent            //!< Owner that will delete this thread; none by default.
         )
-        : Object()
+        : Object( aParent )
         , mName( aName )
     {
-        mData = std::make_shared<ThreadData>();
+        mData = ThreadData::create();
         mData->setThread( this );
     }
 
@@ -41,13 +42,17 @@ namespace QtLikeSignal
     //! data sees thread() == nullptr instead of a dangling pointer.
     Thread::~Thread()
     {
+        // Stopped and joined rather than asserted on, which is the one place this class knowingly
+        // diverges from QThread: ~QThread() prints "Destroyed while thread is still running" and
+        // aborts. Joining here is what makes a Thread safe to hand to a parent, since a parent
+        // deletes its children at whatever moment it is destroyed -- and it is why deleting that
+        // parent can block. See the constructor.
         quit();
         wait();
 
         // Drain deferred deletes, then release the dispatcher -- BEFORE clearing the back-pointer
         // below, so there is never a moment where thread() reports nullptr while a working
-        // dispatcher is still reachable through this ThreadData. The invariant is that
-        // thread() == nullptr implies the queue is closed.
+        // dispatcher is still reachable through this ThreadData.
         //
         // threadBody() already does both for a worker that ran a loop, so this is normally a no-op
         // there. It exists for the case that had no equivalent: an *adopted* thread, whose Thread is
@@ -102,7 +107,7 @@ namespace QtLikeSignal
     {
         if( mAdopted.load() )
         {
-            return;
+            return; // an adopted thread already represents an already-running native thread
         }
 
         if( mData->isThreadRunning() )
@@ -260,7 +265,8 @@ namespace QtLikeSignal
         auto dispatcher = mData->dispatcher();
         while( !mExiting.load() && dispatcher )
         {
-            dispatcher->processEvents();
+            dispatcher->processEvents(
+                AbstractEventDispatcher::ProcessEventsFlag::WaitForMoreEvents );
             dispatcher = mData->dispatcher();
         }
         return mExitCode.load();
@@ -304,12 +310,14 @@ namespace QtLikeSignal
         std::function<void()> aTask  //!< The callable to run on this thread. Ignored (returns false) if empty.
         )
     {
-        // Basic sanity check. Usually ThreadData should outlive Thread.
+        // Basic sanity check. ThreadData always outlives Thread now -- ThreadData::create()
+        // files it in a registry that is never emptied -- but mData can still be null before the
+        // constructor has run, and thread() nulls out in ~Thread().
         if( !aTask || mData == nullptr || mData->thread() == nullptr )
         {
             return false;
         }
-        return dispatchMetaCallTo( mData, this, std::move( aTask ) );
+        return dispatchMetaCallTo( mData.get(), this, std::move( aTask ) );
     }
 
     //! Runs one pass of this thread's event loop, then returns.
@@ -321,7 +329,16 @@ namespace QtLikeSignal
     //!
     //! **Must be called from this thread**; it dispatches to objects that live here, and their
     //! handlers expect to run here. A call from elsewhere is rejected with a warning.
-    void Thread::processEvents()
+    //!
+    //! **Defaults to not blocking**, which is what a foreign loop wants and what Qt's
+    //! QCoreApplication::processEvents() does. The other setting parks the thread in our condition
+    //! variable until a QtLikeSignal call releases it, and the loop that owns the thread has no reason
+    //! to make one -- so on an idle thread that is a hang rather than a wait. Ask for
+    //! WaitForMoreEvents only if this thread genuinely has nothing else to do.
+    void Thread::processEvents
+        (
+        AbstractEventDispatcher::ProcessEventsFlag aFlag   //!< Whether an idle pass may block.
+        )
     {
         if( this != currentThread() )
         {
@@ -332,7 +349,7 @@ namespace QtLikeSignal
 
         if( auto dispatcher = mData->dispatcher() )
         {
-            dispatcher->processEvents();
+            dispatcher->processEvents( aFlag );
         }
     }
 
@@ -566,6 +583,7 @@ namespace QtLikeSignal
     //! corner case not worth the confinement violation of migrating them from here.
     void Thread::bindAffinityToSelf()
     {
-        mAffinity->setData( mData );
+        mAffinity->setData( mData.get() );
     }
-}
+
+} // namespace QtLikeSignal

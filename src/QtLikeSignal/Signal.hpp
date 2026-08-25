@@ -36,7 +36,6 @@ namespace QtLikeSignal
     //! subscribers. Expose one of these so callers may subscribe to Timer::timeout or
     //! Thread::finished without being able to announce something that never happened; Qt gets the
     //! same protection from moc.
-    // Without moc, the view is how a plain C++ signal member says the same thing.
     //!
     //! **Limitation:** holds a reference, not a copy, so it is valid only while the owning Signal
     //! lives.
@@ -75,7 +74,7 @@ namespace QtLikeSignal
             (
             Callable&& aSlot,          //!< The callable slot function.
             Object* aOwner,            //!< Receiver whose incoming list to keep.
-            std::weak_ptr<int> aLife   //!< That receiver's life token.
+            std::shared_ptr<Affinity> aOwnerLife   //!< That receiver's affinity box, carrying its life flag.
             );
 
         Signal<Args...>& mSignal;
@@ -156,7 +155,7 @@ namespace QtLikeSignal
             )
         {
             return mImpl->connect( std::forward<Callable>( aSlot ), mImpl, nullptr,
-                std::weak_ptr<int>() );
+                std::shared_ptr<Affinity>() );
         }
 
         //! Disconnects a connection by handle. Thread-safe.
@@ -174,11 +173,6 @@ namespace QtLikeSignal
         //! with several receivers, moving into the first would leave the rest with a moved-from
         //! value. A direct or same-thread slot therefore copies nothing; a queued one copies once.
         //! Qt makes the same choice.
-        // Taking Args... by value cost one copy of every argument per emit before the slots had even
-        // been reached. Caught by ObjectTest.DeepArgumentCopying_QueuedEventsMinimizeCopies.
-        //
-        // Moving into the *last* slot would be sound and is deliberately not done: it would make what
-        // happens to the caller's object depend on how many receivers happen to be connected.
         template <typename ... EmitArgs>
         void emit
             (
@@ -233,11 +227,11 @@ namespace QtLikeSignal
             (
             Callable&& aSlot,          //!< The callable slot function.
             Object* aOwner,            //!< Receiver whose incoming list to keep.
-            std::weak_ptr<int> aLife   //!< That receiver's life token.
+            std::shared_ptr<Affinity> aOwnerLife   //!< That receiver's affinity box, carrying its life flag.
             )
         {
             return mImpl->connect( std::forward<Callable>( aSlot ), mImpl, aOwner,
-                std::move( aLife ) );
+                std::move( aOwnerLife ) );
         }
 
         //! The callable half of a connection, with its concrete type erased behind one virtual
@@ -275,8 +269,6 @@ namespace QtLikeSignal
             //! The parameters are the signal's own Args, exactly as a std::function<void(Args...)>
             //! declared them, so a value emitted as something merely convertible still converts
             //! here and a slot that asks for a mutable reference still gets one.
-            // Args&... instead would save the conversion, and cannot be used: it rejects
-            // sig.emit("literal") on a Signal<std::string>, which the type-erased call accepted.
             virtual void invoke
                 (
                 Args... aArgs
@@ -335,16 +327,6 @@ namespace QtLikeSignal
         //! Removal is O(1) and preserves order: the element is nulled where it stands, and the nulls
         //! are compacted in bulk once they outnumber the live entries. Each slot knows its own
         //! index, so nothing is searched for.
-        // This is what stops tearing down N receivers of one signal costing O(N^2) -- see
-        // PERFORMANCE-20260813.md (P7).
-        //
-        // The obvious alternative -- one list, copied on write, mutated in place when
-        // shared_ptr::use_count() says nobody is reading -- is wrong, and was written and caught by
-        // ThreadSanitizer before this replaced it. use_count() is a relaxed load, so reading 1
-        // establishes no ordering against the reader that just released its reference; the writer is
-        // then free, in the memory model, to reorder its writes before the reader's last read of the
-        // vector. It happens to work most of the time, which is the worst property a concurrency bug
-        // can have.
         class Impl : public Private::SignalImplBase
         {
         public:
@@ -374,11 +356,11 @@ namespace QtLikeSignal
                 Callable&& aSlot,
                 const std::shared_ptr<Impl>& aSelf,
                 Object* aOwner,
-                std::weak_ptr<int> aLife
+                std::shared_ptr<Affinity> aOwnerLife
                 )
             {
                 auto node = std::make_shared<Private::ConnectionNode>( aSelf, aOwner,
-                    std::move( aLife ) );
+                    std::move( aOwnerLife ) );
                 auto slot = std::make_shared<SlotImpl<std::decay_t<Callable> > >(
                     std::forward<Callable>( aSlot ), node );
 
@@ -470,10 +452,6 @@ namespace QtLikeSignal
             //!
             //! O(1): the node carries its own index, so the slot is nulled where it stands and the
             //! cost does not depend on how many other connections exist.
-            // It used to scan the whole list looking for anything marked dead, which made destroying N
-            // receivers of one signal O(N^2) -- 671 ms for 16 000 of them. See PERFORMANCE-20260813.md
-            // (P7). The scan became a weak back-pointer from the state to the slot, and then nothing
-            // at all once the index moved into the node the handle already holds (P10).
             virtual void removeConnection
                 (
                 Private::ConnectionNode* aNode
@@ -512,7 +490,6 @@ namespace QtLikeSignal
             //! Amortised O(1) per removal: each compaction costs one pass but at least halves the
             //! list. Deferred rather than immediate because compacting reassigns indices, which
             //! would otherwise cost O(connections) on every removal. Callers already hold mMutex.
-            // The passes are geometrically rare.
             void compactIfMostlyDead()
             {
                 if( mTombstones * 2 <= mWorking.size() )
@@ -536,9 +513,6 @@ namespace QtLikeSignal
 
             //! Returns the immutable snapshot readers walk, rebuilding it only if the working list
             //! has changed. The rebuild happens once per change, not once per emit.
-            // The rebuild is the only copy in the whole design. A steady emit loop rebuilds nothing; a
-            // burst of connects with no emit between them rebuilds nothing either, and pays one copy on
-            // the emit that follows.
             PublishedListPtr publishedSlots() const
             {
                 std::lock_guard<std::mutex> lock( mMutex );
@@ -638,10 +612,10 @@ namespace QtLikeSignal
         (
         Callable&& aSlot,          //!< The callable slot function.
         Object* aOwner,            //!< Receiver whose incoming list to keep.
-        std::weak_ptr<int> aLife   //!< That receiver's life token.
+        std::shared_ptr<Affinity> aOwnerLife   //!< That receiver's affinity box, carrying its life flag.
         )
     {
-        return mSignal.connect( std::forward<Callable>( aSlot ), aOwner, std::move( aLife ) );
+        return mSignal.connect( std::forward<Callable>( aSlot ), aOwner, std::move( aOwnerLife ) );
     }
 }
 

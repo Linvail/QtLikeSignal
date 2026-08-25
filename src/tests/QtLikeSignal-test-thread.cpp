@@ -9,6 +9,7 @@
 #include "QtLikeSignal-test-types.hpp"
 
 #include "gtest/gtest.h"
+#include "QtLikeSignal/Object.hpp"
 #include "QtLikeSignal/Thread.hpp"
 #include "QtLikeSignal/Signal.hpp"
 #include <chrono>
@@ -87,6 +88,108 @@ protected:
 //! Tests thread lifecycle methods and lifecycle signals. Verifies Thread::start(),
 //! Thread::wait(), Thread::isRunning(), Thread::isFinished(), and emission of
 //! Thread::started and Thread::finished signals.
+//! A Thread can be given a parent at construction, and the parent deletes it -- while running.
+//!
+//! **The point is the teardown, not the linkage.** Qt allows a QThread to have a parent too, but
+//! deleting that parent while the thread runs aborts: ~QThread() refuses to destroy a running
+//! thread. ~Thread() calls quit() and wait() instead, so the parent's destructor stops and joins
+//! it. That difference is the whole reason parenting a Thread is usable here.
+//!
+//! The thread is confirmed to be *inside* its loop before the parent is destroyed, because that is
+//! the case being tested. Destroying it before the loop starts proves nothing and is a different
+//! race -- see the note in NoWorkIsPromisedAfterQuit.
+TEST( ThreadTest, ParentDeletesAThreadThatIsStillRunning )
+{
+    struct FlaggedThread : public Thread
+    {
+        FlaggedThread
+            (
+            bool* aDestroyed,
+            Object* aParent
+            )
+            : Thread( "parented", aParent )
+            , mDestroyed( aDestroyed )
+        {
+        }
+
+        virtual ~FlaggedThread() override
+        {
+            *mDestroyed = true;
+        }
+
+        bool* mDestroyed;
+    };
+
+    Object* const owner = new Object();
+
+    bool destroyed = false;
+    Thread* const worker = new FlaggedThread( &destroyed, owner );
+
+    EXPECT_EQ( owner, worker->parent() );
+    EXPECT_EQ( worker, owner->firstChild() );
+
+    worker->start();
+
+    // Waited for, not assumed: the loop has to be running for this to be testing what it claims.
+    std::promise<void> insideLoop;
+    auto reached = insideLoop.get_future();
+    ASSERT_TRUE( worker->post( [&insideLoop]()
+        {
+            insideLoop.set_value();
+        } ) );
+    ASSERT_EQ( reached.wait_for( std::chrono::seconds( 5 ) ), std::future_status::ready )
+        << "the worker never entered its loop, so the deletion below would not be testing a "
+        "running thread.";
+
+    // No quit(), no wait(), no delete of the thread: the parent is asked to go and everything else
+    // follows from that. Under Qt's destructor this aborts.
+    delete owner;
+
+    EXPECT_TRUE( destroyed )
+        << "the parent did not delete the thread it owned.";
+}
+
+//! quit() ends the loop; it does not promise to drain what is already queued.
+//!
+//! **Written down because the opposite is easy to assume and usually appears to be true.** A task
+//! posted to a thread that is sitting in processEvents() wakes it, gets dispatched, and only then
+//! does the loop notice it has been asked to stop -- so post-then-quit looks reliable. It is not:
+//! exec() tests its exiting flag before calling into the dispatcher, so a quit() that lands before
+//! the loop's first pass drops everything queued behind it. Qt makes the same non-promise.
+//!
+//! Code that must run on a thread before it stops has to post the work and *observe* it, not post
+//! it and quit.
+TEST( ThreadTest, NoWorkIsPromisedAfterQuit )
+{
+    Thread thread( "quitting" );
+    thread.start();
+
+    std::atomic<bool> ran { false };
+    static_cast<void>( thread.post( [&ran]()
+        {
+            ran.store( true );
+        } ) );
+
+    thread.quit();
+    thread.wait();
+
+    // Deliberately no assertion on `ran`: both outcomes are correct, and pinning either one would
+    // be pinning a race. What is asserted is that the thread stopped and nothing came apart.
+    EXPECT_TRUE( thread.isFinished() );
+    static_cast<void>( ran.load() );
+}
+
+//! A Thread with no parent still works exactly as before.
+//!
+//! The parameter is defaulted and additive; this is the guard that says so.
+TEST( ThreadTest, ThreadWithoutAParentIsUnowned )
+{
+    Thread thread( "unparented" );
+
+    EXPECT_EQ( nullptr, thread.parent() );
+    EXPECT_EQ( "unparented", thread.name() );
+}
+
 TEST( ThreadTest, LifecycleAndSignals )
 {
     CustomTestThread thread;
@@ -183,6 +286,29 @@ TEST( ThreadTest, CreateReturnsAnUnstartedThread )
         "leaves open is not usable.";
 
     delete threadObj;
+}
+
+//! Tests that name() reports what the constructor was given, including the empty default.
+//!
+//! A trivial accessor over a member fixed at construction, and until this test one of only three
+//! functions in the library the suite never called at all. Cheap to pin down, and the constructor
+//! is the only writer, so this is the whole contract.
+TEST( ThreadTest, NameIsWhatTheConstructorWasGiven )
+{
+    Thread named( "worker-with-a-name" );
+    EXPECT_EQ( named.name(), "worker-with-a-name" );
+
+    Thread unnamed;
+    EXPECT_TRUE( unnamed.name().empty() ) << "a thread constructed with no name reported one.";
+
+    // Starting and finishing does not disturb it: the name is fixed at construction and the run
+    // body never touches it.
+    named.start();
+    ASSERT_TRUE( waitUntilRunning( named ) );
+    EXPECT_EQ( named.name(), "worker-with-a-name" );
+    named.quit();
+    named.wait();
+    EXPECT_EQ( named.name(), "worker-with-a-name" );
 }
 
 //! Tests retrieval of current thread pointer. Verifies static function
@@ -327,10 +453,10 @@ TEST( ThreadTest, PostFromOwnThreadStillDefers )
     ASSERT_TRUE( worker.post(
         [&worker, &orderPromise, &postReturnedBeforeTaskRan, &innerRan]()
         {
-            worker.post( [&innerRan]()
-            {
-                innerRan.store( true );
-            } );
+            ASSERT_TRUE( worker.post( [&innerRan]()
+                {
+                    innerRan.store( true );
+                } ) );
             // If post() deferred correctly, innerRan is still false immediately after the call.
             postReturnedBeforeTaskRan.store( !innerRan.load() );
             orderPromise.set_value();
@@ -357,6 +483,56 @@ TEST( ThreadTest, PostBeforeStartFails )
     EXPECT_FALSE( ran );
 }
 
+//! A post made in the window between start() and the loop coming up is delivered, not dropped.
+//!
+//! start() publishes isThreadRunning() before the OS thread exists, and the dispatcher is not
+//! created until run() executes on that new thread. A post landing in between used to find no
+//! dispatcher and be discarded outright -- Thread::post() returned false to a caller with no way to
+//! retry, and the task simply never ran.
+//!
+//! It was not a narrow race. Posting immediately after start() lost the task on roughly two runs in
+//! three of a win64-msvc release build, and the task stayed lost: instrumented, it had still not
+//! been delivered thirty seconds later. What made it look like a flake rather than a dropped call
+//! was that anything which happened to wait first -- a slower debug build, another test running
+//! ahead of it -- closed the window before the post.
+//!
+//! Deliberately no waitUntilRunning() here: waiting is exactly what hides the defect. Repeated,
+//! because a single pass can win the race by luck.
+// See ObjectTest.DeepArgumentCopying_QueuedEventsMinimizeCopies, which is where this surfaced.
+TEST( ThreadTest, PostImmediatelyAfterStartIsDeliveredNotDropped )
+{
+    constexpr int kAttempts = 20;
+    for( int attempt = 0; attempt < kAttempts; ++attempt )
+    {
+        Thread worker;
+        worker.start();
+
+        std::mutex mutex;
+        std::condition_variable cv;
+        bool ran = false;
+
+        EXPECT_TRUE( worker.post( [&]()
+            {
+                {
+                    std::lock_guard<std::mutex> lock( mutex );
+                    ran = true;
+                }
+                cv.notify_one();
+            } ) ) << "post() refused the task on attempt " << attempt;
+
+        {
+            std::unique_lock<std::mutex> lock( mutex );
+            EXPECT_TRUE( cv.wait_for( lock, std::chrono::seconds( 5 ), [&]
+                {
+                    return ran;
+                } ) ) << "the task never ran on attempt " << attempt;
+        }
+
+        worker.quit();
+        worker.wait();
+    }
+}
+
 //! Tests Thread::post() rejects an empty std::function without touching the dispatcher.
 TEST( ThreadTest, PostRejectsEmptyTask )
 {
@@ -372,7 +548,7 @@ TEST( ThreadTest, PostRejectsEmptyTask )
 
 //! Verifies isRunning()/isFinished() report the states Qt reports, at the moments Qt reports them.
 //!
-//! Three claims, each of which QtLikeSignal got wrong at some point and Qt is the authority on:
+//! Three claims, same as Qt's behavior.
 //!
 //!   - An adopted thread is *running*. Qt's adopting QThread constructor sets threadState =
 //!     Running outright, commenting that the thread "should be running and not finished for the

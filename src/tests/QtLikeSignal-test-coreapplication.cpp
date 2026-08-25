@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+//! @file
+
 #include "QtLikeSignal-test-types.hpp"
 #include "TestCpuTime.hpp"
 
@@ -20,8 +22,7 @@ using namespace QtLikeSignal;
 
 //! @file
 //!
-//! Tests for CoreApplication, which had no coverage at all before this file existed -- which is
-//! how a 100% CPU spin in exec() (R18) survived unnoticed.
+//! Tests for CoreApplication.
 //!
 //! Every test here constructs its own CoreApplication and lets it go out of scope before
 //! returning. That matters more than usual: gtest runs every test on one thread, and an application
@@ -196,7 +197,7 @@ TEST( CoreApplicationTest, ArgumentsAreCapturedOnlyByTheArgcArgvConstructor )
     }
 }
 
-//! Regression test for R18: exec() after a quit() used to spin at 100% CPU.
+//! Test for re-entering exec() after a quit(). It shouldn't spin at 100% CPU.
 //!
 //! EventDispatcherDefault::mInterrupt was latched true by interrupt() and never cleared by
 //! anything, so once quit() had interrupted the dispatcher every later processEvents() returned
@@ -413,6 +414,84 @@ TEST( CoreApplicationTest, TimerFiresOnTheMainThreadLoop )
 
     EXPECT_EQ( app.exec(), 0 );
     EXPECT_GE( ticks, 3 );
+}
+
+//! Verifies post() hands a task to the main loop and runs it there, not on the caller's thread.
+//!
+//! post() is public API and one of the four statics whose thread-safety contract was rewritten on
+//! 2026-08-13 (R15), and until this test nothing called it at all -- it was one of only three
+//! functions in the library the suite never reached.
+TEST( CoreApplicationTest, PostRunsTheTaskOnTheMainThread )
+{
+    CoreApplication app;
+
+    Thread* mainThread = Thread::currentThread();
+    std::atomic<Thread*> ranOn { nullptr };
+    std::atomic<Thread*> postedFrom { nullptr };
+    std::atomic<int> runs { 0 };
+
+    // Posted from a plain std::thread, which is the case post() exists for: a thread that wants to
+    // hand work to the main loop without holding a pointer to the application.
+    std::thread poster( [&ranOn, &postedFrom, &runs]()
+        {
+            postedFrom.store( Thread::currentThread() );
+            ASSERT_TRUE( CoreApplication::post( [&ranOn, &runs]()
+                {
+                    ranOn.store( Thread::currentThread() );
+                    runs.fetch_add( 1 );
+                    CoreApplication::quit();
+                } ) );
+        } );
+
+    EXPECT_EQ( app.exec(), 0 );
+    poster.join();
+
+    EXPECT_EQ( runs.load(), 1 ) << "the posted task did not run exactly once.";
+    EXPECT_EQ( ranOn.load(), mainThread )
+        << "post() must run its task on the main thread, not wherever it was posted from.";
+    EXPECT_NE( postedFrom.load(), mainThread )
+        << "the poster was not a foreign thread, so this did not test what it claims to.";
+}
+
+//! Verifies post() is a safe no-op when no application exists.
+//!
+//! The counterpart to the exit()/quit() case below: all three statics load the instance pointer
+//! and do nothing when it is null. Unlike those two, post() now *reports* it: the refusal is the
+//! contract, not merely an absence of damage, so it is asserted rather than assumed.
+TEST( CoreApplicationTest, StaticPostWithoutAnApplicationIsHarmless )
+{
+    ASSERT_EQ( CoreApplication::instance(), nullptr );
+
+    std::atomic<int> runs { 0 };
+    EXPECT_FALSE( CoreApplication::post( [&runs]()
+        {
+            runs.fetch_add( 1 );
+        } ) ) << "post() claimed it had queued a task with no application to run it.";
+
+    EXPECT_EQ( runs.load(), 0 ) << "a task posted with no application ran anyway.";
+}
+
+//! Verifies a second application object is refused the singleton slot instead of taking it over.
+//!
+//! Qt asserts on this; both libraries warn on stderr and keep the first instance, so the damage is
+//! contained and visible rather than fatal. The destructor half matters just as much: the second
+//! object is destroyed first here, and it must not clear a pointer that still belongs to the
+//! first -- which is what the compare-exchange in ~CoreApplication() is for.
+TEST( CoreApplicationTest, SecondApplicationIsRefusedAndTheFirstStaysTheInstance )
+{
+    CoreApplication first;
+    ASSERT_EQ( CoreApplication::instance(), &first );
+
+    {
+        // The misuse this warning exists to report, performed deliberately. A line appears on
+        // stderr; that is the diagnostic, not a test failure.
+        CoreApplication second;
+        EXPECT_EQ( CoreApplication::instance(), &first )
+            << "the second application object took over the singleton slot.";
+    }
+
+    EXPECT_EQ( CoreApplication::instance(), &first )
+        << "destroying the second application cleared the first out of instance().";
 }
 
 //! Verifies exit()/quit() are safe no-ops when no application exists.

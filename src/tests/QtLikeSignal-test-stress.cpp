@@ -339,8 +339,14 @@ namespace
             (
             Thread* t
             )
-            : Object( t )
+            : Object()
         {
+            // Built here and pushed, rather than constructed on that
+            // thread's affinity: Object no longer takes a Thread*.
+            if( t != nullptr )
+            {
+                ( void )moveToThread( t );
+            }
         }
 
         // We use atomic here just in case the library has a routing bug and
@@ -407,14 +413,14 @@ namespace
         std::condition_variable barrierCv;
         bool barrierDone = false;
 
-        worker.post( [&]()
+        ASSERT_TRUE( worker.post( [&]()
             {
                 {
                     std::lock_guard<std::mutex> lock( barrierMutex );
                     barrierDone = true;
                 }
                 barrierCv.notify_one();
-            } );
+            } ) );
 
         {
             std::unique_lock<std::mutex> lock( barrierMutex );
@@ -478,8 +484,14 @@ namespace
             (
             Thread* t
             )
-            : Object( t )
+            : Object()
         {
+            // Built here and pushed, rather than constructed on that
+            // thread's affinity: Object no longer takes a Thread*.
+            if( t != nullptr )
+            {
+                ( void )moveToThread( t );
+            }
         }
 
         void onTriggered
@@ -519,14 +531,14 @@ namespace
         std::mutex barrierMutex;
         std::condition_variable barrierCv;
         bool barrierDone = false;
-        worker.post( [&]()
+        ASSERT_TRUE( worker.post( [&]()
             {
                 {
                     std::lock_guard<std::mutex> lock( barrierMutex );
                     barrierDone = true;
                 }
                 barrierCv.notify_one();
-            } );
+            } ) );
 
         {
             std::unique_lock<std::mutex> lock( barrierMutex );
@@ -537,8 +549,6 @@ namespace
         }
 
         // THE VALIDATION:
-        // Exactly one copy per connected receiver, and nothing else.
-        //
         // The signal is Signal<HeavyPayload>, so each slot's std::function takes the payload by
         // value: that parameter is the one copy, and it is the copy the receiver needs, since a
         // queued invocation has to own its arguments. Emission itself copies nothing -- it holds
@@ -580,14 +590,14 @@ namespace
         std::mutex barrierMutex;
         std::condition_variable barrierCv;
         bool barrierDone = false;
-        worker.post( [&]()
+        ASSERT_TRUE( worker.post( [&]()
             {
                 {
                     std::lock_guard<std::mutex> lock( barrierMutex );
                     barrierDone = true;
                 }
                 barrierCv.notify_one();
-            } );
+            } ) );
 
         {
             std::unique_lock<std::mutex> lock( barrierMutex );
@@ -651,15 +661,25 @@ namespace
             (
             Thread* t
             )
-            : Object( t )
+            : Object()
         {
+            // Built here and pushed, rather than constructed on that
+            // thread's affinity: Object no longer takes a Thread*.
+            if( t != nullptr )
+            {
+                ( void )moveToThread( t );
+            }
         }
 
         void onTriggered
             (
-            const LeakDetectorPayload& payload
+            const LeakDetectorPayload& payload  //!< Deliberately ignored; see below.
             )
         {
+            // Doing nothing with it is the whole point: the payload has to be destroyed by the
+            // machinery that queued it, not by anything this slot does. Named rather than dropped
+            // so the signature still says what arrives here.
+            ( void )payload;
         }
 
     };

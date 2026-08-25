@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <future>
 #include <mutex>
 #include <thread>
 
@@ -55,7 +56,7 @@ TEST( ThreadAdoptionTest, ObjectsAlwaysHaveAThreadAffinity )
         {
             Object there;
             hadAffinity.store( there.thread() != nullptr
-                && there.thread() == Thread::currentThread() );
+            && there.thread() == Thread::currentThread() );
         } );
     worker.join();
 
@@ -171,6 +172,69 @@ TEST( ThreadAdoptionTest, ProcessEventsFromAnotherThreadIsRejected )
 
     owner->processEvents();
     EXPECT_EQ( calls.load(), 1 );
+}
+
+//! Verifies an idle processEvents() returns instead of parking the thread.
+//!
+//! **The case the adopted-thread workflow actually depends on.** Every other test here posts work
+//! first and drains second, so the queue is never empty and the wait is never reached. A real
+//! native loop is not that tidy: it wakes for its own reasons, drains ours on the way past, and
+//! finds nothing. If that call blocks, the loop that owns the thread is gone -- and it cannot get
+//! itself back, because only a QtLikeSignal call releases the wait and the loop has no reason to make
+//! one.
+//!
+//! AllEvents is the default for exactly this reason, so the plain call is the one under test.
+TEST( ThreadAdoptionTest, IdleProcessEventsReturnsWithoutBlocking )
+{
+    // Run on a thread of its own, and watched with a timeout, so that a regression *fails* here
+    // rather than hanging the suite: the old behaviour was an indefinite wait, and a test that
+    // never returns reports nothing at all.
+    std::promise<void> returnedPromise;
+    auto returnedFuture = returnedPromise.get_future();
+
+    std::thread native( [&returnedPromise]()
+        {
+            // Adopted on the first call, like any native thread that touches QtLikeSignal.
+            Thread* const self = Thread::currentThread();
+
+            // Nothing posted, no timer registered: this pass has nothing to do and nothing to wait
+            // for, which is precisely when the wait used to be entered with no deadline.
+            self->processEvents();
+            self->processEvents();
+
+            returnedPromise.set_value();
+        } );
+
+    EXPECT_EQ( returnedFuture.wait_for( std::chrono::seconds( 5 ) ), std::future_status::ready )
+        << "an idle processEvents() did not return, so it is waiting for work that is never "
+        "coming rather than giving the thread back to the loop that owns it.";
+
+    native.join();
+}
+
+//! Verifies a non-blocking pass still dispatches everything that was already queued.
+//!
+//! Not waiting must not mean not working: the drain is the whole point of the call, and the flag
+//! only says what to do once there is nothing left.
+TEST( ThreadAdoptionTest, NonBlockingProcessEventsStillDrainsTheQueue )
+{
+    Thread* const owner = Thread::currentThread();
+    Object receiver;
+
+    std::atomic<int> calls { 0 };
+    Signal<> sig;
+    Object::connect( sig, &receiver, [&calls]()
+        {
+            calls.fetch_add( 1 );
+        }, ConnectionType::Queued );
+
+    sig.emit();
+    sig.emit();
+
+    owner->processEvents( AbstractEventDispatcher::ProcessEventsFlag::AllEvents );
+
+    EXPECT_EQ( calls.load(), 2 )
+        << "a non-blocking pass skipped work that was already queued.";
 }
 
 //! Verifies setWakeCallback() notifies a thread's own native loop when work is posted.

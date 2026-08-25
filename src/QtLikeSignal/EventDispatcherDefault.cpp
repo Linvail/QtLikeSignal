@@ -31,7 +31,10 @@ namespace QtLikeSignal
     //! true if any events or timers were processed, false otherwise.
     //!
     //! Thread-safe. Called by thread event loop.
-    bool EventDispatcherDefault::processEvents()
+    bool EventDispatcherDefault::processEvents
+        (
+        ProcessEventsFlag aFlag   //!< Whether an idle pass may block. See the enum.
+        )
     {
         // Consume the interrupt rather than merely testing it. interrupt() means "return from the
         // pass that is running now", not "refuse to work ever again". Leaving it set would make
@@ -123,10 +126,22 @@ namespace QtLikeSignal
                 // actually blocked and to re-acquire it before returning, so everything read below
                 // is still guarded. That contract is what lets a platform subclass block in poll()
                 // or MsgWaitForMultipleObjectsEx(), neither of which can hold a std::mutex.
-                const int timeoutMs = mTimers.empty()
-                                      ? -1
-                                      : static_cast<int>( maxWait.count() );
-                waitForEvents( lock, timeoutMs );
+                // AllEvents skips the wait entirely rather than waiting with a zero timeout,
+                // because the two are not the same thing on every backend: a poll() of 0 ms is
+                // cheap, but MsgWaitForMultipleObjectsEx still enters an alertable wait and can
+                // dispatch an APC. Not calling it at all is the only version that reliably gives
+                // the caller its thread straight back.
+                //
+                // Nothing is lost by skipping it. Everything the wait would have noticed --
+                // queued events, expired timers -- was already collected above under this same
+                // lock, and anything arriving after this point is for the next pass either way.
+                if( aFlag == ProcessEventsFlag::WaitForMoreEvents )
+                {
+                    const int timeoutMs = mTimers.empty()
+                                          ? -1
+                                          : static_cast<int>( maxWait.count() );
+                    waitForEvents( lock, timeoutMs );
+                }
 
                 // wakeUp() is a one-shot "return from the wait now" request; consume it so a later
                 // processEvents() call does not treat it as still pending.
@@ -151,8 +166,8 @@ namespace QtLikeSignal
             // Take the whole queue in one move rather than copying it out entry by entry. The old
             // loop cost a copy per event plus the growth reallocations of the destination, all of
             // it under mMutex and therefore in the way of every thread trying to post. Qt walks its
-            // postEventList in place; this is the same idea. mEventQueue is left empty, which is
-            // exactly what the drain loop left behind too.
+            // postEventList in place and QtLikeSignal swaps its deque; this is the same idea. mEventQueue
+            // is left empty, which is exactly what the drain loop left behind too.
             eventsToProcess.swap( mEventQueue );
 
             // Publish both batches so unregisterTimer() and removeEventsForReceiver() can cancel
@@ -435,7 +450,7 @@ namespace QtLikeSignal
             [aTimerId]( const EventPair& aEp )
             {
                 if( aEp.mEvent && aEp.mEvent->type() == Event::Timer
-                    && static_cast<TimerEvent*>( aEp.mEvent )->timerId() == aTimerId )
+                && static_cast<TimerEvent*>( aEp.mEvent )->timerId() == aTimerId )
                 {
                     delete aEp.mEvent;
                     return true;
@@ -502,9 +517,6 @@ namespace QtLikeSignal
     namespace
     {
         //! Cancels the entries of one published batch that @p aMatches selects.
-        // A template only because the queued-event batch is a deque and the other two are vectors;
-        // there is one behaviour here, not three. A null batch means the pass does not have that
-        // kind of work, which is normal.
         template <typename Batch, typename Predicate>
         void cancelBatchEntries
             (
@@ -533,13 +545,12 @@ namespace QtLikeSignal
         //!
         //! Hands the event over rather than deleting it, and clears the slot so the dispatch loop
         //! skips it.
-        // The same ownership handover cancelBatchEntries() performs, minus the delete.
         template <typename Batch>
         void takeBatchEntries
             (
-            Batch* aBatch,                   //!< The published batch, or nullptr.
-            Object* aReceiver,               //!< The receiver whose entries should be taken.
-            std::vector<Event*>& aTaken      //!< Collects the events taken.
+            Batch* aBatch,                 //!< The published batch, or nullptr.
+            Object* aReceiver,             //!< The receiver whose entries should be taken.
+            std::vector<Event*>& aTaken    //!< Collects the events taken.
             )
         {
             if( !aBatch )
@@ -575,7 +586,6 @@ namespace QtLikeSignal
     }
 
     //! Cancels every published entry targeting @p aReceiver. Callers must hold mMutex.
-    // See mDispatchFrames in the header for why holding mMutex is what makes this safe.
     void EventDispatcherDefault::cancelPublishedEntriesFor
         (
         Object* aReceiver  //!< The receiver whose entries should be cancelled.
@@ -606,8 +616,6 @@ namespace QtLikeSignal
     //!
     //! Unlinks that specific frame rather than popping the head, so two threads driving the same
     //! dispatcher cannot corrupt the chain.
-    // Passes on one thread nest strictly, but two threads driving the same dispatcher would not,
-    // and searching costs nothing at these depths.
     void EventDispatcherDefault::unlinkDispatchFrame
         (
         DispatchFrame* aFrame  //!< The frame to remove.
@@ -667,8 +675,6 @@ namespace QtLikeSignal
     //!
     //! Reaches the running passes as well as the queue, so it also works when moveToThread() is
     //! called from inside a handler.
-    // Uses the same publication R28 added: an entry taken out of a batch is cleared rather than
-    // deleted, and the dispatch loop skips a cleared slot.
     std::vector<Event*> EventDispatcherDefault::takeEventsForReceiver
         (
         Object* aReceiver  //!< The receiver whose events should be taken.
@@ -707,7 +713,7 @@ namespace QtLikeSignal
 
     //! Unregisters the receiver's timers and returns them for re-registration elsewhere. Returns
     //! the removed registrations, empty if the receiver had none. Thread-safe.
-    std::vector<AbstractEventDispatcher::TimerRegistration>EventDispatcherDefault::
+    std::vector<AbstractEventDispatcher::TimerRegistration> EventDispatcherDefault::
     takeTimersForReceiver
         (
         Object* aReceiver  //!< The receiver whose timers should be taken.

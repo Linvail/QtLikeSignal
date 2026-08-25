@@ -191,11 +191,12 @@ TEST( ObjectTest, ObjectNameAndThreadAffinity )
 
 //! Tests weak life token tracking for object destruction.
 //!
-//! Verifies Object::objectLife() returns a valid weak pointer during the lifetime of Object
-//! and expires upon object destruction.
+//! Verifies Object::objectLife() returns a token that reports the object alive during its
+//! lifetime and expired once it has been destroyed, including after the Object itself is gone.
 TEST( ObjectTest, ObjectLifeToken )
 {
-    std::weak_ptr<int> lifeToken;
+    ObjectLife lifeToken;
+    EXPECT_TRUE( lifeToken.expired() ) << "a token naming no object reports expired";
     {
         Object obj;
         lifeToken = obj.objectLife();
@@ -299,6 +300,106 @@ TEST( ObjectTest, TimerStartAndKill )
     thread->start();
     thread->wait();
     delete thread;
+}
+
+//! Counts timer expiries, so a test can tell a refused killTimer() from an honoured one.
+class TimerTickCounter : public Object
+{
+public:
+    explicit TimerTickCounter
+        (
+        Thread* aThread = nullptr
+        )
+        : Object()
+    {
+        // Built here and pushed, rather than constructed on that
+        // thread's affinity: Object no longer takes a Thread*.
+        if( aThread != nullptr )
+        {
+            ( void )moveToThread( aThread );
+        }
+    }
+
+    //! @return how many expiries have been delivered.
+    int ticks() const
+    {
+        return mTicks.load();
+    }
+
+protected:
+    virtual void timerEvent
+        (
+        TimerEvent* aEvent
+        ) override
+    {
+        ( void )aEvent;
+        mTicks.fetch_add( 1 );
+    }
+
+private:
+    // Atomic because the test thread polls it while the timer's own thread writes it.
+    std::atomic<int> mTicks { 0 };
+};
+
+//! Tests the ways startTimer() and killTimer() refuse a request.
+//!
+//! Each refusal writes a diagnostic to stderr and otherwise does nothing. None of them had been
+//! exercised, so the guards were only ever as good as the code reading them -- and a guard that
+//! silently stopped guarding would have looked exactly the same from outside.
+TEST( ObjectTest, TimerRequestsThatAreRefused )
+{
+    Thread worker( "timer-refusals" );
+    worker.start();
+    ASSERT_TRUE( waitUntilRunning( worker ) );
+
+    TimerTickCounter owned( &worker );
+
+    // A negative interval is refused outright rather than corrected. Timer::start() clamps it to
+    // 1 ms instead; startTimer() is the low-level entry point and simply says no.
+    int negativeResult = 0;
+    runOnThread( worker, [&owned, &negativeResult]()
+        {
+            negativeResult = owned.startTimer( -1 );
+        } );
+    EXPECT_EQ( negativeResult, -1 ) << "startTimer() accepted a negative interval.";
+
+    // Timers are thread-confined, as in Qt: only the object's own thread may start one, because
+    // only that thread's loop can ever deliver the resulting timerEvent().
+    EXPECT_EQ( owned.startTimer( 5 ), -1 )
+        << "startTimer() was honoured from a thread the object does not live in.";
+
+    int liveId = -1;
+    runOnThread( worker, [&owned, &liveId]()
+        {
+            liveId = owned.startTimer( 5 );
+        } );
+    ASSERT_GT( liveId, 0 );
+
+    // Stopping one from the wrong thread is refused for the same reason, and -- the part worth
+    // asserting -- leaves the timer running rather than half-killing it.
+    owned.killTimer( liveId );
+    EXPECT_TRUE( waitFor( [&owned]()
+        {
+            return owned.ticks() >= 2;
+        } ) ) << "killTimer() from a foreign thread stopped the timer instead of refusing.";
+
+    runOnThread( worker, [&owned, &liveId]()
+        {
+            // An id this object never owned is not its to forget. Handing it back to the shared
+            // id pool would let a later startTimer() reissue an id another object is still using,
+            // which is the recycling hazard the pool's FIFO reuse exists to keep narrow.
+            owned.killTimer( liveId + 100000 );
+            owned.killTimer( liveId );
+        } );
+
+    const int settled = owned.ticks();
+    std::this_thread::sleep_for( 40ms );
+    EXPECT_EQ( owned.ticks(), settled )
+        << "the timer kept firing after being killed from its own thread.";
+
+    drainQueuedTasks( worker );
+    worker.quit();
+    worker.wait();
 }
 
 //! Tests connect() with member function slot when receiver lives in another thread.
@@ -746,6 +847,159 @@ TEST( ObjectTest, CallLaterMultipleCycles )
     EXPECT_EQ( receiver.lastValue(), 200 );
 }
 
+//! Tests that every callLater() overload tolerates a null receiver or context.
+//!
+//! Each overload opens with the same guard and each guard was unreached: connect() had a null
+//! test (NullReceiverOrContextConnection above) and callLater() did not, even though it is the
+//! easier of the two to reach with a null -- the pointer is usually a `this` from a caller that
+//! has just checked something else.
+TEST( ObjectTest, CallLaterWithNullReceiverOrContextIsANoOp )
+{
+    g_testFreeFuncCount   = 0;
+    g_testFreeFuncLastVal = 0;
+
+    ObjectTestReceiver* nullReceiver = nullptr;
+    Object*             nullContext  = nullptr;
+
+    // One per overload, since each carries its own copy of the guard.
+    Object::callLater( nullReceiver, &ObjectTestReceiver::onStringConstReference,
+        std::string( "ignored" ) );                                            // unambiguous slot
+    Object::callLater( nullReceiver, &ObjectTestReceiver::onValueNonVoidReturn, 1 ); // non-void
+    Object::callLater( nullReceiver, &ObjectTestReceiver::onValueReceived, 2 );      // overloaded
+    Object::callLater( nullContext, &testCallLaterFreeFunc, 3 );                     // free func
+
+    ConsumerDerived* nullDerived = nullptr;
+    Object::callLater( nullDerived, &Consumer::onProducedReturnInt, 5 );   // inherited non-void
+
+    Signal<int> sig;
+    Object::callLater( nullContext, sig, 4 );                                        // signal
+
+    // Nothing was scheduled, so nothing can arrive later either.
+    EXPECT_EQ( g_testFreeFuncCount, 0 );
+    EXPECT_EQ( g_testFreeFuncLastVal, 0 );
+}
+
+//! Tests the callLater() overloads that resolve by return type and by base class.
+//!
+//! The suite reached the plain and the overloaded-slot forms and nothing else. A slot with a
+//! non-void return selects a different overload, and one inherited from a base class selects
+//! another again -- each with its own copy of the dispatch, and neither had ever been reached by
+//! a call that went through. The eleven overloads exist so that the awkward cases compile; a test
+//! per shape is what says they also run.
+TEST( ObjectTest, CallLaterResolvesNonVoidAndInheritedSlots )
+{
+    Thread workerThread( "calllater-overloads" );
+    workerThread.start();
+    ASSERT_TRUE( waitUntilRunning( workerThread ) );
+
+    ObjectTestReceiver receiver;
+    receiver.moveToThread( &workerThread );
+
+    ConsumerDerived derived;
+    derived.moveToThread( &workerThread );
+
+    // An unambiguous void slot: the plainest overload, resolved by deducing the member pointer.
+    Object::callLater( &receiver, &ObjectTestReceiver::onStringConstReference,
+        std::string( "deferred" ) );
+
+    // A non-void slot. The return value is discarded, which is the whole reason for the separate
+    // overload: a value-returning slot does not match the void-returning ones.
+    Object::callLater( &receiver, &ObjectTestReceiver::onValueNonVoidReturn, 5 );
+
+    // A non-void slot inherited from a base class, so the receiver's type and the slot's class
+    // differ -- which selects yet another overload.
+    Object::callLater( &derived, &Consumer::onProducedReturnInt, 11 );
+
+    Signal<> quitSig;
+    Object::connect(
+        quitSig, &receiver, [&workerThread]()
+        {
+            workerThread.quit();
+        }, ConnectionType::Queued );
+    quitSig.emit();
+
+    workerThread.wait();
+
+    // Queued behind the three calls above, so reaching the quit means all three had their turn.
+    EXPECT_EQ( receiver.callCount(), 2 );
+    EXPECT_EQ( receiver.lastString(), "deferred" );
+    EXPECT_EQ( receiver.lastValue(), 5 );
+    EXPECT_EQ( derived.mCount.load(), 1 );
+    EXPECT_EQ( derived.mLast.load(), 11 );
+}
+
+//! Tests that destroying a context cancels the callLater() still pending for it.
+//!
+//! Two things have to happen in ~Object() for this to hold: the queued metacall is stripped from
+//! the dispatcher, and the entry is dropped from the process-wide callLater registry. The second
+//! is the one this test is really about -- leaving it behind would keep a dead pointer in a table
+//! every later callLater() consults, and the registry is guarded by a set-once flag
+//! (mUsedCallLater) precisely so most objects never pay for the scan. Nothing had ever destroyed
+//! an object with that flag set and a call outstanding.
+TEST( ObjectTest, CallLaterIsCancelledWhenItsContextIsDestroyed )
+{
+    g_testFreeFuncCount   = 0;
+    g_testFreeFuncLastVal = 0;
+
+    Thread workerThread( "calllater-cancel" );
+    workerThread.start();
+    ASSERT_TRUE( waitUntilRunning( workerThread ) );
+
+    // Hold the worker inside a posted task so the queued metacall cannot be dispatched while the
+    // test arranges the destruction it means to test. Without the block this is a race that
+    // usually resolves the uninteresting way.
+    std::mutex blockMutex;
+    std::condition_variable blockCv;
+    bool release = false;
+    std::promise<void>      blocked;
+    auto blockedFuture = blocked.get_future();
+
+    ASSERT_TRUE( workerThread.post( [&blockMutex, &blockCv, &release, &blocked]()
+        {
+            blocked.set_value();
+            std::unique_lock<std::mutex> lock( blockMutex );
+            blockCv.wait( lock, [&release]()
+            {
+                return release;
+            } );
+        } ) );
+    ASSERT_EQ( blockedFuture.wait_for( kPatience ), std::future_status::ready )
+        << "the worker never reached the blocking task.";
+
+    // A second context that outlives the first, so the registry sweep has to be selective:
+    // dropping every pending entry would be the opposite defect, and a test with only one context
+    // in the table could not tell the two apart.
+    ObjectTestReceiver survivor;
+    survivor.moveToThread( &workerThread );
+    Object::callLater( &survivor, &ObjectTestReceiver::onValueReceived, 77 );
+
+    {
+        Object context;
+        // Built here and pushed: Object takes a parent now, not a thread.
+        ASSERT_TRUE( context.moveToThread( &workerThread ) );
+        Object::callLater( &context, &testCallLaterFreeFunc, 123 );
+
+        // context is destroyed here, with its metacall still queued on the blocked worker and the
+        // survivor's entry sitting next to it in the registry.
+    }
+
+    {
+        std::lock_guard<std::mutex> lock( blockMutex );
+        release = true;
+    }
+    blockCv.notify_one();
+
+    drainQueuedTasks( workerThread );
+    workerThread.quit();
+    workerThread.wait();
+
+    EXPECT_EQ( g_testFreeFuncCount, 0 )
+        << "a callLater() ran after the context that owned it had been destroyed.";
+    EXPECT_EQ( survivor.callCount(), 1 )
+        << "destroying one context cancelled another context's pending callLater() too.";
+    EXPECT_EQ( survivor.lastValue(), 77 );
+}
+
 //! Tests Object::connect with overloaded slots.
 TEST( ObjectTest, ConnectOverloadedSlot )
 {
@@ -863,7 +1117,7 @@ static void waitForOneDelivery
 }
 
 // =================================================================================================
-// Further object tests.
+// Tests originating in QtMimic's object suite.
 //
 // The two suites were written independently and shared not one test name, so this is the union
 // rather than a reconciliation: nothing was dropped from either side on a judgment that some other
@@ -958,11 +1212,11 @@ TEST( ObjectTest, ReceiverDestroyedBeforeDeliveryNoCrash )
     std::future<void> workerBlockedFuture = workerBlockedPromise.get_future();
 
     // Post a task that will hang the worker's event loop.
-    worker.post( [&]()
+    ASSERT_TRUE( worker.post( [&]()
         {
             workerBlockedPromise.set_value(); // Tell main thread: "I am now blocked"
             releaseWorkerFuture.wait();   // Block here until main thread says go
-        } );
+        } ) );
 
     // Wait until the worker thread is stuck on the task above.
     workerBlockedFuture.wait();
@@ -985,14 +1239,14 @@ TEST( ObjectTest, ReceiverDestroyedBeforeDeliveryNoCrash )
     std::mutex barrierMutex;
     std::condition_variable barrierCv;
     bool barrierDone = false;
-    worker.post( [&]()
+    ASSERT_TRUE( worker.post( [&]()
         {
             {
                 std::lock_guard<std::mutex> lock( barrierMutex );
                 barrierDone = true;
             }
             barrierCv.notify_one();
-        } );
+        } ) );
     {
         std::unique_lock<std::mutex> lock( barrierMutex );
         ASSERT_TRUE( barrierCv.wait_for( lock, 2s, [&]
@@ -1169,7 +1423,7 @@ TEST( ObjectTest, DeleteLaterCrossThreadAndSameThreadCoalesce )
     std::condition_variable workerIdCv;
     bool workerIdReady = false;
 
-    worker.post( [&]()
+    ASSERT_TRUE( worker.post( [&]()
         {
             {
                 std::lock_guard<std::mutex> lock( workerIdMutex );
@@ -1177,7 +1431,7 @@ TEST( ObjectTest, DeleteLaterCrossThreadAndSameThreadCoalesce )
                 workerIdReady = true;
             }
             workerIdCv.notify_one();
-        } );
+        } ) );
 
     {
         std::unique_lock<std::mutex> lock( workerIdMutex );
@@ -1422,10 +1676,10 @@ TEST( ObjectTest, MoveToThreadSecondPushFromOwningThread )
     // here would be a pull and be refused.
     std::promise<bool> movedPromise;
     std::future<bool> movedFuture = movedPromise.get_future();
-    workerB.post( [&]()
+    ASSERT_TRUE( workerB.post( [&]()
         {
             movedPromise.set_value( c.moveToThread( &workerC ) );
-        } );
+        } ) );
     EXPECT_TRUE( movedFuture.get() );
     EXPECT_EQ( c.thread(), &workerC );
 

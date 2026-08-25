@@ -24,6 +24,10 @@ namespace QtLikeSignal
     class Connection;
     class Object;
 
+    //! An Object's thread-affinity box, which also carries the flag saying whether that Object is
+    //! still alive. Declared here because a connection node holds one; defined in ThreadData.hpp.
+    class Affinity;
+
     namespace Private
     {
         class SignalImplBase;
@@ -38,19 +42,6 @@ namespace QtLikeSignal
         //! callable is released the moment the connection ends, while the node lives on for as long
         //! as any handle can still be asked whether the connection is live. Qt splits the same two
         //! the same way, into QObjectPrivate::Connection and QSlotObjectBase.
-        // It was three, not two: a live flag, a cleanup token the slot's closure captured, and the
-        // slot's place in the sender's list, reached from each other by weak_ptr. Merging them into
-        // one node cost nothing in behaviour and took a connection from five heap blocks to three;
-        // see PERFORMANCE-20260813.md (P10).
-        //
-        // Fusing the callable in as well was tried first, as the plan there proposed, and is wrong:
-        // a handle would then keep the callable alive, so a caller who kept a Connection to
-        // disconnect with would pin everything the slot captured. SignalTest.
-        // SlotSurvivesDisconnectingItselfMidCall catches it.
-        //
-        // The node is also the receiver's list element: it carries its own sibling pointers rather
-        // than being named by a Connection stored in a vector, which is the third of the five blocks
-        // and the last quadratic term in the library (P7's residual).
         struct ConnectionNode : std::enable_shared_from_this<ConnectionNode>
         {
             //! Constructs a node for a connection whose receiver is @p aOwner.
@@ -61,11 +52,11 @@ namespace QtLikeSignal
                 (
                 std::weak_ptr<SignalImplBase> aImpl,  //!< The signal that owns the connection.
                 Object* aOwner,                       //!< Receiver keeping it incoming, or null.
-                std::weak_ptr<int> aLife              //!< Receiver's life token; expired means gone.
+                std::shared_ptr<Affinity> aOwnerLife  //!< Receiver's affinity box, which carries its life flag.
                 )
                 : mImpl( std::move( aImpl ) )
                 , mOwner( aOwner )
-                , mLife( std::move( aLife ) )
+                , mOwnerLife( std::move( aOwnerLife ) )
             {
             }
 
@@ -111,8 +102,6 @@ namespace QtLikeSignal
             //! An index rather than an iterator, so the writers' side stays a vector: removal at a
             //! known index is O(1) when the element is nulled rather than erased, and the snapshot
             //! rebuild copies a contiguous block rather than chasing pointers.
-            // A std::list would also give O(1) removal, and was tried: it costs 66% more on a
-            // connect/emit churn loop, because every snapshot rebuild then chases pointers.
             std::size_t mIndex { 0 };
 
             //! True while mIndex names a live element. Guarded by the owning Signal's mutex.
@@ -130,8 +119,15 @@ namespace QtLikeSignal
             //! put it back. Set by pruneReceiver() and by ~Object(). Guarded the same way.
             bool mIncomingDone { false };
 
-            Object* mOwner;             //!< Receiver keeping this node incoming, or null.
-            std::weak_ptr<int> mLife;   //!< Receiver's life token; expired means it is gone.
+            Object* mOwner;   //!< Receiver keeping this node incoming, or null.
+
+            //! The receiver's affinity box, which carries the flag ~Object() clears. Null when there
+            //! is no receiver.
+            //!
+            //! Strong, where the life token it replaced was weak, and that costs nothing: the slot
+            //! this node belongs to already holds the same box, and both are owned by the same
+            //! Signal. The box is a few dozen bytes and is designed to outlive its Object.
+            std::shared_ptr<Affinity> mOwnerLife;
 
             //! This node's place in the receiver's list, which is what makes both linking and
             //! unlinking O(1) and costs no allocation of its own.
@@ -149,7 +145,6 @@ namespace QtLikeSignal
         //! A Connection may outlive its Signal, so the node holds a weak reference to this rather
         //! than to the Signal. Once the Signal is gone the reference expires and disconnect() has
         //! nothing to do, which is correct: every connection died with the signal.
-        // It happens routinely: a receiver's incoming list names signals already destroyed.
         class SignalImplBase
         {
         public:
@@ -165,6 +160,7 @@ namespace QtLikeSignal
                 (
                 ConnectionNode* aNode
                 ) = 0;
+
         };
     }
 
@@ -172,8 +168,6 @@ namespace QtLikeSignal
     //!
     //! Copyable, and copies compare equal. Thread-safe. A default-constructed handle is valid and
     //! reports itself disconnected, which is what connect() returns when given no context.
-    // A handle is one pointer: the node carries the Signal it belongs to, since the receiver's
-    // incoming list is made of nodes and ~Object() has to reach each one's Signal from there.
     class Connection
     {
     public:

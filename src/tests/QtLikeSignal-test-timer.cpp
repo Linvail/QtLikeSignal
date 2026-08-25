@@ -6,7 +6,6 @@
 //! GoogleTest suite for QtLikeSignal::Timer and the Object/dispatcher timer plumbing behind it
 //! (Object::startTimer()/killTimer()/timerEvent(), the timer list in EventDispatcherDefault, and
 //! the event loop's timer-aware wait).
-//!
 
 #include "QtLikeSignal-test-types.hpp"
 
@@ -37,8 +36,14 @@ namespace
             (
             Thread* aThread = nullptr
             )
-            : Object( aThread )
+            : Object()
         {
+            // Built here and pushed, rather than constructed on that
+            // thread's affinity: Object no longer takes a Thread*.
+            if( aThread != nullptr )
+            {
+                ( void )moveToThread( aThread );
+            }
         }
 
         //! Slot for Timer::timeout, and target for the singleShot member-function overload.
@@ -74,8 +79,14 @@ namespace
             (
             Thread* aThread = nullptr
             )
-            : Object( aThread )
+            : Object()
         {
+            // Built here and pushed, rather than constructed on that
+            // thread's affinity: Object no longer takes a Thread*.
+            if( aThread != nullptr )
+            {
+                ( void )moveToThread( aThread );
+            }
         }
 
         //! @return how many expiries have been delivered for @p aTimerId.
@@ -132,9 +143,14 @@ namespace
             (
             Thread* aThread  //!< The thread this receiver lives in.
             )
-            : Object( aThread )
+            : Object()
             , mExpectedThread( aThread )
         {
+            // Built here and pushed: Object no longer takes a Thread*.
+            if( aThread != nullptr )
+            {
+                ( void )moveToThread( aThread );
+            }
         }
 
         //! Queued slot: one metacall carrying emitter @p aSender's @p aSequence counter.
@@ -317,7 +333,7 @@ namespace
 
         runOnThread( worker, [&worker]()
             {
-                Timer timer( &worker );
+                Timer timer;
                 EXPECT_FALSE( timer.isActive() );
 
                 timer.start( 150 );
@@ -343,7 +359,7 @@ namespace
 
         runOnThread( worker, [&worker]()
             {
-                Timer timer( &worker );
+                Timer timer;
                 timer.start( 1000 );
                 const int oldId = timer.timerId();
 
@@ -380,7 +396,7 @@ namespace
 
         runOnThread( worker, [&]()
             {
-                timer = new Timer( &worker );
+                timer = new Timer();
                 Object::connect( timer->getTimeout(), &receiver, &CountingReceiver::onTimeout );
                 timer->start( 5 );
             } );
@@ -413,7 +429,7 @@ namespace
 
         runOnThread( worker, [&]()
             {
-                timer = new Timer( &worker );
+                timer = new Timer();
                 timer->setSingleShot( true );
                 Object::connect( timer->getTimeout(), &receiver, &CountingReceiver::onTimeout );
                 timer->start( 5 );
@@ -450,7 +466,7 @@ namespace
 
         runOnThread( worker, [&]()
             {
-                timer = new Timer( &worker );
+                timer = new Timer();
                 Object::connect( timer->getTimeout(), &receiver, &CountingReceiver::onTimeout );
                 timer->start( 5 );
             } );
@@ -494,7 +510,11 @@ namespace
                 const int id = timer.timerId();
                 ASSERT_GT( id, 0 );
 
-                Object context( &worker );
+                Object context;
+
+                // Built here and pushed: Object takes a parent now, not a thread.
+
+                ASSERT_TRUE( context.moveToThread( &worker ) );
                 int emitted = 0;
                 Object::connect( timer.getTimeout(), &context, [&emitted]()
                 {
@@ -679,7 +699,7 @@ namespace
 
         runOnThread( source, [&]()
             {
-                timer = new Timer( &source );
+                timer = new Timer();
                 Object::connect( timer->getTimeout(), &receiver, &CountingReceiver::onTimeout,
                 ConnectionType::Direct );
                 timer->start( 5 );
@@ -756,8 +776,11 @@ namespace
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
-        Object context( &worker );
+        Object context;
 
+        // Built here and pushed: Object takes a parent now, not a thread.
+
+        ASSERT_TRUE( context.moveToThread( &worker ) );
         std::promise<Thread*> fired;
         auto firedFuture = fired.get_future();
         std::atomic<int> runs { 0 };
@@ -782,6 +805,135 @@ namespace
 
         std::this_thread::sleep_for( 60ms );
         EXPECT_EQ( runs.load(), 1 ) << "the single shot ran more than once.";
+
+        drainQueuedTasks( worker );
+        worker.quit();
+        worker.wait();
+    }
+
+    //! singleShot(int, context, Functor) arms the timer in place when the caller is already on the
+    //! context's thread, instead of posting a hop to get there.
+    //!
+    //! The sibling test above deliberately calls from a foreign thread and so only ever takes the
+    //! posted-hop branch. This is the other half of the same `if`, and it is the commoner way to
+    //! use the overload -- Qt splits it the same way in
+    //! QSingleShotTimer::startTimerForReceiver(). Nothing exercised the in-place arm, so a fault
+    //! there would only ever have surfaced in user code.
+    TEST( TimerSingleShotTest, ContextFunctorArmsInPlaceWhenAlreadyOnTheContextThread )
+    {
+        Thread worker( "single-same-thread" );
+        worker.start();
+        ASSERT_TRUE( waitUntilRunning( worker ) );
+
+        Object context;
+
+        // Built here and pushed: Object takes a parent now, not a thread.
+
+        ASSERT_TRUE( context.moveToThread( &worker ) );
+        std::promise<Thread*> fired;
+        auto firedFuture = fired.get_future();
+        std::atomic<int> runs { 0 };
+
+        // Issued from the worker itself, so the context is on the calling thread and singleShot()
+        // takes the arm-here branch rather than posting to reach it.
+        runOnThread( worker, [&context, &fired, &runs]()
+            {
+                Timer::singleShot( 5, &context, [&fired, &runs]()
+                {
+                    if( runs.fetch_add( 1 ) == 0 )
+                    {
+                        fired.set_value( Thread::currentThread() );
+                    }
+                } );
+            } );
+
+        ASSERT_EQ( firedFuture.wait_for( kPatience ), std::future_status::ready )
+            << "a single shot armed on the context's own thread never ran its functor.";
+        EXPECT_EQ( firedFuture.get(), &worker ) << "the functor did not run on the context thread.";
+
+        std::this_thread::sleep_for( 60ms );
+        EXPECT_EQ( runs.load(), 1 ) << "the single shot ran more than once.";
+
+        drainQueuedTasks( worker );
+        worker.quit();
+        worker.wait();
+    }
+
+    //! singleShot(int, context, Functor) drops the call when the context has no thread.
+    //!
+    //! moveToThread(nullptr) leaves nothing that could ever deliver the timer, so the overload has
+    //! to return before it allocates its helper. The alternative is a helper nobody will fire and
+    //! nobody will free, which is a leak rather than a missed call -- run under AddressSanitizer,
+    //! a regression here shows up as the leak directly.
+    TEST( TimerSingleShotTest, ContextFunctorIsDroppedForADetachedContext )
+    {
+        Object context;
+        ASSERT_TRUE( context.moveToThread( nullptr ) );
+        ASSERT_EQ( context.thread(), nullptr );
+
+        std::atomic<int> runs { 0 };
+        Timer::singleShot( 5, &context, [&runs]()
+            {
+                runs.fetch_add( 1 );
+            } );
+
+        std::this_thread::sleep_for( 40ms );
+        EXPECT_EQ( runs.load(), 0 )
+            << "a single shot was armed against a context with no thread to deliver it.";
+    }
+
+    //! singleShot(int, context, Functor) reclaims its helper when the context dies before the arm
+    //! reaches the context's thread.
+    //!
+    //! The cross-thread form checks the context is alive, then posts a task that arms the timer on
+    //! the context's thread. Between those two steps the context can be destroyed, so arm() checks
+    //! again and throws the helper away if it has been -- otherwise the helper is left holding a
+    //! timer for an object that no longer exists, and the functor runs against freed memory.
+    //!
+    //! Deterministic rather than racy: the worker is held inside a posted task, which is what puts
+    //! the destruction squarely inside the window. Worth running under AddressSanitizer, where a
+    //! regression is a use-after-free rather than a wrong count.
+    TEST( TimerSingleShotTest, ContextDestroyedBeforeTheArmReachesItsThread )
+    {
+        Thread worker( "single-armed-too-late" );
+        worker.start();
+        ASSERT_TRUE( waitUntilRunning( worker ) );
+
+        std::atomic<int> runs { 0 };
+        std::atomic<bool> blocked { false };
+        std::atomic<bool> release { false };
+
+        ASSERT_TRUE( worker.post( [&blocked, &release]()
+            {
+                blocked.store( true );
+                while( !release.load() )
+                {
+                    std::this_thread::sleep_for( 1ms );
+                }
+            } ) );
+        ASSERT_TRUE( waitFor( [&blocked]()
+            {
+                return blocked.load();
+            } ) ) << "the worker never reached the blocking task.";
+
+        {
+            Object context;
+            // Built here and pushed: Object takes a parent now, not a thread.
+            ASSERT_TRUE( context.moveToThread( &worker ) );
+            // Queued behind the blocking task, so the arm cannot have run yet.
+            Timer::singleShot( 5, &context, [&runs]()
+                {
+                    runs.fetch_add( 1 );
+                } );
+
+            // context dies here, inside the window between the check and the arm.
+        }
+
+        release.store( true );
+
+        std::this_thread::sleep_for( 60ms );
+        EXPECT_EQ( runs.load(), 0 )
+            << "a single shot fired for a context that was destroyed before the timer was armed.";
 
         drainQueuedTasks( worker );
         worker.quit();
@@ -825,8 +977,11 @@ namespace
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
-        Object context( &worker );
+        Object context;
 
+        // Built here and pushed: Object takes a parent now, not a thread.
+
+        ASSERT_TRUE( context.moveToThread( &worker ) );
         worker.quit();
         worker.wait();
 
@@ -858,7 +1013,7 @@ namespace
         Object* context = nullptr;
         runOnThread( worker, [&]()
             {
-                context = new Object( &worker );
+                context = new Object();
             } );
         ASSERT_NE( context, nullptr );
 
@@ -931,8 +1086,11 @@ namespace
         worker.start();
         ASSERT_TRUE( waitUntilRunning( worker ) );
 
-        Object context( &worker );
+        Object context;
 
+        // Built here and pushed: Object takes a parent now, not a thread.
+
+        ASSERT_TRUE( context.moveToThread( &worker ) );
         std::atomic<int> runs { 0 };
         Timer::singleShot( -1, &context, [&runs]()
             {
@@ -1159,10 +1317,10 @@ namespace
     //! Note what is *not* claimed. One pass of the loop takes the whole mailbox in a single swap and
     //! runs it before looking at the timers, so a timer cannot interleave *within* a batch -- queue
     //! 400 slow metacalls in one go and exactly one expiry gets through, however long the batch
-    //! takes. That is the same granularity Qt has (sendPostedEvents drains the list, then timers
-    //! are processed). The guarantee is per pass, so the load
-    //! here arrives in rounds: each round is queued while the previous is still being chewed, which
-    //! keeps every pass non-empty while still giving the loop many passes to be measured over.
+    //! takes. That is the same granularity Qt has (sendPostedEvents drains the list, then timers are
+    //! processed). The guarantee is per pass, so the load here arrives in rounds: each round is
+    //! queued while the previous is still being chewed, which keeps every pass non-empty while
+    //! still giving the loop many passes to be measured over.
     TEST( ThreadTimerTest, TimersKeepFiringWhileMailboxNeverEmpties )
     {
         constexpr int kRounds = 60;
@@ -1300,10 +1458,10 @@ namespace
                 if( aFiredId == firstTimerId )
                 {
                     // Post from inside a timer handler...
-                    worker.post( [&postedFromTimer]()
+                    ASSERT_TRUE( worker.post( [&postedFromTimer]()
                         {
                             postedFromTimer.fetch_add( 1 );
-                        } );
+                        } ) );
 
                     // ...arm another timer from inside one...
                     if( secondTimerId.load() < 0 )

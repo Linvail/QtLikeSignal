@@ -1,18 +1,22 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
-
-#ifndef QT_LIKE_SIGNAL_QTLIKESIGNAL_TEST_TYPES
-#define QT_LIKE_SIGNAL_QTLIKESIGNAL_TEST_TYPES
-
 //! @file
 //!
-//! Shared test fixtures for the QtLikeSignal suite.
+//! GoogleTest suite for the QtLikeSignal framework.
+
+#ifndef QT_LIKE_SIGNAL_TEST_TYPES
+#define QT_LIKE_SIGNAL_TEST_TYPES
 
 #include "QtLikeSignal/Object.hpp"
-#include "QtLikeSignal/Signal.hpp"
 #include "QtLikeSignal/Thread.hpp"
 
+// ---------------------------------------------------------------------------------------------
+// Feature macros.
+//
+// Some features are not supported yet, we use these macros to conditionally compile tests.
+//
+// ---------------------------------------------------------------------------------------------
 //! Extra argument copies each emit() makes before the slots are reached, on top of the one copy
 //! per receiver that a by-value slot parameter costs.
 //!
@@ -40,8 +44,14 @@ namespace
             (
             QtLikeSignal::Thread* aThread = nullptr
             )
-            : QtLikeSignal::Object( aThread )
+            : QtLikeSignal::Object()
         {
+            // Built here and pushed, rather than constructed on that
+            // thread's affinity: Object no longer takes a Thread*.
+            if( aThread != nullptr )
+            {
+                ( void )moveToThread( aThread );
+            }
         }
 
         QtLikeSignal::Signal<int> produced;
@@ -55,8 +65,14 @@ namespace
             (
             QtLikeSignal::Thread* aThread = nullptr
             )
-            : QtLikeSignal::Object( aThread )
+            : QtLikeSignal::Object()
         {
+            // Built here and pushed, rather than constructed on that
+            // thread's affinity: Object no longer takes a Thread*.
+            if( aThread != nullptr )
+            {
+                ( void )moveToThread( aThread );
+            }
         }
 
         void onProduced
@@ -148,9 +164,14 @@ namespace
             QtLikeSignal::Thread* aThread,
             std::atomic<int>& aCounter
             )
-            : QtLikeSignal::Object( aThread )
+            : QtLikeSignal::Object()
             , mCounter( aCounter )
         {
+            // Built here and pushed: Object no longer takes a Thread*.
+            if( aThread != nullptr )
+            {
+                ( void )moveToThread( aThread );
+            }
         }
 
         void onProduced
@@ -184,13 +205,18 @@ namespace
             std::thread::id& aDtorThread,
             std::atomic<int>& aDtorCount
             )
-            : QtLikeSignal::Object( aThread )
+            : QtLikeSignal::Object()
             , mMutex( aMutex )
             , mCv( aCv )
             , mDone( aDone )
             , mDtorThread( aDtorThread )
             , mDtorCount( aDtorCount )
         {
+            // Built here and pushed: Object no longer takes a Thread*.
+            if( aThread != nullptr )
+            {
+                ( void )moveToThread( aThread );
+            }
         }
 
         ~DeleteProbe() override
@@ -230,8 +256,15 @@ namespace
     //! actually draining its queue. Stronger than any isRunning()-style flag: it proves the loop
     //! is servicing work, which is what every test here depends on.
     //!
-    //! Retries rather than posting once: a thread whose loop has not come up yet may refuse the
-    //! task outright, which is a "not ready" answer and not a failure.
+    //! Posts exactly once, and treats a refusal as a failure.
+    //!
+    //! This used to retry in a loop until a post was accepted, because a post issued between
+    //! start() and the thread's dispatcher existing was refused outright. That was a real defect --
+    //! the call was discarded and never ran -- and retrying here quietly turned it into a short
+    //! delay at all ninety-odd call sites, which is why it went unnoticed for the life of the
+    //! project. Posting to a starting thread now parks the task instead of refusing it, so there is
+    //! nothing left to retry, and a refusal here means something is genuinely wrong and should fail
+    //! the test rather than cost five seconds.
     //! @return true if the thread drained the marker task within the timeout.
     inline bool waitUntilRunning
         (
@@ -241,19 +274,13 @@ namespace
     {
         std::promise<void> ran;
         std::future<void> ranFuture = ran.get_future();
-        const auto deadline = std::chrono::steady_clock::now()
-            + std::chrono::milliseconds( aTimeoutMs );
 
-        while( !aThread.post( [&ran]()
+        if( !aThread.post( [&ran]()
             {
                 ran.set_value();
             } ) )
         {
-            if( std::chrono::steady_clock::now() > deadline )
-            {
-                return false;
-            }
-            std::this_thread::yield();
+            return false;
         }
         return ranFuture.wait_for( std::chrono::milliseconds( aTimeoutMs ) ) ==
                std::future_status::ready;
@@ -323,4 +350,4 @@ namespace
 
 }
 
-#endif  // QT_LIKE_SIGNAL_QTLIKESIGNAL_TEST_TYPES
+#endif  // QT_LIKE_SIGNAL_TEST_TYPES

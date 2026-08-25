@@ -1,0 +1,118 @@
+# SPDX-FileCopyrightText: 2026 Evan
+# SPDX-License-Identifier: MIT
+
+def build(bld):
+    """
+    Build QtLikeSignalGui, the window and input layer over QtLikeSignal.
+
+    A separate target rather than more files in QtLikeSignal, because it is the half that has to link a
+    window system: user32 on Windows, Xlib, libinput and libwayland on Linux. QtLikeSignal itself depends
+    on nothing but the C++ runtime and the platform's threading, and that is worth keeping true for
+    the programs that use the loop without ever opening a window.
+
+    The portable sources build everywhere; only the backends are per platform, and a target may have
+    several. Each one is guarded on the development package it needs, so a machine missing
+    libx11-dev or libwayland-dev still builds the whole tree and simply reports which backends it
+    did not get -- the same treatment the X11 demo gets, and the reason a build of this stays green
+    on a bare container.
+    """
+    #: Every backend that is one source file and some libraries. Listed here so the glob below can
+    #: exclude all of them and add back only the ones this target can actually build.
+    #:
+    #: Wayland is not in this table and is handled after it: it is the only backend that also
+    #: contributes generated C, an include directory for the headers generated beside it, and the
+    #: "c" feature to compile them. Bending the table into a shape that could carry those would make
+    #: five rows harder to read for the sake of one.
+    all_backends = [
+        ("windows", "PlatformIntegrationWin32.cpp", "win32", ["USER32"], None),
+        ("x11", "PlatformIntegrationX11.cpp", "linux", ["X11"], "install libx11-dev"),
+        ("drm", "PlatformIntegrationDrm.cpp", "linux",
+            ["LIBINPUT", "LIBUDEV"], "install libinput-dev libudev-dev"),
+    ]
+
+    available = {
+        "windows": True,
+        "x11": bool(bld.env.HAVE_X11),
+        "drm": bool(bld.env.HAVE_LIBINPUT) and bool(bld.env.HAVE_LIBUDEV),
+    }
+
+    wayland_source = "PlatformIntegrationWayland.cpp"
+
+    kw = {}
+    kw["features"] = ["cxx"]
+    kw["source"] = bld.path.ant_glob(
+        "*.cpp",
+        excl=[source for (_, source, _, _, _) in all_backends] + [wayland_source],
+    )
+    kw["use"] = ["QtLikeSignal"]
+    kw["includes"] = [".."]
+
+    built = []
+    for (name, source, dest_os, uselibs, hint) in all_backends:
+        if bld.env.DEST_OS != dest_os:
+            continue
+
+        if not available[name]:
+            bld.build_msg("QtLikeSignalGui backend", "%s skipped (%s)" % (name, hint), color="YELLOW")
+            continue
+
+        kw["source"].append(bld.path.find_node(source))
+
+        # No define to add alongside. PlatformIntegration.cpp's factory guards each backend on the
+        # HAVE_X11 / HAVE_LIBINPUT / HAVE_LIBUDEV that check_cfg() already defines globally, which
+        # is the same condition available[] is computed from -- so the guard and the source list
+        # agree because they read the same fact, not because someone kept two names in step.
+        #
+        # The uselibs are what check_cfg() filled in at configure time, or the system ones the
+        # Windows toolchains declare. Naming them here rather than in each consumer is what makes
+        # them travel: waf carries a used target's uselibs down the use chain, so a program that
+        # links QtLikeSignalGui gets Xlib and libinput without having to know which backends went in.
+        kw["use"] += uselibs
+        built.append(name)
+
+    # Wayland, which needs code generated from the protocol XML before it can be compiled at all.
+    if bld.env.DEST_OS == "linux":
+        if not bld.env.HAVE_WAYLAND_CLIENT:
+            bld.build_msg(
+                "QtLikeSignalGui backend",
+                "wayland skipped (install libwayland-dev libdecor-0-dev)",
+                color="YELLOW",
+            )
+        else:
+            kw["source"].append(bld.path.find_node(wayland_source))
+
+            # "c" as well as "cxx" because wayland-scanner emits C, and "wayland-protocols" to make
+            # it emit anything: that feature, in tools/wayland-scanner.py, adds one scanner task per
+            # protocol and puts the generated code and its include directory on this target. Doing
+            # it as a task rather than by running the scanner while this script is evaluated is what
+            # makes the generation participate in the build -- rebuilt when the XML changes, skipped
+            # when it has not, removed by waf clean, and visible in the log.
+            kw["features"] += ["c", "wayland-protocols"]
+
+            # deps/ holds ivi-application.xml, which does not ship with wayland-protocols because
+            # it belongs to the automotive ivi-shell; xdg-shell does ship there and is taken from
+            # wherever pkg-config said that package put it.
+            kw["wayland_protocol_dir"] = "deps"
+            kw["wayland_system_protocols"] = ["stable/xdg-shell/xdg-shell.xml"]
+            kw["wayland_output_dir"] = "wayland"
+
+            # The uselib names are check_cfg()'s defaults, hyphens and all: the package is
+            # "wayland-client", so the uselib is WAYLAND-CLIENT. Only the *define* it derives gets
+            # sanitised, which is why the C++ guard reads HAVE_WAYLAND_CLIENT.
+            kw["use"] += ["WAYLAND-CLIENT", "WAYLAND-CURSOR", "LIBDECOR-0"]
+            built.append("wayland")
+
+    if built:
+        bld.build_msg("QtLikeSignalGui backends", ", ".join(built), color="GREEN")
+    else:
+        bld.build_msg(
+            "QtLikeSignalGui backends",
+            "none for %s (the library builds; it cannot open a window)" % bld.env.DEST_OS,
+            color="YELLOW",
+        )
+
+    # ".." is src/, the same include root QtLikeSignal exports, which is what lets an include read
+    # "QtLikeSignalGui/Window.hpp" and sit next to the "QtLikeSignal/Object.hpp" ones.
+    kw["export_includes"] = ".."
+
+    bld(target="QtLikeSignalGui", **kw)

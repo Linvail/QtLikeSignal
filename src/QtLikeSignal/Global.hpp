@@ -1,13 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
-#ifndef QT_LIKE_SIGNAL_GLOBAL_HPP
-#define QT_LIKE_SIGNAL_GLOBAL_HPP
-
-#include "QtLikeSignal/Connection.hpp"
-
-#include <type_traits>
-
 //! @file
 //!
 //! Type trait helpers and template utilities: the Overload<> family for resolving overloaded
@@ -33,12 +26,16 @@
 //! the thread that may call: "must be called from this object's own thread". Calling it from
 //! elsewhere is misuse. This library does not treat the consequences of misuse as defects, which is
 //! precisely why the claim has to be accurate -- a false "Thread-safe" moves the fault to us.
-//
-// Two false claims were found and corrected on 2026-08-13; see history/OPEN-RISKS-20260813.md
-// (R15).
 //!
 //! Neither claim says anything about *reentrancy* -- calling back into the same object from a slot
 //! it invoked. Where that matters it is documented at the function.
+
+#ifndef QT_LIKE_SIGNAL_GLOBAL_HPP
+#define QT_LIKE_SIGNAL_GLOBAL_HPP
+
+#include "QtLikeSignal/Connection.hpp"
+
+#include <type_traits>
 
 namespace QtLikeSignal
 {
@@ -82,6 +79,7 @@ namespace QtLikeSignal
         {
             return aPtr;
         }
+
     };
 
     //! Selects a const overload of a member function by its argument types. Mirrors qConstOverload.
@@ -97,6 +95,7 @@ namespace QtLikeSignal
         {
             return aPtr;
         }
+
     };
 
     //! Selects either overload, const or not, plus free functions. Mirrors Qt's qOverload.
@@ -115,6 +114,7 @@ namespace QtLikeSignal
         {
             return aPtr;
         }
+
     };
 
     template <typename ... Args> constexpr Overload<Args...> overload = {};

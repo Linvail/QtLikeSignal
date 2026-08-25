@@ -3,8 +3,8 @@
 
 //! @file
 //!
-//! GoogleTest suite for QtLikeSignal::Thread's scheduling-priority setter/getter, start(Priority),
-//! and the native-OS-thread creation that backs them.
+//! GoogleTest suite for QtLikeSignal::Thread's scheduling-priority setter/getter, start(Priority), and
+//! the native-OS-thread creation that backs them.
 
 #include "QtLikeSignal-test-types.hpp"
 
@@ -213,17 +213,13 @@ namespace
 
     //! The priority is in effect before the loop's started signal fires, not merely by the time
     //! start() returns.
-    //!
-    //! mStarted is emitted from inside loop(), which run() only reaches after its priority
-    //! fix-up step, so sampling from a connectStarted() callback observes the same ordering
-    //! guarantee these tests observe by overriding a virtual run().
-    //! Checking after the fact (e.g. from a posted task) would pass even if the
-    //! priority arrived late, because posted tasks only run after mStarted has already fired.
     TEST( ThreadPriority, PriorityIsInEffectBeforeStartedSignal )
     {
         Thread thread( "prio-before-started-signal" );
         Thread localThread;
-        Object local( &localThread );
+        Object local;
+        // Built here and pushed: Object takes a parent now, not a thread.
+        ASSERT_TRUE( local.moveToThread( &localThread ) );
         std::mutex mutex;
         std::condition_variable cv;
         bool sampled = false;
@@ -423,7 +419,9 @@ namespace
         {
             Thread thread( "prio-win-before-started" );
             Thread localThread;
-            Object local( &localThread );
+            Object local;
+            // Built here and pushed: Object takes a parent now, not a thread.
+            ASSERT_TRUE( local.moveToThread( &localThread ) );
             std::mutex mutex;
             std::condition_variable cv;
             bool sampled = false;
@@ -482,7 +480,9 @@ namespace
             int sampledNativePriority = THREAD_PRIORITY_ERROR_RETURN;
 
             Thread localThread;
-            Object local( &localThread );
+            Object local;
+            // Built here and pushed: Object takes a parent now, not a thread.
+            ASSERT_TRUE( local.moveToThread( &localThread ) );
             localThread.start();
 
             // Direct is mandatory here: GetCurrentThread() samples whichever thread runs the slot,

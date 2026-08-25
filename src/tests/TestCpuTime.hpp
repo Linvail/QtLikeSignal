@@ -1,9 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
-#ifndef QT_LIKE_SIGNAL_TEST_CPU_TIME_HPP
-#define QT_LIKE_SIGNAL_TEST_CPU_TIME_HPP
-
 //! @file
 //!
 //! Process CPU time, for tests that need to tell "blocked" apart from "spinning".
@@ -16,6 +13,9 @@
 //! Linux, where glibc's clock() is conforming.
 //!
 //! There is no portable standard-library call for this, so each platform gets its own.
+
+#ifndef QT_LIKE_SIGNAL_TEST_CPU_TIME_H
+#define QT_LIKE_SIGNAL_TEST_CPU_TIME_H
 
 #if defined( _WIN32 )
     #ifndef WIN32_LEAN_AND_MEAN
@@ -44,7 +44,7 @@ namespace TestSupport
             FILETIME kernelTime {};
             FILETIME userTime {};
             if( GetProcessTimes( GetCurrentProcess(), &creationTime, &exitTime, &kernelTime,
-                &userTime ) == 0 )
+            &userTime ) == 0 )
             {
                 return 0.0;
             }
@@ -76,4 +76,4 @@ namespace TestSupport
     }
 }
 
-#endif // QT_LIKE_SIGNAL_TEST_CPU_TIME_HPP
+#endif // QT_LIKE_SIGNAL_TEST_CPU_TIME_H

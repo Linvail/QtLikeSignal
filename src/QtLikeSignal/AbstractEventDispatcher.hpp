@@ -39,11 +39,34 @@ namespace QtLikeSignal
         //! Destroys the event dispatcher and cleans up pending events.
         virtual ~AbstractEventDispatcher();
 
+        //! Whether a pass may block when it finds nothing to do.
+        //!
+        //! **The distinction only matters to a thread whose loop is not ours.** A thread running
+        //! exec() wants WaitForMoreEvents: with nothing queued there is nothing to do but sleep
+        //! until something arrives, and spinning instead would burn a core. A thread with its own
+        //! native loop wants AllEvents: it is borrowing a moment to drain our queue and needs its
+        //! thread back, and a pass that blocked would strand it inside our condition variable where
+        //! only another QtLikeSignal call could release it -- which is a hang, not a wait, because the
+        //! loop that owns the thread has no reason to make one.
+        //!
+        //! The same distinction as Qt's QEventLoop::ProcessEventsFlags, and for the same reason.
+        enum class ProcessEventsFlag
+        {
+            //! Dispatch whatever is ready and return, even if that is nothing.
+            AllEvents,
+
+            //! Block until there is work, a timer expires, or the loop is woken or interrupted.
+            WaitForMoreEvents
+        };
+
         //! Processes pending events and expired timers once, without infinite looping. Returns
         //! true if events were processed, false otherwise.
         //!
         //! Thread-safe invocation within the event loop of the owning thread.
-        virtual bool processEvents() = 0;
+        virtual bool processEvents
+            (
+            ProcessEventsFlag aFlag
+            ) = 0;
 
         //! Wakes up the event loop if it is waiting for events. Thread-safe.
         virtual void wakeUp() = 0;
@@ -148,11 +171,6 @@ namespace QtLikeSignal
         //! events are detached from this dispatcher but not deleted, so Object::moveToThread() can
         //! post them onto the destination thread. Ownership passes to the caller, which must post
         //! or delete every one of them. Thread-safe.
-        // Qt does the same thing at the same point, walking the old thread's postEventList and
-        // re-adding each entry to the target's ("move posted events" in
-        // QObjectPrivate::setThreadData_helper). Without it a queued call posted just before a move
-        // runs on the thread the object has left -- which is the one thing a queued connection
-        // exists to prevent.
         virtual std::vector<Event*> takeEventsForReceiver
             (
             Object* aReceiver  //!< The receiver whose events should be taken.

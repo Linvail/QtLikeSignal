@@ -13,6 +13,7 @@
 
 #include "QtLikeSignal/Object.hpp"
 #include "QtLikeSignal/Thread.hpp"
+
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -100,7 +101,16 @@ namespace QtLikeSignal
         //!
         //! Thread-safety is not guaranteed if the CoreApplication object is being destroyed at the
         //! same time. This holds for exit() and quit() too; the definitions carry the reasoning.
-        static void post
+        //!
+        //! @return true if the task was queued; false if there is no application or the main
+        //! thread refused it, in which case **it will never run**.
+        //!
+        //! Returned a bool, and [[nodiscard]], for the reason Thread::post() is: this forwards to
+        //! it, so a void return here would have swallowed exactly the answer that guard exists to
+        //! surface, one layer above it. The doc used to say the task "is dropped if the main thread
+        //! has no dispatcher, exactly as Thread::post() reports" -- which was true of Thread::post()
+        //! and not of this, because this reported nothing to anybody.
+        [[nodiscard]] static bool post
             (
             std::function<void()> aTask
             );
@@ -124,10 +134,6 @@ namespace QtLikeSignal
         //! and all read it, while the constructor and destructor write it from the main thread. A
         //! plain pointer made every one of those a data race, which is what the "Thread-safe" on
         //! each of them promised it was not.
-        // Qt 6 has the identical plain pointer and works around it: QCoreApplication keeps a
-        // second, atomic g_self for its own use, and documents instanceExists() as "a Qt 6
-        // thread-safe (no data races) version of instance() != nullptr". Qt 7 makes the pointer
-        // itself atomic, behind a #warning to audit the call sites. This is that change.
         static std::atomic<CoreApplication*> sInstance;
 
         //! The adopted main thread. Non-owning: the thread_local inside Thread owns it, and
@@ -151,6 +157,7 @@ namespace QtLikeSignal
         //! above this one, but only after this flag has been read.
         std::atomic<bool> mInExec { false };
     };
-}
+
+} // namespace QtLikeSignal
 
 #endif // QT_LIKE_SIGNAL_COREAPPLICATION_HPP

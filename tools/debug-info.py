@@ -42,6 +42,28 @@ def configure(ctx):
 class strip_debug_task(Task):
     color = "PINK"
 
+    def sig_explicit_deps(self):
+        # Signed against the link task rather than against this task's own input.
+        #
+        # run() below rewrites the binary it is given: it strips the debug sections out of it and
+        # adds a .gnu_debuglink section to it. Waf signs a task by hashing its inputs, so the
+        # binary hashed before the run never matches the one left behind, this task is never
+        # considered up to date, and it is scheduled again on every single build.
+        #
+        # Re-running it is not harmless. --only-keep-debug rebuilds the .debug file from a binary
+        # whose debug info has already been removed, replacing megabytes of DWARF with nothing,
+        # while --add-gnu-debuglink refuses to replace a link that is already there -- it warns
+        # "debuglink section already exists", and exits 0, so the build still reports success. The
+        # binary is left pointing at a .debug file whose CRC no longer matches it, which every
+        # consumer of a debuglink then ignores. In other words the second build of the day silently
+        # threw away the symbols the first one produced.
+        #
+        # The link task's signature changes exactly when the binary is relinked, which is exactly
+        # when the debug info has to be extracted again, so it is the right thing to depend on.
+        self.m.update(self.generator.link_task.signature())
+        for node in self.dep_nodes:
+            self.m.update(node.get_bld_sig())
+
     def run(self):
         # inputs[0] is the unstripped binary (created by link_task)
         # outputs[0] is the .debug file

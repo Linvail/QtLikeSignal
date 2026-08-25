@@ -44,7 +44,7 @@ namespace QtLikeSignal
         virtual ~EventDispatcherLinux() override;
 
         //! Invoked when a registered descriptor is ready; receives the poll(2) revents bitmask.
-        using EventSourceCallback = std::function<void( short aEvents )>;
+        using EventSourceCallback = std::function<void ( short aEvents )>;
 
         bool registerEventSource
             (
@@ -79,8 +79,6 @@ namespace QtLikeSignal
             //!
             //! A descriptor number is not an identity: unregister it, close it, and the next open()
             //! may hand the same number back.
-            // Without the generation, a poll() round that began before all that could deliver its
-            // stale readiness to whatever now owns the number.
             unsigned long long mGeneration;
         };
 

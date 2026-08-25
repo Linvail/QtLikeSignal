@@ -11,13 +11,15 @@
 
 namespace QtLikeSignal
 {
-    //! Constructs an inactive timer living in @p aThread, or in the calling thread if none is
-    //! given. See Object's constructor.
+    //! Constructs an inactive timer in the calling thread, optionally owned by @p aParent.
+    //!
+    //! QTimer's signature too -- QTimer( QObject* parent ) -- so this is closer to Qt than the
+    //! Thread* it took before. See Object's constructor.
     Timer::Timer
         (
-        Thread* aThread  //!< Thread this timer lives in; null means the calling thread.
+        Object* aParent  //!< Parent that will own this timer; null for none.
         )
-        : Object( aThread )
+        : Object( aParent )
     {
     }
 
@@ -196,4 +198,5 @@ namespace QtLikeSignal
 
         mTimeout.emit();
     }
-}
+
+} // namespace QtLikeSignal
