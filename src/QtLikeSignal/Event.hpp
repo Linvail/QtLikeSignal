@@ -8,7 +8,10 @@
 #ifndef QT_LIKE_SIGNAL_EVENT_HPP
 #define QT_LIKE_SIGNAL_EVENT_HPP
 
+#include <cstddef>
 #include <functional>
+#include <new>
+#include <type_traits>
 #include <utility>
 
 namespace QtLikeSignal
@@ -58,29 +61,125 @@ namespace QtLikeSignal
     //!
     //! Entirely internal: it wraps an arbitrary callable, so both creating one and firing one are
     //! restricted to Object, which is the only code that queues or dispatches metacalls.
+    //!
+    //! The callable lives in this event's own block, immediately past the end of this object,
+    //! rather than behind a std::function member. It used to be a std::function, and every queued
+    //! emit therefore cost two heap blocks: the box std::function needed for a closure far too big
+    //! for its small-buffer optimisation, and the event carrying it. Both were allocated on the
+    //! emitting thread and freed on the receiving one. Sizing this allocation to fit the concrete
+    //! callable makes it one block.
+    //!
+    //! Two consequences worth knowing before editing this class:
+    //!
+    //! - **The block is bigger than sizeof(MetaCallEvent), so sized deallocation must not be used.**
+    //!   ~Event() is virtual, so `delete` through an Event* reaches ~MetaCallEvent() and then calls
+    //!   this class's deallocation function. Without the member operator delete below, C++14 sized
+    //!   deallocation would pass sizeof(MetaCallEvent) instead of the size actually allocated.
+    //!   glibc ignores that argument, so the bug would pass every test on Linux; jemalloc, tcmalloc
+    //!   and mimalloc use it to choose the free list to return the block to.
+    //! - **create() builds the callable before the header**, because ~MetaCallEvent() destroys
+    //!   whatever the tail holds without asking whether it was ever constructed.
     class MetaCallEvent : public Event
     {
+    public:
+        //! Destroys the callable in the tail. See create() for why it can assume one is there.
+        virtual ~MetaCallEvent() override
+        {
+            mDestroy( storage() );
+        }
+
+        //! Deallocates the whole block, not just the header. See the class comment.
+        //!
+        //! Declaring the unsized member form is what stops the compiler emitting a call to the
+        //! sized form with the wrong size.
+        static void operator delete
+            (
+            void* aBlock  //!< Block returned by create(); never null in practice.
+            )
+        {
+            ::operator delete( aBlock );
+        }
+
     private:
-        //! Constructs a metacall event with the given callback.
+        //! Calls the callable held in the tail.
+        using Invoke = void ( * )( void* );
+
+        //! Destroys the callable held in the tail.
+        using Destroy = void ( * )( void* ) noexcept;
+
+        //! Constructs the header. Private: only create() ever builds one, and only into a block it
+        //! has already furnished with a callable.
         MetaCallEvent
             (
-            std::function<void()> aCallback  //!< The function to execute.
+            Invoke aInvoke,     //!< Calls the tail callable.
+            Destroy aDestroy    //!< Destroys the tail callable.
             )
             : Event( MetaCall )
-            , mCallback( std::move( aCallback ) )
+            , mInvoke( aInvoke )
+            , mDestroy( aDestroy )
         {
+        }
+
+        //! Allocates one block holding this event and @p aCallable, and returns the event.
+        //!
+        //! The caller owns the result and must dispose of it with `delete`.
+        template <typename Callable>
+        static MetaCallEvent* create
+            (
+            Callable&& aCallable  //!< The call to make on the receiving thread.
+            )
+        {
+            using Body = std::decay_t<Callable>;
+
+            // An over-aligned callable would need ::operator new( size, align_val_t ) and a
+            // matching deallocation function. Nothing this library queues is over-aligned -- the
+            // captures are pointers, shared_ptrs and the signal's own argument types -- so the case
+            // is rejected at compile time rather than handled.
+            static_assert( alignof( Body ) <= alignof( std::max_align_t ),
+                "MetaCallEvent cannot carry an over-aligned callable." );
+
+            void* block = ::operator new( sizeof( MetaCallEvent ) + sizeof( Body ) );
+
+            // The callable first, the header second. ~MetaCallEvent() destroys the tail
+            // unconditionally, so a header must never exist over a tail that was not built: if the
+            // copy below throws, releasing the raw block is the whole of the cleanup.
+            try
+            {
+                new ( static_cast<char*>( block ) + sizeof( MetaCallEvent ) )
+                Body( std::forward<Callable>( aCallable ) );
+            }
+            catch( ... )
+            {
+                ::operator delete( block );
+
+                throw;
+            }
+
+            return new ( block ) MetaCallEvent(
+                []( void* aBody )
+                {
+                    ( *static_cast<Body*>( aBody ) )();
+                },
+                []( void* aBody ) noexcept
+                {
+                    static_cast<Body*>( aBody )->~Body();
+                } );
+        }
+
+        //! Where the callable lives: immediately past the end of this object, in the same block.
+        void* storage() const
+        {
+            return const_cast<MetaCallEvent*>( this ) + 1;
         }
 
         //! Executes the stored function call.
         void placeMetaCall() const
         {
-            if( mCallback )
-            {
-                mCallback();
-            }
+            mInvoke( storage() );
         }
 
-        std::function<void()> mCallback;
+        Invoke mInvoke;     //!< Never null: create() is the only way to build one of these.
+        Destroy mDestroy;   //!< Never null, for the same reason.
 
         friend class Object;
     };

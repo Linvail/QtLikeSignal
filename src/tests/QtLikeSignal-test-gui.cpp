@@ -123,8 +123,8 @@ TEST( GuiInputTest, MouseButtonConvertsToASingletonSet )
 TEST( GuiPlatformSelectionTest, PlatformArgumentNamesTheBackend )
 {
     const std::vector<std::string> wayland { "program", "-p", "wayland" };
-    const std::vector<std::string> x11     { "program", "--platform=x11" };
-    const std::vector<std::string> upper   { "program", "-platform", "X11" };
+    const std::vector<std::string> x11 { "program", "--platform=x11" };
+    const std::vector<std::string> upper { "program", "-platform", "X11" };
 
     #if defined( _WIN32 )
         EXPECT_EQ( PlatformType::Windows, PlatformIntegration::choosePlatform( wayland ) );
@@ -373,512 +373,512 @@ TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
 
 #if defined( _WIN32 )
 
-// The tests below check the library's answers against Windows' own -- GetClientRect is what a
-// renderer would size its viewport from, so it is the authority on whether the drawable came out
-// right. That is the one thing worth reaching past the abstraction to verify.
-#ifndef WIN32_LEAN_AND_MEAN
-    #define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#include <tchar.h>
-
-//! A created window has a native handle and the client size that was asked for.
-TEST( GuiWindowTest, CreatedWindowHasAHandleAndTheRequestedClientSize )
-{
-    GuiApplication application;
-    ASSERT_TRUE( application.hasPlatform() );
-    EXPECT_EQ( PlatformType::Windows, application.platformType() );
-
-    WindowSettings settings;
-    settings.mWidth  = 640;
-    settings.mHeight = 480;
-    settings.mTitle  = "test window";
-
-    Window* const window = application.createWindow( settings );
-    ASSERT_NE( nullptr, window );
-
-    // The handle is what an external OpenGL library is handed, so it has to exist before anything
-    // is shown and without the loop having run.
-    EXPECT_NE( nullptr, window->nativeHandle() );
-    EXPECT_EQ( 640, window->width() );
-    EXPECT_EQ( 480, window->height() );
-
-    // Created hidden, so a caller can finish setting the window up before it appears.
-    EXPECT_FALSE( window->isVisible() );
-}
-
-//! Windows are owned by the application and listed by it.
-TEST( GuiWindowTest, ApplicationOwnsAndListsItsWindows )
-{
-    GuiApplication application;
-    ASSERT_TRUE( application.hasPlatform() );
-
-    Window* const first  = application.createWindow( WindowSettings() );
-    Window* const second = application.createWindow( WindowSettings() );
-    ASSERT_NE( nullptr, first );
-    ASSERT_NE( nullptr, second );
-
-    EXPECT_EQ( 2u, application.windows().size() );
-    EXPECT_EQ( &application, first->parent() );
-
-    // Destroying one takes it out of the list, so the list cannot hand back a freed window.
-    delete first;
-    ASSERT_EQ( 1u, application.windows().size() );
-    EXPECT_EQ( second, application.windows().front() );
-
-    // The other is destroyed with the application, before the backend that made it is released.
-}
-
-//! show() and hide() track what was asked for, and the handle survives both.
-TEST( GuiWindowTest, ShowAndHideTrackVisibility )
-{
-    GuiApplication application;
-    ASSERT_TRUE( application.hasPlatform() );
-
-    Window* const window = application.createWindow( WindowSettings() );
-    ASSERT_NE( nullptr, window );
-
-    window->show();
-    EXPECT_TRUE( window->isVisible() );
-
-    window->hide();
-    EXPECT_FALSE( window->isVisible() );
-
-    // Hiding is not closing: the native window is still there to draw on.
-    EXPECT_NE( nullptr, window->nativeHandle() );
-}
-
-//! Attaching a menu bar leaves the drawable client area exactly the size it was.
-//!
-//! The whole point of the requested size is that it is what WGL will present to. A menu bar lives
-//! outside the client area, so a bare SetMenu() would quietly take its height off the bottom of
-//! every frame; setMenu() grows the window instead.
-TEST( GuiWindowTest, AttachingAMenuKeepsTheClientAreaTheRequestedSize )
-{
-    GuiApplication application;
-    ASSERT_TRUE( application.hasPlatform() );
-
-    WindowSettings settings;
-    settings.mWidth  = 640;
-    settings.mHeight = 480;
-
-    Window* const window = application.createWindow( settings );
-    ASSERT_NE( nullptr, window );
-    ASSERT_EQ( 640, window->width() );
-    ASSERT_EQ( 480, window->height() );
-
-    const HMENU menu = CreateMenu();
-    ASSERT_NE( nullptr, menu );
-    const HMENU fileMenu = CreatePopupMenu();
-    ASSERT_NE( nullptr, fileMenu );
-    AppendMenu( fileMenu, MF_STRING, 1, TEXT( "E&xit" ) );
-    AppendMenu( menu, MF_POPUP, reinterpret_cast<UINT_PTR>( fileMenu ), TEXT( "&File" ) );
-
-    // The outer window must grow by the menu's height for the client area to stay put, so the
-    // before/after window height is what proves the client area was preserved rather than clamped.
-    RECT before {};
-    GetWindowRect( static_cast<HWND>( window->nativeHandle() ), &before );
-
-    window->setMenu( menu );
-
-    EXPECT_EQ( 640, window->width() );
-    EXPECT_EQ( 480, window->height() );
-
-    RECT after {};
-    GetWindowRect( static_cast<HWND>( window->nativeHandle() ), &after );
-    EXPECT_GT( after.bottom - after.top, before.bottom - before.top );
-
-    // GetClientRect is the authority: it is what a renderer would size its viewport from.
-    RECT client {};
-    GetClientRect( static_cast<HWND>( window->nativeHandle() ), &client );
-    EXPECT_EQ( 640, client.right - client.left );
-    EXPECT_EQ( 480, client.bottom - client.top );
-
-    // The menu belongs to the window now, and DestroyWindow frees it with the window.
-}
-
-//! setClientSize() produces exactly the client area asked for, and reports the change.
-TEST( GuiWindowTest, SetClientSizeProducesTheRequestedDrawable )
-{
-    GuiApplication application;
-    ASSERT_TRUE( application.hasPlatform() );
-
-    Window* const window = application.createWindow( WindowSettings() );
-    ASSERT_NE( nullptr, window );
-
-    SignalRecorder recorder;
-    QtLikeSignal::Object::connect( window->getResized(), &recorder, &SignalRecorder::onResized,
-        QtLikeSignal::ConnectionType::Direct );
-
-    window->setClientSize( 800, 600 );
-
-    RECT client {};
-    GetClientRect( static_cast<HWND>( window->nativeHandle() ), &client );
-    EXPECT_EQ( 800, client.right - client.left );
-    EXPECT_EQ( 600, client.bottom - client.top );
-
-    // The window's own record follows, because SetWindowPos sends WM_SIZE and the resize travels
-    // the ordinary path -- so a renderer needs no special case for a programmatic resize.
-    EXPECT_EQ( 800, window->width() );
-    EXPECT_EQ( 600, window->height() );
-    EXPECT_GE( recorder.mResizeCount, 1 );
-
-    // Nonsense sizes are refused rather than producing a degenerate window.
-    window->setClientSize( 0, 600 );
-    EXPECT_EQ( 800, window->width() );
-}
-
-//! Reporting a resize records the new size before the signal, and emits it once.
-TEST( GuiWindowTest, ResizeRecordsTheSizeBeforeEmitting )
-{
-    GuiApplication application;
-    ASSERT_TRUE( application.hasPlatform() );
-
-    Window* const window = application.createWindow( WindowSettings() );
-    ASSERT_NE( nullptr, window );
-
-    SignalRecorder recorder;
-    QtLikeSignal::Object::connect( window->getResized(), &recorder, &SignalRecorder::onResized,
-        QtLikeSignal::ConnectionType::Direct );
-
-    WindowSystemInterface::handleResize( window, 320, 240 );
-
-    EXPECT_EQ( 1, recorder.mResizeCount );
-    EXPECT_EQ( 320, recorder.mLastWidth );
-    EXPECT_EQ( 240, recorder.mLastHeight );
-
-    // A slot asking the window for its size during the emission must get the new one, which is why
-    // the write happens first. Checked afterwards for the same value.
-    EXPECT_EQ( 320, window->width() );
-    EXPECT_EQ( 240, window->height() );
-}
-
-//! A press reaches the window's signal and updates the application-wide button set.
-TEST( GuiWindowTest, MousePressReachesTheSignalAndTheGlobalButtonState )
-{
-    GuiApplication application;
-    ASSERT_TRUE( application.hasPlatform() );
-
-    Window* const window = application.createWindow( WindowSettings() );
-    ASSERT_NE( nullptr, window );
-
-    SignalRecorder recorder;
-    QtLikeSignal::Object::connect( window->getMousePressed(), &recorder, &SignalRecorder::onMouse,
-        QtLikeSignal::ConnectionType::Direct );
-
-    MouseEvent event;
-    event.mPos     = { 12, 34 };
-    event.mButton  = MouseButton::Left;
-    event.mButtons = MouseButton::Left;
-
-    WindowSystemInterface::handleMousePressed( window, event );
-
-    EXPECT_EQ( 1, recorder.mMouseCount );
-    EXPECT_EQ( 12, recorder.mLastMouse.mPos.mX );
-    EXPECT_EQ( 34, recorder.mLastMouse.mPos.mY );
-    EXPECT_TRUE( GuiApplication::mouseButtons().test( MouseButton::Left ) );
-
-    MouseEvent release = event;
-    release.mButtons = MouseButtons();
-    WindowSystemInterface::handleMouseReleased( window, release );
-
-    EXPECT_FALSE( GuiApplication::mouseButtons().any() );
-}
-
-//! A touch frame with no window named goes to the window that took the last touch down.
-//!
-//! wl_touch reports frame against the seat rather than against a surface, so this routing is the
-//! only thing that makes the signal usable when more than one window exists.
-TEST( GuiWindowTest, TouchFrameFollowsTheWindowThatTookTheLastDown )
-{
-    GuiApplication application;
-    ASSERT_TRUE( application.hasPlatform() );
-
-    Window* const first  = application.createWindow( WindowSettings() );
-    Window* const second = application.createWindow( WindowSettings() );
-    ASSERT_NE( nullptr, first );
-    ASSERT_NE( nullptr, second );
-
-    SignalRecorder firstRecorder;
-    SignalRecorder secondRecorder;
-    QtLikeSignal::Object::connect( first->getTouchFrame(), &firstRecorder,
-        &SignalRecorder::onTouchFrame, QtLikeSignal::ConnectionType::Direct );
-    QtLikeSignal::Object::connect( second->getTouchFrame(), &secondRecorder,
-        &SignalRecorder::onTouchFrame, QtLikeSignal::ConnectionType::Direct );
-
-    TouchDownEvent down;
-    down.mId = 1;
-
-    WindowSystemInterface::handleTouchDown( second, down );
-    WindowSystemInterface::handleTouchFrame();
-
-    EXPECT_EQ( 0, firstRecorder.mTouchFrameCount );
-    EXPECT_EQ( 1, secondRecorder.mTouchFrameCount );
-}
-
-//! Destroying a window clears the touch focus, so a later frame does not reach freed memory.
-TEST( GuiWindowTest, DestroyingAWindowClearsTheTouchFocus )
-{
-    GuiApplication application;
-    ASSERT_TRUE( application.hasPlatform() );
-
-    Window* const window = application.createWindow( WindowSettings() );
-    ASSERT_NE( nullptr, window );
-
-    TouchDownEvent down;
-    down.mId = 1;
-    WindowSystemInterface::handleTouchDown( window, down );
-
-    delete window;
-
-    // Would dereference the destroyed window if ~Window() had not cleared the focus.
-    WindowSystemInterface::handleTouchFrame();
-    WindowSystemInterface::handleTouchCancel();
-
-    SUCCEED();
-}
-
-//! A close request emits the signal, and the default policy hides the window.
-//!
-//! Hidden rather than destroyed: the application may still hold a GL context bound to the handle,
-//! and the library must not pull that out from under it. See GuiApplication::handleCloseRequested().
-TEST( GuiWindowTest, CloseRequestEmitsAndHidesUnderTheDefaultPolicy )
-{
-    GuiApplication application;
-    ASSERT_TRUE( application.hasPlatform() );
-    ASSERT_TRUE( application.quitOnLastWindowClosed() );
-
-    Window* const window = application.createWindow( WindowSettings() );
-    ASSERT_NE( nullptr, window );
-    window->show();
-
-    SignalRecorder recorder;
-    QtLikeSignal::Object::connect( window->getCloseRequested(), &recorder,
-        &SignalRecorder::onCloseRequested, QtLikeSignal::ConnectionType::Direct );
-
-    WindowSystemInterface::handleCloseRequest( window );
-
-    EXPECT_EQ( 1, recorder.mCloseCount );
-    EXPECT_FALSE( window->isVisible() );
-    EXPECT_NE( nullptr, window->nativeHandle() );
-}
-
-//! With the policy cleared, a close request is reported and nothing else happens.
-TEST( GuiWindowTest, CloseRequestLeavesTheWindowAloneWhenThePolicyIsCleared )
-{
-    GuiApplication application;
-    ASSERT_TRUE( application.hasPlatform() );
-    application.setQuitOnLastWindowClosed( false );
-
-    Window* const window = application.createWindow( WindowSettings() );
-    ASSERT_NE( nullptr, window );
-    window->show();
-
-    SignalRecorder recorder;
-    QtLikeSignal::Object::connect( window->getCloseRequested(), &recorder,
-        &SignalRecorder::onCloseRequested, QtLikeSignal::ConnectionType::Direct );
-
-    WindowSystemInterface::handleCloseRequest( window );
-
-    EXPECT_EQ( 1, recorder.mCloseCount );
-    EXPECT_TRUE( window->isVisible() );
-}
-
-//! Deleting the window from the close slot is survivable.
-//!
-//! The close policy runs after the signal, so without the lifetime check in handleCloseRequest()
-//! this is a use-after-free -- and destroying the window on close is an entirely reasonable thing
-//! for an application to do.
-TEST( GuiWindowTest, ClosingSlotMayDestroyTheWindow )
-{
-    GuiApplication application;
-    ASSERT_TRUE( application.hasPlatform() );
-
-    Window* const window = application.createWindow( WindowSettings() );
-    ASSERT_NE( nullptr, window );
-
-    QtLikeSignal::Object context;
-    QtLikeSignal::Object::connect( window->getCloseRequested(), &context,
-        [window]()
-        {
-            delete window;
-        },
-        QtLikeSignal::ConnectionType::Direct );
-
-    WindowSystemInterface::handleCloseRequest( window );
-
-    EXPECT_EQ( 0u, application.windows().size() );
-}
+    // The tests below check the library's answers against Windows' own -- GetClientRect is what a
+    // renderer would size its viewport from, so it is the authority on whether the drawable came out
+    // right. That is the one thing worth reaching past the abstraction to verify.
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #include <windows.h>
+    #include <tchar.h>
+
+    //! A created window has a native handle and the client size that was asked for.
+    TEST( GuiWindowTest, CreatedWindowHasAHandleAndTheRequestedClientSize )
+    {
+        GuiApplication application;
+        ASSERT_TRUE( application.hasPlatform() );
+        EXPECT_EQ( PlatformType::Windows, application.platformType() );
+
+        WindowSettings settings;
+        settings.mWidth  = 640;
+        settings.mHeight = 480;
+        settings.mTitle  = "test window";
+
+        Window* const window = application.createWindow( settings );
+        ASSERT_NE( nullptr, window );
+
+        // The handle is what an external OpenGL library is handed, so it has to exist before anything
+        // is shown and without the loop having run.
+        EXPECT_NE( nullptr, window->nativeHandle() );
+        EXPECT_EQ( 640, window->width() );
+        EXPECT_EQ( 480, window->height() );
+
+        // Created hidden, so a caller can finish setting the window up before it appears.
+        EXPECT_FALSE( window->isVisible() );
+    }
+
+    //! Windows are owned by the application and listed by it.
+    TEST( GuiWindowTest, ApplicationOwnsAndListsItsWindows )
+    {
+        GuiApplication application;
+        ASSERT_TRUE( application.hasPlatform() );
+
+        Window* const first  = application.createWindow( WindowSettings() );
+        Window* const second = application.createWindow( WindowSettings() );
+        ASSERT_NE( nullptr, first );
+        ASSERT_NE( nullptr, second );
+
+        EXPECT_EQ( 2u, application.windows().size() );
+        EXPECT_EQ( &application, first->parent() );
+
+        // Destroying one takes it out of the list, so the list cannot hand back a freed window.
+        delete first;
+        ASSERT_EQ( 1u, application.windows().size() );
+        EXPECT_EQ( second, application.windows().front() );
+
+        // The other is destroyed with the application, before the backend that made it is released.
+    }
+
+    //! show() and hide() track what was asked for, and the handle survives both.
+    TEST( GuiWindowTest, ShowAndHideTrackVisibility )
+    {
+        GuiApplication application;
+        ASSERT_TRUE( application.hasPlatform() );
+
+        Window* const window = application.createWindow( WindowSettings() );
+        ASSERT_NE( nullptr, window );
+
+        window->show();
+        EXPECT_TRUE( window->isVisible() );
+
+        window->hide();
+        EXPECT_FALSE( window->isVisible() );
+
+        // Hiding is not closing: the native window is still there to draw on.
+        EXPECT_NE( nullptr, window->nativeHandle() );
+    }
+
+    //! Attaching a menu bar leaves the drawable client area exactly the size it was.
+    //!
+    //! The whole point of the requested size is that it is what WGL will present to. A menu bar lives
+    //! outside the client area, so a bare SetMenu() would quietly take its height off the bottom of
+    //! every frame; setMenu() grows the window instead.
+    TEST( GuiWindowTest, AttachingAMenuKeepsTheClientAreaTheRequestedSize )
+    {
+        GuiApplication application;
+        ASSERT_TRUE( application.hasPlatform() );
+
+        WindowSettings settings;
+        settings.mWidth  = 640;
+        settings.mHeight = 480;
+
+        Window* const window = application.createWindow( settings );
+        ASSERT_NE( nullptr, window );
+        ASSERT_EQ( 640, window->width() );
+        ASSERT_EQ( 480, window->height() );
+
+        const HMENU menu = CreateMenu();
+        ASSERT_NE( nullptr, menu );
+        const HMENU fileMenu = CreatePopupMenu();
+        ASSERT_NE( nullptr, fileMenu );
+        AppendMenu( fileMenu, MF_STRING, 1, TEXT( "E&xit" ) );
+        AppendMenu( menu, MF_POPUP, reinterpret_cast<UINT_PTR>( fileMenu ), TEXT( "&File" ) );
+
+        // The outer window must grow by the menu's height for the client area to stay put, so the
+        // before/after window height is what proves the client area was preserved rather than clamped.
+        RECT before {};
+        GetWindowRect( static_cast<HWND>( window->nativeHandle() ), &before );
+
+        window->setMenu( menu );
+
+        EXPECT_EQ( 640, window->width() );
+        EXPECT_EQ( 480, window->height() );
+
+        RECT after {};
+        GetWindowRect( static_cast<HWND>( window->nativeHandle() ), &after );
+        EXPECT_GT( after.bottom - after.top, before.bottom - before.top );
+
+        // GetClientRect is the authority: it is what a renderer would size its viewport from.
+        RECT client {};
+        GetClientRect( static_cast<HWND>( window->nativeHandle() ), &client );
+        EXPECT_EQ( 640, client.right - client.left );
+        EXPECT_EQ( 480, client.bottom - client.top );
+
+        // The menu belongs to the window now, and DestroyWindow frees it with the window.
+    }
+
+    //! setClientSize() produces exactly the client area asked for, and reports the change.
+    TEST( GuiWindowTest, SetClientSizeProducesTheRequestedDrawable )
+    {
+        GuiApplication application;
+        ASSERT_TRUE( application.hasPlatform() );
+
+        Window* const window = application.createWindow( WindowSettings() );
+        ASSERT_NE( nullptr, window );
+
+        SignalRecorder recorder;
+        QtLikeSignal::Object::connect( window->getResized(), &recorder, &SignalRecorder::onResized,
+            QtLikeSignal::ConnectionType::Direct );
+
+        window->setClientSize( 800, 600 );
+
+        RECT client {};
+        GetClientRect( static_cast<HWND>( window->nativeHandle() ), &client );
+        EXPECT_EQ( 800, client.right - client.left );
+        EXPECT_EQ( 600, client.bottom - client.top );
+
+        // The window's own record follows, because SetWindowPos sends WM_SIZE and the resize travels
+        // the ordinary path -- so a renderer needs no special case for a programmatic resize.
+        EXPECT_EQ( 800, window->width() );
+        EXPECT_EQ( 600, window->height() );
+        EXPECT_GE( recorder.mResizeCount, 1 );
+
+        // Nonsense sizes are refused rather than producing a degenerate window.
+        window->setClientSize( 0, 600 );
+        EXPECT_EQ( 800, window->width() );
+    }
+
+    //! Reporting a resize records the new size before the signal, and emits it once.
+    TEST( GuiWindowTest, ResizeRecordsTheSizeBeforeEmitting )
+    {
+        GuiApplication application;
+        ASSERT_TRUE( application.hasPlatform() );
+
+        Window* const window = application.createWindow( WindowSettings() );
+        ASSERT_NE( nullptr, window );
+
+        SignalRecorder recorder;
+        QtLikeSignal::Object::connect( window->getResized(), &recorder, &SignalRecorder::onResized,
+            QtLikeSignal::ConnectionType::Direct );
+
+        WindowSystemInterface::handleResize( window, 320, 240 );
+
+        EXPECT_EQ( 1, recorder.mResizeCount );
+        EXPECT_EQ( 320, recorder.mLastWidth );
+        EXPECT_EQ( 240, recorder.mLastHeight );
+
+        // A slot asking the window for its size during the emission must get the new one, which is why
+        // the write happens first. Checked afterwards for the same value.
+        EXPECT_EQ( 320, window->width() );
+        EXPECT_EQ( 240, window->height() );
+    }
+
+    //! A press reaches the window's signal and updates the application-wide button set.
+    TEST( GuiWindowTest, MousePressReachesTheSignalAndTheGlobalButtonState )
+    {
+        GuiApplication application;
+        ASSERT_TRUE( application.hasPlatform() );
+
+        Window* const window = application.createWindow( WindowSettings() );
+        ASSERT_NE( nullptr, window );
+
+        SignalRecorder recorder;
+        QtLikeSignal::Object::connect( window->getMousePressed(), &recorder,
+            &SignalRecorder::onMouse, QtLikeSignal::ConnectionType::Direct );
+
+        MouseEvent event;
+        event.mPos     = { 12, 34 };
+        event.mButton  = MouseButton::Left;
+        event.mButtons = MouseButton::Left;
+
+        WindowSystemInterface::handleMousePressed( window, event );
+
+        EXPECT_EQ( 1, recorder.mMouseCount );
+        EXPECT_EQ( 12, recorder.mLastMouse.mPos.mX );
+        EXPECT_EQ( 34, recorder.mLastMouse.mPos.mY );
+        EXPECT_TRUE( GuiApplication::mouseButtons().test( MouseButton::Left ) );
+
+        MouseEvent release = event;
+        release.mButtons = MouseButtons();
+        WindowSystemInterface::handleMouseReleased( window, release );
+
+        EXPECT_FALSE( GuiApplication::mouseButtons().any() );
+    }
+
+    //! A touch frame with no window named goes to the window that took the last touch down.
+    //!
+    //! wl_touch reports frame against the seat rather than against a surface, so this routing is the
+    //! only thing that makes the signal usable when more than one window exists.
+    TEST( GuiWindowTest, TouchFrameFollowsTheWindowThatTookTheLastDown )
+    {
+        GuiApplication application;
+        ASSERT_TRUE( application.hasPlatform() );
+
+        Window* const first  = application.createWindow( WindowSettings() );
+        Window* const second = application.createWindow( WindowSettings() );
+        ASSERT_NE( nullptr, first );
+        ASSERT_NE( nullptr, second );
+
+        SignalRecorder firstRecorder;
+        SignalRecorder secondRecorder;
+        QtLikeSignal::Object::connect( first->getTouchFrame(), &firstRecorder,
+            &SignalRecorder::onTouchFrame, QtLikeSignal::ConnectionType::Direct );
+        QtLikeSignal::Object::connect( second->getTouchFrame(), &secondRecorder,
+            &SignalRecorder::onTouchFrame, QtLikeSignal::ConnectionType::Direct );
+
+        TouchDownEvent down;
+        down.mId = 1;
+
+        WindowSystemInterface::handleTouchDown( second, down );
+        WindowSystemInterface::handleTouchFrame();
+
+        EXPECT_EQ( 0, firstRecorder.mTouchFrameCount );
+        EXPECT_EQ( 1, secondRecorder.mTouchFrameCount );
+    }
+
+    //! Destroying a window clears the touch focus, so a later frame does not reach freed memory.
+    TEST( GuiWindowTest, DestroyingAWindowClearsTheTouchFocus )
+    {
+        GuiApplication application;
+        ASSERT_TRUE( application.hasPlatform() );
+
+        Window* const window = application.createWindow( WindowSettings() );
+        ASSERT_NE( nullptr, window );
+
+        TouchDownEvent down;
+        down.mId = 1;
+        WindowSystemInterface::handleTouchDown( window, down );
+
+        delete window;
+
+        // Would dereference the destroyed window if ~Window() had not cleared the focus.
+        WindowSystemInterface::handleTouchFrame();
+        WindowSystemInterface::handleTouchCancel();
+
+        SUCCEED();
+    }
+
+    //! A close request emits the signal, and the default policy hides the window.
+    //!
+    //! Hidden rather than destroyed: the application may still hold a GL context bound to the handle,
+    //! and the library must not pull that out from under it. See GuiApplication::handleCloseRequested().
+    TEST( GuiWindowTest, CloseRequestEmitsAndHidesUnderTheDefaultPolicy )
+    {
+        GuiApplication application;
+        ASSERT_TRUE( application.hasPlatform() );
+        ASSERT_TRUE( application.quitOnLastWindowClosed() );
+
+        Window* const window = application.createWindow( WindowSettings() );
+        ASSERT_NE( nullptr, window );
+        window->show();
+
+        SignalRecorder recorder;
+        QtLikeSignal::Object::connect( window->getCloseRequested(), &recorder,
+            &SignalRecorder::onCloseRequested, QtLikeSignal::ConnectionType::Direct );
+
+        WindowSystemInterface::handleCloseRequest( window );
+
+        EXPECT_EQ( 1, recorder.mCloseCount );
+        EXPECT_FALSE( window->isVisible() );
+        EXPECT_NE( nullptr, window->nativeHandle() );
+    }
+
+    //! With the policy cleared, a close request is reported and nothing else happens.
+    TEST( GuiWindowTest, CloseRequestLeavesTheWindowAloneWhenThePolicyIsCleared )
+    {
+        GuiApplication application;
+        ASSERT_TRUE( application.hasPlatform() );
+        application.setQuitOnLastWindowClosed( false );
+
+        Window* const window = application.createWindow( WindowSettings() );
+        ASSERT_NE( nullptr, window );
+        window->show();
+
+        SignalRecorder recorder;
+        QtLikeSignal::Object::connect( window->getCloseRequested(), &recorder,
+            &SignalRecorder::onCloseRequested, QtLikeSignal::ConnectionType::Direct );
+
+        WindowSystemInterface::handleCloseRequest( window );
+
+        EXPECT_EQ( 1, recorder.mCloseCount );
+        EXPECT_TRUE( window->isVisible() );
+    }
+
+    //! Deleting the window from the close slot is survivable.
+    //!
+    //! The close policy runs after the signal, so without the lifetime check in handleCloseRequest()
+    //! this is a use-after-free -- and destroying the window on close is an entirely reasonable thing
+    //! for an application to do.
+    TEST( GuiWindowTest, ClosingSlotMayDestroyTheWindow )
+    {
+        GuiApplication application;
+        ASSERT_TRUE( application.hasPlatform() );
+
+        Window* const window = application.createWindow( WindowSettings() );
+        ASSERT_NE( nullptr, window );
+
+        QtLikeSignal::Object context;
+        QtLikeSignal::Object::connect( window->getCloseRequested(), &context,
+            [window]()
+            {
+                delete window;
+            },
+            QtLikeSignal::ConnectionType::Direct );
+
+        WindowSystemInterface::handleCloseRequest( window );
+
+        EXPECT_EQ( 0u, application.windows().size() );
+    }
 
 #endif // _WIN32
 
 #if defined( __linux__ )
 
-//! -p drm selects the DRM backend, which adopts rather than creates.
-//!
-//! Constructing the backend touches no device: libinput is opened by the first adoptWindow(), so
-//! this runs anywhere, including a container with no /dev/input at all.
-TEST( GuiDrmTest, PlatformArgumentSelectsTheDrmBackend )
-{
-    QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "drm" } );
-    GuiApplication application( commandLine.argc(), commandLine.argv() );
-
-    if( !application.hasPlatform() )
+    //! -p drm selects the DRM backend, which adopts rather than creates.
+    //!
+    //! Constructing the backend touches no device: libinput is opened by the first adoptWindow(), so
+    //! this runs anywhere, including a container with no /dev/input at all.
+    TEST( GuiDrmTest, PlatformArgumentSelectsTheDrmBackend )
     {
-        GTEST_SKIP() << "this build has no drm backend (libinput-dev/libudev-dev missing)";
+        QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "drm" } );
+        GuiApplication application( commandLine.argc(), commandLine.argv() );
+
+        if( !application.hasPlatform() )
+        {
+            GTEST_SKIP() << "this build has no drm backend (libinput-dev/libudev-dev missing)";
+        }
+
+        EXPECT_EQ( PlatformType::Drm, application.platformType() );
+
+        // There is no window system, so there is nothing to create a window with -- the external
+        // library sets the mode and makes the surface, and this backend adopts the result.
+        EXPECT_EQ( nullptr, application.createWindow( WindowSettings() ) );
     }
 
-    EXPECT_EQ( PlatformType::Drm, application.platformType() );
-
-    // There is no window system, so there is nothing to create a window with -- the external
-    // library sets the mode and makes the surface, and this backend adopts the result.
-    EXPECT_EQ( nullptr, application.createWindow( WindowSettings() ) );
-}
-
-//! The DRM backend refuses an adoption that does not say how big the scanout is.
-//!
-//! Refused rather than defaulted: every coordinate this backend produces is clamped or transformed
-//! against that size, so guessing it would put the pointer and every touch point in the wrong place
-//! with nothing to indicate why. Checked before libinput is touched, so no device is needed.
-TEST( GuiDrmTest, AdoptionWithoutASizeIsRefused )
-{
-    QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "drm" } );
-    GuiApplication application( commandLine.argc(), commandLine.argv() );
-
-    if( !application.hasPlatform() )
+    //! The DRM backend refuses an adoption that does not say how big the scanout is.
+    //!
+    //! Refused rather than defaulted: every coordinate this backend produces is clamped or transformed
+    //! against that size, so guessing it would put the pointer and every touch point in the wrong place
+    //! with nothing to indicate why. Checked before libinput is touched, so no device is needed.
+    TEST( GuiDrmTest, AdoptionWithoutASizeIsRefused )
     {
-        GTEST_SKIP() << "this build has no drm backend (libinput-dev/libudev-dev missing)";
+        QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "drm" } );
+        GuiApplication application( commandLine.argc(), commandLine.argv() );
+
+        if( !application.hasPlatform() )
+        {
+            GTEST_SKIP() << "this build has no drm backend (libinput-dev/libudev-dev missing)";
+        }
+
+        NativeWindow native;
+        native.mWidth  = 0;
+        native.mHeight = 0;
+
+        EXPECT_EQ( nullptr, application.adoptWindow( native ) );
+
+        native.mWidth  = 1920;
+        native.mHeight = 0;
+        EXPECT_EQ( nullptr, application.adoptWindow( native ) );
     }
-
-    NativeWindow native;
-    native.mWidth  = 0;
-    native.mHeight = 0;
-
-    EXPECT_EQ( nullptr, application.adoptWindow( native ) );
-
-    native.mWidth  = 1920;
-    native.mHeight = 0;
-    EXPECT_EQ( nullptr, application.adoptWindow( native ) );
-}
 
 #endif // __linux__
 
 #if defined( HAVE_WAYLAND_CLIENT )
 
-//! -p wayland selects the Wayland backend, and it creates its own windows.
-TEST( GuiWaylandTest, PlatformArgumentSelectsTheWaylandBackend )
-{
-    QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "wayland" } );
-    GuiApplication application( commandLine.argc(), commandLine.argv() );
-
-    if( !application.hasPlatform() )
+    //! -p wayland selects the Wayland backend, and it creates its own windows.
+    TEST( GuiWaylandTest, PlatformArgumentSelectsTheWaylandBackend )
     {
-        GTEST_SKIP() << "no Wayland compositor reachable (WAYLAND_DISPLAY unset?)";
+        QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "wayland" } );
+        GuiApplication application( commandLine.argc(), commandLine.argv() );
+
+        if( !application.hasPlatform() )
+        {
+            GTEST_SKIP() << "no Wayland compositor reachable (WAYLAND_DISPLAY unset?)";
+        }
+
+        EXPECT_EQ( PlatformType::Wayland, application.platformType() );
     }
 
-    EXPECT_EQ( PlatformType::Wayland, application.platformType() );
-}
-
-//! Asking for the connection is what opens it, before there is any window.
-//!
-//! That order is the whole reason nativeDisplay() is not a passive query: an EGL library has to
-//! reach eglGetPlatformDisplayEXT( EGL_PLATFORM_WAYLAND_EXT, display ) to choose a config, and it
-//! has to do that before there is a surface to give the config to.
-TEST( GuiWaylandTest, TheConnectionOpensBeforeAnyWindowExists )
-{
-    QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "wayland" } );
-    GuiApplication application( commandLine.argc(), commandLine.argv() );
-
-    if( !application.hasPlatform() )
+    //! Asking for the connection is what opens it, before there is any window.
+    //!
+    //! That order is the whole reason nativeDisplay() is not a passive query: an EGL library has to
+    //! reach eglGetPlatformDisplayEXT( EGL_PLATFORM_WAYLAND_EXT, display ) to choose a config, and it
+    //! has to do that before there is a surface to give the config to.
+    TEST( GuiWaylandTest, TheConnectionOpensBeforeAnyWindowExists )
     {
-        GTEST_SKIP() << "no Wayland compositor reachable (WAYLAND_DISPLAY unset?)";
+        QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "wayland" } );
+        GuiApplication application( commandLine.argc(), commandLine.argv() );
+
+        if( !application.hasPlatform() )
+        {
+            GTEST_SKIP() << "no Wayland compositor reachable (WAYLAND_DISPLAY unset?)";
+        }
+
+        void* const display = application.nativeDisplay();
+        if( display == nullptr )
+        {
+            GTEST_SKIP() << "wl_display_connect() failed";
+        }
+
+        EXPECT_EQ( 0u, application.windows().size() );
+
+        // The same connection every time: a second one would need a second registration with the loop.
+        EXPECT_EQ( display, application.nativeDisplay() );
     }
 
-    void* const display = application.nativeDisplay();
-    if( display == nullptr )
+    //! A created window carries the surface and the connection an EGL library needs.
+    TEST( GuiWaylandTest, CreatedWindowCarriesTheSurfaceAndTheDisplay )
     {
-        GTEST_SKIP() << "wl_display_connect() failed";
+        QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "wayland" } );
+        GuiApplication application( commandLine.argc(), commandLine.argv() );
+
+        if( !application.hasPlatform() || application.nativeDisplay() == nullptr )
+        {
+            GTEST_SKIP() << "no Wayland compositor reachable (WAYLAND_DISPLAY unset?)";
+        }
+
+        WindowSettings settings;
+        settings.mWidth  = 640;
+        settings.mHeight = 480;
+        settings.mTitle  = "created";
+        settings.mAppId  = "com.example.qtlikesignalgui.test";
+
+        Window* const window = application.createWindow( settings );
+        ASSERT_NE( nullptr, window );
+
+        // wl_surface* through nativeHandle(), wl_display* through nativeDisplay() -- the pair
+        // wl_egl_window_create() and eglGetPlatformDisplayEXT() are given.
+        EXPECT_NE( nullptr, window->nativeHandle() );
+        EXPECT_EQ( application.nativeDisplay(), window->nativeDisplay() );
+
+        // A window is a pointer on Wayland, not a resource id, so there is nothing for this to be.
+        EXPECT_EQ( 0u, window->nativeWindowId() );
+
+        EXPECT_EQ( 640, window->width() );
+        EXPECT_EQ( 480, window->height() );
     }
 
-    EXPECT_EQ( 0u, application.windows().size() );
-
-    // The same connection every time: a second one would need a second registration with the loop.
-    EXPECT_EQ( display, application.nativeDisplay() );
-}
-
-//! A created window carries the surface and the connection an EGL library needs.
-TEST( GuiWaylandTest, CreatedWindowCarriesTheSurfaceAndTheDisplay )
-{
-    QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "wayland" } );
-    GuiApplication application( commandLine.argc(), commandLine.argv() );
-
-    if( !application.hasPlatform() || application.nativeDisplay() == nullptr )
+    //! One window, and a second is refused rather than silently sharing the first one's focus.
+    TEST( GuiWaylandTest, ASecondWindowIsRefused )
     {
-        GTEST_SKIP() << "no Wayland compositor reachable (WAYLAND_DISPLAY unset?)";
+        QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "wayland" } );
+        GuiApplication application( commandLine.argc(), commandLine.argv() );
+
+        if( !application.hasPlatform() || application.nativeDisplay() == nullptr )
+        {
+            GTEST_SKIP() << "no Wayland compositor reachable (WAYLAND_DISPLAY unset?)";
+        }
+
+        ASSERT_NE( nullptr, application.createWindow( WindowSettings() ) );
+        EXPECT_EQ( nullptr, application.createWindow( WindowSettings() ) );
     }
 
-    WindowSettings settings;
-    settings.mWidth  = 640;
-    settings.mHeight = 480;
-    settings.mTitle  = "created";
-    settings.mAppId  = "com.garmin.qtlikesignalgui.test";
-
-    Window* const window = application.createWindow( settings );
-    ASSERT_NE( nullptr, window );
-
-    // wl_surface* through nativeHandle(), wl_display* through nativeDisplay() -- the pair
-    // wl_egl_window_create() and eglGetPlatformDisplayEXT() are given.
-    EXPECT_NE( nullptr, window->nativeHandle() );
-    EXPECT_EQ( application.nativeDisplay(), window->nativeDisplay() );
-
-    // A window is a pointer on Wayland, not a resource id, so there is nothing for this to be.
-    EXPECT_EQ( 0u, window->nativeWindowId() );
-
-    EXPECT_EQ( 640, window->width() );
-    EXPECT_EQ( 480, window->height() );
-}
-
-//! One window, and a second is refused rather than silently sharing the first one's focus.
-TEST( GuiWaylandTest, ASecondWindowIsRefused )
-{
-    QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "wayland" } );
-    GuiApplication application( commandLine.argc(), commandLine.argv() );
-
-    if( !application.hasPlatform() || application.nativeDisplay() == nullptr )
+    //! Destroying the window releases the surface but leaves the connection open.
+    //!
+    //! The connection outlives the window because the backend owns it: a program is free to destroy a
+    //! window and make another, and reconnecting would drop every global that was bound.
+    TEST( GuiWaylandTest, DestroyingTheWindowKeepsTheConnection )
     {
-        GTEST_SKIP() << "no Wayland compositor reachable (WAYLAND_DISPLAY unset?)";
+        QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "wayland" } );
+        GuiApplication application( commandLine.argc(), commandLine.argv() );
+
+        if( !application.hasPlatform() || application.nativeDisplay() == nullptr )
+        {
+            GTEST_SKIP() << "no Wayland compositor reachable (WAYLAND_DISPLAY unset?)";
+        }
+
+        Window* const window = application.createWindow( WindowSettings() );
+        ASSERT_NE( nullptr, window );
+
+        void* const display = application.nativeDisplay();
+        delete window;
+
+        EXPECT_EQ( 0u, application.windows().size() );
+        EXPECT_EQ( display, application.nativeDisplay() );
+
+        // And another window can be made on it, which is what "the connection outlives the window"
+        // is for.
+        EXPECT_NE( nullptr, application.createWindow( WindowSettings() ) );
     }
-
-    ASSERT_NE( nullptr, application.createWindow( WindowSettings() ) );
-    EXPECT_EQ( nullptr, application.createWindow( WindowSettings() ) );
-}
-
-//! Destroying the window releases the surface but leaves the connection open.
-//!
-//! The connection outlives the window because the backend owns it: a program is free to destroy a
-//! window and make another, and reconnecting would drop every global that was bound.
-TEST( GuiWaylandTest, DestroyingTheWindowKeepsTheConnection )
-{
-    QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "wayland" } );
-    GuiApplication application( commandLine.argc(), commandLine.argv() );
-
-    if( !application.hasPlatform() || application.nativeDisplay() == nullptr )
-    {
-        GTEST_SKIP() << "no Wayland compositor reachable (WAYLAND_DISPLAY unset?)";
-    }
-
-    Window* const window = application.createWindow( WindowSettings() );
-    ASSERT_NE( nullptr, window );
-
-    void* const display = application.nativeDisplay();
-    delete window;
-
-    EXPECT_EQ( 0u, application.windows().size() );
-    EXPECT_EQ( display, application.nativeDisplay() );
-
-    // And another window can be made on it, which is what "the connection outlives the window"
-    // is for.
-    EXPECT_NE( nullptr, application.createWindow( WindowSettings() ) );
-}
 
 #endif // HAVE_WAYLAND_CLIENT

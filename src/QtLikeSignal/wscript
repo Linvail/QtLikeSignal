@@ -24,9 +24,9 @@ def build(bld):
         kw["source"].append(bld.path.find_node("ThreadPosix.cpp"))
         kw["source"].append(bld.path.find_node("EventDispatcherLinux.cpp"))
     # ".." is src/, the directory holding this one, and it is what goes on the include path -- so
-    # every include of a QtLikeSignal header reads "QtLikeSignal/Object.hpp" rather than "Object.hpp". All
-    # thirteen header names also exist in QtMimic, so an unprefixed include would resolve by
-    # include-path order rather than by intent.
+    # every include of a QtLikeSignal header reads "QtLikeSignal/Object.hpp" rather than "Object.hpp".
+    # These are ordinary header names that another library on the include path could easily also
+    # use, so an unprefixed include would resolve by include-path order rather than by intent.
     kw["includes"] = ".."
     kw["export_includes"] = ".."
 

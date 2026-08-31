@@ -284,7 +284,7 @@ namespace QtLikeSignal
         //! Keeping the callable's concrete type is what removes the block a
         //! std::function<void(Args...)> needed for it: the emit-time wrapper Object::connect()
         //! builds is far past any small-object buffer, so type-erasing it cost a second allocation
-        //! per connection and an indirect call per emit. See PERFORMANCE-20260813.md (P10).
+        //! per connection and an indirect call per emit.
         template <typename Callable>
         struct SlotImpl : SlotBase
         {

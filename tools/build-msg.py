@@ -6,7 +6,7 @@ Integration
 # Add "build-msg" to local_tools in both wscript_options and wscript_configure.
 
 def build(bld):
-    bld.build_msg("QtMimicGui backends", "x11, drm, wayland", color="GREEN")
+    bld.build_msg("QtLikeSignalGui backends", "x11, drm, wayland", color="GREEN")
 ------------------------------------------------
 
 WHY THIS EXISTS RATHER THAN bld.msg()
@@ -18,7 +18,7 @@ while only pprint() reaches the console. A BuildContext has no logger, so to_log
 fallback branch and writes to stderr instead -- without a trailing newline. The result is one
 mangled line carrying everything twice:
 
-    ----------------------------------------QtMimicGui backendsQtMimicGui backends   : x11, drm, waylandx11, drm, wayland
+    ----------------------------------------QtLikeSignalGui backendsQtLikeSignalGui backends   : x11, drm, waylandx11, drm, wayland
 
 waflib is not modified to fix that. This helper simply does not use the configure-time API: it
 formats the line itself and emits it with a single Logs.pprint(), which is the coloured equivalent
@@ -49,7 +49,7 @@ def build_msg(bld, label, result, color="GREEN"):
     Print one aligned "label : result" line, once, in colour.
 
     :param bld: the build context.
-    :param label: what is being reported, e.g. "QtMimicGui backends".
+    :param label: what is being reported, e.g. "QtLikeSignalGui backends".
     :param result: the outcome, e.g. "x11, drm, wayland" or "skipped (install libx11-dev)".
     :param color: a waf colour name; GREEN for something built, YELLOW for something skipped.
     """

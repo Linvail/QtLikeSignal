@@ -228,6 +228,21 @@ namespace QtLikeSignalGui
         aWindow->mExposed.emit();
     }
 
+    //! Reports that a menu item was chosen. See Window::getMenuCommand().
+    void WindowSystemInterface::handleMenuCommand
+        (
+        Window* aWindow,   //!< Window whose menu it was.
+        int aCommandId     //!< The id the item was appended with.
+        )
+    {
+        if( aWindow == nullptr )
+        {
+            return;
+        }
+
+        aWindow->mMenuCommand.emit( aCommandId );
+    }
+
     //! Reports that the user asked to close the window.
     //!
     //! Emits the signal first, so a slot sees the request before any automatic reaction to it, then

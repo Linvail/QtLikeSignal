@@ -262,7 +262,8 @@ namespace QtLikeSignalGui
     {
         std::vector<Window*> found;
 
-        for( QtLikeSignal::Object* child = firstChild(); child != nullptr; child = child->nextSibling() )
+        for( QtLikeSignal::Object* child = firstChild(); child != nullptr;
+            child = child->nextSibling() )
         {
             Window* const window = dynamic_cast<Window*>( child );
             if( window != nullptr )

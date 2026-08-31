@@ -1,0 +1,372 @@
+# SPDX-FileCopyrightText: 2026 Evan
+# SPDX-License-Identifier: MIT
+
+import os
+import re
+
+#: Environment variables that say where these two dependencies live.
+#:
+#: Both are names the wider world already uses -- BOOST_ROOT is what CMake's FindBoost and b2 read,
+#: so a machine that already has it set needs nothing further -- rather than a QTLIKESIGNAL_-prefixed
+#: name of our own. That prefix belongs to the library's *runtime* switches; these are build-time
+#: locations and no program this project produces ever reads them.
+QT6_ROOT_VARIABLE = "QT6_ROOT"
+BOOST_ROOT_VARIABLE = "BOOST_ROOT"
+
+#: Where Qt 6 is looked for when nothing overrides it.
+#:
+#: On Linux one prefix, because the benchmarks want the locally built Qt rather than a distribution
+#: one. On Windows the installer roots, which hold one directory per version, so the version is
+#: discovered rather than pinned -- this machine has 6.11.2 on Windows and 6.11.1 on Linux, and
+#: pinning either would break the other.
+QT6_DEFAULT_ROOTS = {
+    "linux": ["/usr/local/Qt-6.11.1"],
+    "win32": ["H:/Qt", "C:/Qt"],
+}
+
+#: Where boost's headers are looked for when nothing overrides it. boost::signals2 is header-only,
+#: so this is a header path and nothing is ever linked from it.
+BOOST_DEFAULT_ROOTS = {
+    "linux": ["/usr/include", "/usr/local/include"],
+    "win32": ["H:/Projects-2026/boost_1_74_0", "C:/boost"],
+}
+
+
+def _configured_roots(bld, aVariable, aDefaults):
+    """
+    Resolve where to look for a dependency: the process environment first, then ``bld.env``, then
+    the built-in defaults for this target's OS.
+
+    The environment wins so one build can be pointed elsewhere without reconfiguring or editing
+    anything -- ``QT6_ROOT=/opt/qt6 ./waf install --project=Tests`` is the whole gesture.
+    ``bld.env`` comes next and holds whatever ``waf configure`` captured from the environment at the
+    time (see wscript_configure), so a value given once at configure time keeps applying to later
+    builds without being repeated. The defaults are last, and are only what happens to be true on
+    the two machines this is developed on.
+
+    :param bld: the build context.
+    :param aVariable: environment variable name, also the ``bld.env`` key.
+    :param aDefaults: per-DEST_OS fallbacks.
+    :returns: directories to try, in order.
+    """
+    override = os.environ.get(aVariable)
+
+    if not override:
+        override = bld.env[aVariable]
+
+    if override:
+        return override if isinstance(override, list) else [override]
+
+    return aDefaults.get(bld.env.DEST_OS, [])
+
+
+def _qt6_at_linux_prefix(aPrefix):
+    """
+    Describe the Qt 6 at aPrefix, or return None if there is not one there.
+
+    A Linux prefix holds moc under libexec/, which is where a Qt built from source puts it.
+    """
+    moc = os.path.join(aPrefix, "libexec", "moc")
+    include = os.path.join(aPrefix, "include")
+    lib = os.path.join(aPrefix, "lib")
+
+    if not os.path.exists(moc):
+        return None
+    if not os.path.exists(os.path.join(include, "QtCore", "QObject")):
+        return None
+
+    return {
+        "prefix": aPrefix,
+        "moc": moc,
+        "include": include,
+        "lib": lib,
+        "link": "Qt6Core",
+        "dll": None,  # Resolved through rpath instead; nothing to copy.
+        # Qt 6 is built position-independent, and rpath keeps the binary runnable without the
+        # caller having to set LD_LIBRARY_PATH.
+        "cxxflags": ["-fPIC"],
+        "rpath": [lib],
+    }
+
+
+def _qt6_at_windows_kit(aPrefix, aLink):
+    """
+    Describe the Qt 6 kit at aPrefix, or return None if there is not one there.
+
+    Nothing about this layout matches the Linux one: moc is bin/moc.exe, linking goes through an
+    import library, and there is a DLL to find.
+
+    :param aPrefix: a kit directory, e.g. .../6.11.2/msvc2022_64.
+    :param aLink: the library to link, which is CRT-dependent -- see _find_qt6_windows().
+    """
+    moc = os.path.join(aPrefix, "bin", "moc.exe")
+    include = os.path.join(aPrefix, "include")
+    lib = os.path.join(aPrefix, "lib")
+    import_library = os.path.join(lib, aLink + ".lib")
+    dll = os.path.join(aPrefix, "bin", aLink + ".dll")
+
+    if not os.path.exists(moc):
+        return None
+    if not os.path.exists(os.path.join(include, "QtCore", "QObject")):
+        return None
+    if not os.path.exists(import_library):
+        return None
+
+    return {
+        "prefix": aPrefix,
+        "moc": moc,
+        "include": include,
+        "lib": lib,
+        "link": aLink,
+        # Windows resolves a DLL from the executable's own directory before PATH, and nothing puts
+        # Qt's bin there. Copied beside the program in build(); without it the binary links cleanly
+        # and dies at startup with 0xC0000135.
+        "dll": dll if os.path.exists(dll) else None,
+        # Nothing: /MD, /MDd and /Zc:__cplusplus all come from tools/toolchain-windows.py. Qt does
+        # require the last of those -- qcompilerdetection.h refuses to compile without it, "Qt
+        # requires a C++17 compiler, and a suitable value for __cplusplus" -- but so does the
+        # project's own code, so it is set for every translation unit rather than for this one.
+        "cxxflags": [],
+        "rpath": [],  # No such concept here.
+    }
+
+
+def _find_qt6_linux(aRoots):
+    """
+    Find a Qt 6 among aRoots, each of which is a prefix directly.
+    """
+    for prefix in aRoots:
+        found = _qt6_at_linux_prefix(prefix)
+        if found:
+            return found
+
+    return None
+
+
+def _find_qt6_windows(aRoots, aWantDebug):
+    """
+    Find a 64-bit MSVC Qt 6 among aRoots.
+
+    aWantDebug picks between the two builds the installer ships. That is not a preference: a debug
+    build of this project compiles /MDd and a release one /MD, and linking Qt6Core (which is /MD)
+    into a /MDd binary mixes two C runtimes, each with its own heap. Qt6Cored is the /MDd build.
+
+    A root may be a kit directly, or the installer directory holding one per version. Both are
+    reasonable things to point QT6_ROOT at and which one somebody meant is not worth making them
+    think about, so the kit is tried first and the version scan is the fallback.
+    """
+    link = "Qt6Cored" if aWantDebug else "Qt6Core"
+
+    for root in aRoots:
+        if not os.path.isdir(root):
+            continue
+
+        direct = _qt6_at_windows_kit(root, link)
+        if direct:
+            return direct
+
+        # Newest version first, compared numerically: "6.11.2" must beat "6.9.0", which it does not
+        # as a string.
+        versions = [d for d in os.listdir(root) if re.fullmatch(r"6(\.\d+)+", d)]
+        versions.sort(key=lambda name: [int(part) for part in name.split(".")], reverse=True)
+
+        for version in versions:
+            version_dir = os.path.join(root, version)
+            for kit in sorted(os.listdir(version_dir), reverse=True):
+                # 64-bit MSVC only. The 32-bit toolchain has no kit here, and a mingw kit links
+                # against a different runtime altogether.
+                if not re.fullmatch(r"msvc\d+_64", kit):
+                    continue
+
+                found = _qt6_at_windows_kit(os.path.join(version_dir, kit), link)
+                if found:
+                    return found
+
+    return None
+
+
+def _find_qt6(bld):
+    """
+    Locate a usable Qt 6 for the performance benchmarks.
+
+    Returns a dict of paths and link settings, or None when Qt 6 is unavailable:
+
+        prefix    the directory the rest of these came from, for reporting
+        moc       path to the meta-object compiler
+        include   Qt's include root
+        lib       directory holding the library to link
+        link      library name to pass to the linker
+        dll       a runtime DLL to place beside the program, or None
+        cxxflags  extra compile flags this platform's Qt needs
+        rpath     runtime search path, empty where the platform has none
+
+    Only ever found for a build whose host can also run the result. The cross-compile from Linux to
+    Windows targets win32 and will not find a Windows Qt, which is the right answer rather than an
+    accident: a benchmark that cannot be run is not worth linking.
+    """
+    roots = _configured_roots(bld, QT6_ROOT_VARIABLE, QT6_DEFAULT_ROOTS)
+
+    if bld.env.DEST_OS == "linux":
+        return _find_qt6_linux(roots)
+
+    if bld.env.DEST_OS == "win32" and "msvc" in bld.env.CXX_NAME:
+        targets = bld.env.MSVC_TARGETS or [""]
+        if "x64" not in targets[0]:
+            return None
+        return _find_qt6_windows(roots, bld.mode == "debug")
+
+    return None
+
+
+def _find_boost(bld):
+    """
+    Locate boost's headers for the boost::signals2 benchmarks.
+
+    Returns a dict of paths, or None when boost is unavailable. Header-only, so there is nothing to
+    match against the C runtime and nothing to copy beside the program.
+    """
+    for include in _configured_roots(bld, BOOST_ROOT_VARIABLE, BOOST_DEFAULT_ROOTS):
+        if os.path.exists(os.path.join(include, "boost", "signals2", "signal.hpp")):
+            return {"include": include}
+
+    return None
+
+
+def _where_qt6_was_looked_for(bld):
+    """
+    Name the places the message should send the reader, and how to redirect the search.
+    """
+    roots = _configured_roots(bld, QT6_ROOT_VARIABLE, QT6_DEFAULT_ROOTS)
+    return "%s; set %s to look elsewhere" % (" or ".join(roots) or "nowhere", QT6_ROOT_VARIABLE)
+
+
+def _how_to_get_boost(bld):
+    """
+    Advice the reader can act on, which "apt install" is not on Windows.
+    """
+    if bld.env.DEST_OS == "linux":
+        return "apt install libboost-dev, or set %s" % BOOST_ROOT_VARIABLE
+    return "unpack boost and set %s" % BOOST_ROOT_VARIABLE
+
+
+def build(bld):
+    kw = {}
+    kw["features"] = ["cxx", "cxxprogram", "debug-info"]
+    # The regression guards and the allocation counter ship with the benchmarks, not with the
+    # correctness suite: the counter replaces global operator new, which no other binary should
+    # carry, and the guards are only meaningful in an optimised build.
+    #
+    # Moved here from src/tests/ along with the demo. These benchmark QtLikeSignal against Qt 6 and
+    # boost, and against nothing else.
+    kw["source"] = [
+        "test_QtLikeSignal_Performance.cpp",
+        "test_QtLikeSignal_Regression.cpp",
+        "PerfAllocationCounter.cpp",
+    ]
+    kw["includes"] = ["."]
+    kw["use"] = ["QtLikeSignal", "google-test"]
+
+    if bld.env.DEST_OS == "win32":
+        kw["lib"] = ["user32"]
+
+    # A target that cannot run what it builds is told so once, rather than being given two
+    # "could not find it" messages naming paths it would never have looked at. That is the
+    # cross-compile to Windows: it targets win32 from a Linux host, so H:/Qt is not there to find.
+    comparison_is_possible = bld.env.DEST_OS in ("linux", "win32")
+    if bld.env.DEST_OS == "win32" and "msvc" not in bld.env.CXX_NAME:
+        comparison_is_possible = False
+
+    if not comparison_is_possible:
+        bld.build_msg(
+            "Qt 6 and boost benchmarks",
+            "not built for this target (needs a host that can run them)",
+            color="YELLOW",
+        )
+
+    qt6 = _find_qt6(bld)
+    if qt6:
+        # Which Qt was picked is worth saying: the version is discovered rather than pinned, so a
+        # machine with two installed would otherwise give no clue which one produced the numbers.
+        bld.build_msg(
+            "Qt 6 performance benchmarks", qt6["prefix"].replace("\\", "/"), color="GREEN"
+        )
+
+        # A Qt signal has no body until moc writes one. Generate that into an ordinary .cpp and add
+        # it to the sources, rather than the commoner trick of #include-ing a .moc at the bottom of
+        # the file: the generated node is then a declared output, so waf knows to run moc before the
+        # compile instead of that ordering being incidental.
+        moc_output = bld.path.find_or_declare("moc_Qt6PerfObjects.cpp")
+        # Quoted, and with the separators normalised: the Windows moc lives under a path this rule
+        # hands to a shell, and an unquoted backslash there is an escape rather than a separator.
+        #
+        # The output is named absolutely rather than as the ${TGT} waf would expand to a path
+        # relative to the build directory. A rule string runs through a shell, and on Windows that
+        # is cmd.exe, which refuses to start in a UNC directory -- it prints "UNC paths are not
+        # supported" and drops itself into C:\Windows. A relative output then resolves against the
+        # wrong directory and moc fails with "Cannot create ... No such file or directory". Every
+        # other task here is an argument list rather than a shell command and is unaffected, so
+        # this is the one place that has to say it.
+        bld(
+            name="moc_Qt6PerfObjects",
+            rule='"%s" -I"%s" ${SRC} -o ${TGT[0].abspath()}'
+            % (qt6["moc"].replace("\\", "/"), qt6["include"].replace("\\", "/")),
+            source="Qt6PerfObjects.hpp",
+            target=moc_output,
+        )
+
+        kw["source"] += ["test_Qt6_Performance.cpp", moc_output]
+        kw["includes"] += [qt6["include"], os.path.join(qt6["include"], "QtCore")]
+        kw["libpath"] = [qt6["lib"]]
+        kw["lib"] = kw.get("lib", []) + [qt6["link"]]
+        if qt6["cxxflags"]:
+            kw["cxxflags"] = qt6["cxxflags"]
+        if qt6["rpath"]:
+            kw["rpath"] = qt6["rpath"]
+
+        if qt6["dll"]:
+            # Beside the program in the build tree, and installed next to it as well. Windows looks
+            # in the executable's own directory before PATH, and nothing puts Qt's bin there, so
+            # without this the benchmark links and then dies at startup with 0xC0000135
+            # (STATUS_DLL_NOT_FOUND) and no message -- which reads as a crash rather than as a
+            # missing DLL. The ASan runtime is carried the same way; see tools/toolchain-windows.py.
+            dll_node = bld.root.find_node(qt6["dll"].replace("\\", "/"))
+            if dll_node:
+                bld(
+                    features="subst",
+                    is_copy=True,
+                    source=dll_node,
+                    target=bld.path.get_bld().make_node(os.path.basename(qt6["dll"])),
+                    name="qt6-runtime-beside-benchmarks",
+                )
+                bld.install_files("${PREFIX}/bin", dll_node)
+    elif comparison_is_possible:
+        # Only where Qt 6 could have been there. On any other target the single message above has
+        # already said why, and this one would be naming a path that target never looks at.
+        bld.build_msg(
+            "Qt 6 performance benchmarks",
+            "skipped (no Qt 6 under %s)" % _where_qt6_was_looked_for(bld),
+            color="YELLOW",
+        )
+
+    boost = _find_boost(bld)
+    if boost:
+        # Appended last on purpose. Registration order across translation units follows link
+        # order, and this file being first is what once inverted every ratio in the table -- see
+        # PerfHarness::baselineLibrary(), which now names the baseline outright rather than taking
+        # whichever library happened to record first. Kept last anyway: there is no reason to lean
+        # on that fix when the ordering costs nothing to preserve.
+        bld.build_msg("boost::signals2 benchmarks", boost["include"], color="GREEN")
+        kw["source"] += ["test_Boost_Performance.cpp"]
+        # /usr/include is already on the compiler's search path, and passing it as -I moves it ahead
+        # of the toolchain's own directories, which breaks the #include_next chain libstdc++ relies
+        # on. Only a non-default prefix needs saying out loud.
+        if boost["include"] != "/usr/include":
+            kw["includes"] += [boost["include"]]
+    elif comparison_is_possible:
+        bld.build_msg(
+            "boost::signals2 performance benchmarks",
+            "skipped (no boost headers; %s)" % _how_to_get_boost(bld),
+            color="YELLOW",
+        )
+
+    bld(target="QtLikeSignal-Performance-Tests", **kw)

@@ -124,8 +124,16 @@ namespace QtLikeSignalGui
     //! On Windows the answer is always Windows: there is one window system and no choice to make,
     //! so a `-p` meant for the Linux build is ignored rather than being an error.
     //!
-    //! @return the chosen platform, or Unknown when there is none to use -- a name nothing
-    //!         recognises, or a Linux session with neither WAYLAND_DISPLAY nor DISPLAY set.
+    //! **Detection asks the window system, not the environment.** Where a platform is not named,
+    //! each backend is asked whether it can reach its server -- X11 opens a connection, Wayland
+    //! connects to the compositor -- and only a backend built into this binary is asked at all.
+    //! Reading WAYLAND_DISPLAY and DISPLAY was cheaper and wrong in both directions: a variable
+    //! survives the session it described, and its absence says nothing about a socket that is
+    //! reachable anyway. The graphics layer's EGL display provider has always probed rather than
+    //! read, and two detections that could disagree about which window system is running would be
+    //! worse than either alone.
+    //!
+    //! @return the chosen platform, or Unknown for a name nothing recognises.
     PlatformType PlatformIntegration::choosePlatform
         (
         const std::vector<std::string>& aArgs   //!< The program's arguments, argv[0] included.
@@ -161,17 +169,32 @@ namespace QtLikeSignalGui
             // Wayland before X11: a session running both has XWayland available, and picking the
             // translation layer over the compositor the session actually runs would be the wrong
             // way round. Qt makes the same choice.
-            if( !environmentValue( "WAYLAND_DISPLAY" ).empty() )
-            {
-                return PlatformType::Wayland;
-            }
+            //
+            // Guarded on the same defines the factory uses, so a platform this binary has no
+            // backend for is never chosen. That is not only tidiness: the probe below *is* the
+            // backend's own library, so asking a backend that was not built is not possible, and
+            // answering with a platform that create() would then refuse would only move the failure
+            // one step further from its cause.
+            #if defined( HAVE_WAYLAND_CLIENT )
+                if( PlatformIntegrationWayland::isAvailable() )
+                {
+                    return PlatformType::Wayland;
+                }
+            #endif
 
-            if( !environmentValue( "DISPLAY" ).empty() )
-            {
-                return PlatformType::X11;
-            }
+            #if defined( HAVE_X11 )
+                if( PlatformIntegrationX11::isAvailable() )
+                {
+                    return PlatformType::X11;
+                }
+            #endif
 
-            return PlatformType::Unknown;
+            // No server answered, which on Linux is the DRM/KMS console: the display is driven
+            // directly and input comes from libinput. Answering Unknown here would be a claim that
+            // nothing can run, when in fact the one platform that needs no session is exactly the
+            // one left. A binary built without the DRM backend still reports the absence, from
+            // create() rather than from here.
+            return PlatformType::Drm;
         #endif
     }
 

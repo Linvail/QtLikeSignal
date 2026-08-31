@@ -47,7 +47,7 @@ namespace QtLikeSignalGui
     //! QTLIKESIGNAL_INPUT_DEVICES; that decision is not this library's to make.
     //!
     //! @return the descriptor, or a negative errno.
-    extern "C" int qtMimicGuiOpenRestricted
+    extern "C" int qtLikeSignalGuiOpenRestricted
         (
         const char* aPath,   //!< Device node to open.
         int aFlags,          //!< Flags libinput wants; passed through unchanged.
@@ -60,8 +60,8 @@ namespace QtLikeSignalGui
         return ( descriptor < 0 ) ? -errno : descriptor;
     }
 
-    //! Closes an input device for libinput. See qtMimicGuiOpenRestricted().
-    extern "C" void qtMimicGuiCloseRestricted
+    //! Closes an input device for libinput. See qtLikeSignalGuiOpenRestricted().
+    extern "C" void qtLikeSignalGuiCloseRestricted
         (
         int aFd,          //!< Descriptor to close.
         void* aUserData   //!< Unused.
@@ -76,8 +76,8 @@ namespace QtLikeSignalGui
         //! The callbacks libinput uses to reach the device nodes.
         const libinput_interface kInterface =
         {
-            &qtMimicGuiOpenRestricted,
-            &qtMimicGuiCloseRestricted
+            &qtLikeSignalGuiOpenRestricted,
+            &qtLikeSignalGuiCloseRestricted
         };
 
         //! Gets the running thread's dispatcher as an EventDispatcherLinux, or null if it is not one.
@@ -450,7 +450,8 @@ namespace QtLikeSignalGui
             mInput = input;
         }
 
-        const std::shared_ptr<QtLikeSignal::EventDispatcherLinux> dispatcher = currentLinuxDispatcher();
+        const std::shared_ptr<QtLikeSignal::EventDispatcherLinux> dispatcher =
+            currentLinuxDispatcher();
         if( !dispatcher )
         {
             std::fprintf( stderr,
@@ -469,7 +470,8 @@ namespace QtLikeSignalGui
                 pumpInput( aEvents );
             } ) )
         {
-            std::fprintf( stderr, "QtLikeSignalGui: registerEventSource( %d ) was refused\n", mInputFd );
+            std::fprintf( stderr, "QtLikeSignalGui: registerEventSource( %d ) was refused\n",
+                mInputFd );
             mInputFd = -1;
             closeInput();
             return false;

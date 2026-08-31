@@ -167,6 +167,7 @@ namespace QtLikeSignalGui
             Window* aWindow,
             bool aVisible
             );
+
     };
 }
 

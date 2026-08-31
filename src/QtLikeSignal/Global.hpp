@@ -60,7 +60,38 @@ namespace QtLikeSignal
         //! The slot is invoked when control returns to the event loop of the receiver's thread.
         //!
         //! The slot is executed in the receiver's thread.
-        Queued
+        Queued,
+
+        //! As Queued, except that emit() does not return until the slot has finished.
+        //!
+        //! The slot is executed in the receiver's thread while the emitting thread waits. Mirrors
+        //! Qt::BlockingQueuedConnection, and exists for the one shape that Queued cannot express:
+        //! hand work to the thread that owns some state, and know it is done before carrying on.
+        //! A render loop asking its render thread to sync is the canonical case.
+        //!
+        //! **Because the emitting thread waits, the arguments are not copied.** Queued has to copy
+        //! them -- it returns long before the slot runs -- but here the caller's frame is alive for
+        //! the whole call, so the slot receives references to the originals. A large argument is
+        //! therefore *cheaper* through BlockingQueued than through Queued, which is the opposite of
+        //! what the name suggests.
+        //!
+        //! **Two divergences from Qt, both deliberate.**
+        //!
+        //! Qt deadlocks when the receiver is already on the emitting thread, and asserts in a debug
+        //! build to say so. This calls the slot inline instead. The postcondition a caller asked
+        //! for is "the slot has run by the time emit() returns", and running it here satisfies that
+        //! exactly; deadlocking to punish a caller whose objects happen to share a thread is a
+        //! worse answer than the obvious one, and Auto already resolves the same way.
+        //!
+        //! Qt hangs if the receiver's thread ends while the emitter waits. This does not: the
+        //! call is settled when the event carrying it is destroyed, however it is destroyed, so a
+        //! receiver deleted mid-flight or a loop torn down with the event still queued releases
+        //! the waiter rather than stranding it.
+        //!
+        //! **It is still the easiest way to deadlock two threads.** Two objects on different
+        //! threads that each block on the other will both wait forever, and nothing here can
+        //! detect that. Reach for Queued and a reply signal unless the waiting is the point.
+        BlockingQueued
     };
 
     //! Selects a non-const overload of a member function by its argument types.

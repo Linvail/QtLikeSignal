@@ -10,8 +10,8 @@
 //! indirectly, and a signal that broke one of them would show up as a puzzling failure three
 //! layers away. These tests aim at the guarantees directly.
 //!
-//! Four of them matter, and they are the four ForAI/mission-signal.md identified as the reason
-//! replacing boost::signals2 was delicate. Each one fails silently rather than at compile time.
+//! Four of them matter, and they are the four that made replacing boost::signals2 delicate.
+//! Each one fails silently rather than at compile time.
 
 #include "QtLikeSignal-test-types.hpp"
 

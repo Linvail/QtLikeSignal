@@ -102,7 +102,7 @@ namespace QtLikeSignalGui
 
         //! The application id to report to the compositor. **Wayland only.**
         //!
-        //! A reverse-DNS name such as "com.garmin.myapp". Compositors use it to match a window to
+        //! A reverse-DNS name such as "com.example.myapp". Compositors use it to match a window to
         //! its desktop entry, which is what decides the icon and how the window is grouped in a
         //! task switcher. Empty means none is set, which is legal and merely leaves the window
         //! unmatched. Ignored on every other platform.
@@ -378,6 +378,20 @@ namespace QtLikeSignalGui
             return mFocusChanged.view();
         }
 
+        //! Emitted when a menu item is chosen, with the command id it was appended with.
+        //!
+        //! **Win32 only**, and deliberately so: it is the other half of setMenu(), which is itself
+        //! Win32 only because Wayland has no server-side menus and X11 draws them in the client.
+        //! A menu attached with setMenu() would otherwise be a menu nothing could react to.
+        //!
+        //! There is no menu model here, no actions and no shortcuts -- the id is whatever was
+        //! passed to AppendMenu(), passed straight back. That is the whole of the feature, and
+        //! matching it to a command is the application's.
+        QtLikeSignal::SignalView<int>& getMenuCommand() const
+        {
+            return mMenuCommand.view();
+        }
+
     private:
         Window
             (
@@ -426,6 +440,7 @@ namespace QtLikeSignalGui
         QtLikeSignal::Signal<> mExposed;                       //!< See getExposed().
         QtLikeSignal::Signal<> mCloseRequested;                //!< See getCloseRequested().
         QtLikeSignal::Signal<bool> mFocusChanged;              //!< See getFocusChanged().
+        QtLikeSignal::Signal<int> mMenuCommand;                //!< See getMenuCommand().
 
         //! Constructs windows and writes back the state only the native side knows.
         friend class PlatformIntegration;

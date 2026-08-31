@@ -20,7 +20,7 @@ def configure_win_msvc_common(ctx, env_name):
             # waf scans includes with its own preprocessor emulator, which knows only the macros in
             # DEFINES. A file guarded by `#if defined( _WIN32 )` therefore looked empty to it: no
             # includes were recorded, so nothing rebuilt the translation unit when a header it
-            # actually depends on changed. QtMimic-test-eventdispatcher-win32.cpp is guarded that
+            # actually depends on changed. QtLikeSignal-test-eventdispatcher-win32.cpp is guarded that
             # way in its entirety, and went stale twice -- once silently, because the call it had
             # gone stale on was virtual and resolved through a vtable slot rather than a symbol the
             # linker could reject.
@@ -42,6 +42,20 @@ def configure_win_msvc_common(ctx, env_name):
             "/std:c++17",
             "/permissive-",  # Enforce standard conformance.
             "/utf-8",  # Force UTF-8 source file encoding.
+            # Report __cplusplus as the standard actually being compiled. MSVC leaves it at
+            # 199711L whatever /std: says, for the benefit of code that branched on it before
+            # C++11 and was never revisited, and /permissive- does not change that.
+            #
+            # The project reads the macro itself. Object::connect()'s overload for lambdas guards
+            # its is_invocable_v static_assert with `#if __cplusplus >= 201703L`, so on MSVC that
+            # check compiled to nothing: a callable whose arguments did not match the signal was
+            # diagnosed on Linux and accepted here, to fail later and less legibly. Global.hpp
+            # spells the same test with a `defined( _MSVC_LANG )` arm and was unaffected, which is
+            # the workaround this flag makes unnecessary rather than a second way of writing it.
+            #
+            # Qt needs the flag too -- qcompilerdetection.h refuses to compile without it -- so
+            # src/perf's benchmark no longer carries it as a local flag of its own.
+            "/Zc:__cplusplus",
             "/W4",  # Warning level 4.
             # C4834: discarding the return value of a [[nodiscard]] function. Promoted to an
             # error rather than left at /W4, and promoted on its own rather than by way of /WX.

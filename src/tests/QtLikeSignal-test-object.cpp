@@ -1117,9 +1117,9 @@ static void waitForOneDelivery
 }
 
 // =================================================================================================
-// Tests originating in QtMimic's object suite.
+// Tests that originated in a second, independently written object suite.
 //
-// The two suites were written independently and shared not one test name, so this is the union
+// The two suites shared not one test name, so this is the union
 // rather than a reconciliation: nothing was dropped from either side on a judgment that some other
 // test "already covers it". Several of these do overlap a test above -- DirectConnectionSameThread
 // with DirectSignalSlotConnection, for instance -- and pruning the genuine duplicates is a separate

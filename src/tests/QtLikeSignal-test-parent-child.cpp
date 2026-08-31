@@ -3,15 +3,11 @@
 
 //! @file
 //!
-//! GoogleTest suite for QtLikeSignal::Object's parent-child relationship -- mission.txt stage 5.5.
+//! GoogleTest suite for QtLikeSignal::Object's parent-child relationship.
 //!
-//! Step 1 of the plan in ForAI/mission-parent-child-relationship.md establishes the links and keeps
-//! them correct, but does **not** yet make a parent own its children: a destroyed parent orphans
-//! them. The ownership tests arrive with step 2, and these must keep passing when they do.
-//!
-//! Deliberately parallel to what QtLikeSignal's QtLikeSignal-test-parent-child.cpp will be -- same tests,
-//! same order, same names -- so the two can be diffed against each other once the port happens.
-//! See history/TEST-UNIFICATION-PLAN-20260810.md.
+//! These cover the links and keep them correct. They predate a parent owning its children: at the
+//! time they were written a destroyed parent orphaned them, and the ownership tests arrived
+//! afterwards. These must keep passing alongside those.
 
 #include "gtest/gtest.h"
 #include "QtLikeSignal-test-types.hpp"

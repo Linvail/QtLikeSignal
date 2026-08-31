@@ -18,11 +18,13 @@ and the submodule that used to bootstrap them is gone.
 | `src/QtLikeSignal/` | the library -- event loop, threads, timers, signals |
 | `src/QtLikeSignalGui/` | windows and input over it, one backend per window system |
 | `src/tests/` | the correctness suite (GoogleTest), one binary covering both libraries |
+| `src/demo/` | demo programs, one per window system |
+| `src/perf/` | the benchmarks and the regression guards |
 | `tools/` | the waf tools: toolchains, sanitizers, the Wayland scanner rule |
 | `submodules/external/` | waf and googletest, as submodules |
 
 Each part under `src/` has its own wscript beside its own sources; `src/wscript` recurses into all
-three.
+five.
 
 The GUI tests live in the same binary as the rest rather than in one of their own, because most of
 what they cover -- the input types, platform selection, the null-window guards -- is portable and
@@ -69,12 +71,23 @@ build, and `--toolchain` to pick a specific one (`--toolchain=?` lists them):
 
 ### What you get
 
-One binary, at `install/Tests/<toolchain>/<mode>/usr/bin/`:
+Everything lands in `install/Tests/<toolchain>/<mode>/usr/bin/`. The test suite is always built:
 
 ```
 install/Tests/linux64-clang/debug/usr/bin/QtLikeSignal-test
 install/Tests/win64-msvc/debug/usr/bin/QtLikeSignal-test.exe
 ```
+
+The benchmarks come with it, as `QtLikeSignal-Performance-Tests`. Its own numbers always build; the
+Qt 6 and boost::signals2 comparisons printed beside them are added only where those libraries are
+found, and skipped with a message naming where the build looked when they are not.
+
+The demo programs are built for whatever window system the target has -- `QtLikeSignal-Demo-X11`,
+`QtLikeSignalGui-Demo-X11` and `QtLikeSignalGui-Demo-Wayland` on Linux, `QtLikeSignal-Demo-Windows`
+and `QtLikeSignalGui-Demo` on Windows -- and skipped with a message where the headers are missing.
+The `QtLikeSignalGui-Demo-*` ones are written against the library and own no event loop; the
+`QtLikeSignal-Demo-*` ones own their window and their window system and hand the connection over,
+which is the position a program with an existing toolkit is in.
 
 ### Build release as well as debug before trusting a result
 

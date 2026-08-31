@@ -81,6 +81,8 @@ namespace QtLikeSignalGui
     class PlatformIntegrationWayland : public PlatformIntegration
     {
     public:
+        static bool isAvailable();
+
         PlatformIntegrationWayland();
 
         virtual ~PlatformIntegrationWayland() override;

@@ -205,8 +205,8 @@ namespace QtLikeSignal
         // Qt does this last instead (qobject.cpp:1185), and the reason is specific: ~QObject emits
         // destroyed(this) near the top, and a handler may still ask the dying object for its
         // parent, so the link has to outlive that emission. We have no destroyed() signal -- see
-        // D8 in ForAI/mission-parent-child-relationship.md, where the decision not to add one is
-        // recorded together with this dependency on it. With no such consumer, unlinking first is
+        // the decision not to add one was taken deliberately, together with this dependency on
+        // it. With no such consumer, unlinking first is
         // strictly better: it shrinks the window in which a findChild() from some handler can hand
         // back an object that is already half destroyed, which is a weakness Qt documents and
         // lives with rather than one we have to inherit.
@@ -278,7 +278,7 @@ namespace QtLikeSignal
         // every thread, so running it unconditionally made destroying an unrelated Object cost
         // 24 us against a backlog of 4000 -- 324x the 75 ns it costs otherwise, and worse as
         // unrelated work queues up elsewhere. Most objects never call callLater() at all, and one
-        // flag takes all of them out of that path. See PERFORMANCE-20260813.md (P1).
+        // flag takes all of them out of that path.
         //
         // The flag is only ever set, never cleared: an object that used the feature once keeps
         // paying the scan, which is the honest trade. Making it exact would mean counting entries
@@ -1311,8 +1311,8 @@ namespace QtLikeSignal
         if( activeType == ConnectionType::Queued )
         {
             // Moved, not copied: aSlot is a by-value parameter and is dead after this line, and
-            // MetaCallEvent's constructor also takes by value and moves, so copying here would buy a
-            // second heap allocation on every queued emit for nothing.
+            // MetaCallEvent::create() moves it into the event's own block, so copying here would
+            // buy a second heap allocation on every queued emit for nothing.
             return dispatchMetaCallTo( aTarget->threadData(), aTarget, std::move( aSlot ) );
         }
 
@@ -1320,13 +1320,14 @@ namespace QtLikeSignal
         return true;
     }
 
-    //! Dispatches a metacall to an explicitly named thread, ignoring the receiver's affinity.
+    //! Queues, parks or discards a metacall event on an explicitly named thread.
     //!
-    //! The entry point for a caller that knows which thread it means rather than inferring it from
-    //! an Object. Thread::post() needs exactly that: it targets the thread's *own* queue, which is
-    //! not the same as the queue the Thread object happens to live in -- a Thread is constructed on
-    //! one thread and then runs on another, so routing post() through its Object affinity would
-    //! deliver to whoever created it until its loop started and re-pointed the affinity at itself.
+    //! Everything dispatchMetaCallTo() does that does not depend on the callable's type, split out
+    //! so that only the allocation is a template. dispatchMetaCallTo() has already rejected a null
+    //! @p aData, so reaching here means there is a thread to aim at.
+    //!
+    //! Takes ownership of @p aEvent on every path: it is handed to the dispatcher, parked, or
+    //! deleted here.
     //!
     //! Thread-safe. @p aReceiver is not dereferenced *by this function*: it is handed to postEvent()
     //! purely as the key that removeEventsForReceiver() later matches on. It is dereferenced
@@ -1335,20 +1336,15 @@ namespace QtLikeSignal
     //! removeEventsForReceiver() and deletes every event still queued for the object before it goes
     //! away.
     //!
-    //! Returns true if the call was queued; false if @p aData is null or its thread has no
-    //! dispatcher, in which case the call is dropped.
-    bool Object::dispatchMetaCallTo
+    //! Returns true if the call was queued; false if the thread has no dispatcher, in which case
+    //! the call is dropped.
+    bool Object::postMetaCall
         (
-        ThreadData* aData,  //!< Thread to deliver on; null means nowhere.
-        Object* aReceiver,                          //!< Receiver; the queue key here.
-        std::function<void()> aSlot                 //!< Callback function.
+        ThreadData* aData,   //!< Thread to deliver on; never null, checked by the caller.
+        Object* aReceiver,   //!< Receiver; the queue key here.
+        MetaCallEvent* aEvent                       //!< The built event; owned from here on.
         )
     {
-        if( !aData )
-        {
-            return false;
-        }
-
         // A thread that is running but has not installed a dispatcher yet is in the window between
         // start() -- which publishes isThreadRunning() before the OS thread exists -- and run()
         // creating the dispatcher on that new thread. A call posted into that window used to be
@@ -1366,11 +1362,6 @@ namespace QtLikeSignal
         // deleteLater() takes its own separate path to avoid.
         const bool threadIsComingUp = aData->isThreadRunning();
 
-        // Moved, not copied: aSlot is a by-value parameter and is dead after this line, and
-        // MetaCallEvent's constructor also takes by value and moves, so copying here bought a
-        // second heap allocation on every queued emit for nothing.
-        auto* event = new MetaCallEvent( std::move( aSlot ) );
-
         // Set before the event is handed anywhere, parked or queued, because it is what tells
         // ~Object() that this receiver may have work to strip -- and the strip covers the parked
         // list as well as the dispatcher's queue.
@@ -1383,19 +1374,19 @@ namespace QtLikeSignal
         {
             // Takes ownership of the event only when it parks; a dispatcher that appeared while we
             // were getting here is handed back instead, and then the post below is the normal path.
-            if( auto disp = aData->dispatcherOrPark( aReceiver, event ) )
+            if( auto disp = aData->dispatcherOrPark( aReceiver, aEvent ) )
             {
-                return disp->postEvent( aReceiver, static_cast<Event*>( event ) );
+                return disp->postEvent( aReceiver, static_cast<Event*>( aEvent ) );
             }
             return true;
         }
 
         if( auto disp = aData->dispatcher() )
         {
-            return disp->postEvent( aReceiver, static_cast<Event*>( event ) );
+            return disp->postEvent( aReceiver, static_cast<Event*>( aEvent ) );
         }
 
-        delete event;
+        delete aEvent;
         return false;
     }
 

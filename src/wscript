@@ -5,15 +5,16 @@ def build(bld):
     """
     Build QtLikeSignal and everything that sits beside it.
 
-    Three parts, each with its own wscript next to its own sources, mirroring the shape of src/ so
-    that a file has the same neighbours in both trees. That parallel is the whole point: the two
-    libraries are diffed against each other, and a diff is only readable when the things being
-    compared sit in the same relative places.
+    Five parts, each with its own wscript next to its own sources, so that no build script globs
+    into a directory it does not own and every source list is written in local names.
 
-    This file does not mirror src/wscript, and cannot -- src/ also holds the demo programs, the
-    benchmarks and the render pipeline, none of which have a QtLikeSignal counterpart. Only the
-    library, the GUI layer over it and the test suite are ported.
+    Read in groups: the two libraries first -- QtLikeSignal, and QtLikeSignalGui over it -- then the
+    three things that exercise them (tests, demo, perf). That grouping is for whoever reads this
+    list, not for waf, which resolves a target's "use" wherever it was declared and would build
+    these in any order.
     """
     bld.recurse("QtLikeSignal")
     bld.recurse("QtLikeSignalGui")
     bld.recurse("tests")
+    bld.recurse("demo")
+    bld.recurse("perf")

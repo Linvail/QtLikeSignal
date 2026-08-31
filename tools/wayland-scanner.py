@@ -1,4 +1,5 @@
-# Copyright 2026 by Garmin Ltd. or its subsidiaries.
+# SPDX-FileCopyrightText: 2026 Evan
+# SPDX-License-Identifier: MIT
 
 """
 Generate the C for a Wayland protocol, as a build task rather than as a side effect.

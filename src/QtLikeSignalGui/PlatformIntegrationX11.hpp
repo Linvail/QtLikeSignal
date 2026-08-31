@@ -78,6 +78,8 @@ namespace QtLikeSignalGui
     class PlatformIntegrationX11 : public PlatformIntegration
     {
     public:
+        static bool isAvailable();
+
         PlatformIntegrationX11();
 
         virtual ~PlatformIntegrationX11() override;

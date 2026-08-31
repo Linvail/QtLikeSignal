@@ -320,6 +320,54 @@ namespace QtLikeSignal
         return dispatchMetaCallTo( mData.get(), this, std::move( aTask ) );
     }
 
+    //! Runs a task on this thread's event loop and blocks the caller until it has finished.
+    //!
+    //! Everything post() does, plus the wait. The task goes through the same queue, MetaCallEvent
+    //! and lifetime handling as every other queued call; what is added is a latch the task's own
+    //! callable settles when it is destroyed, so the caller is released whether the task ran, its
+    //! receiver went away, or the loop was torn down with the event still in it. Thread-safe.
+    //!
+    //! Run inline when the caller is already this thread. Queueing it and waiting would be a
+    //! deadlock against ourselves: the loop that would run the task is the one blocked in here.
+    //! Qt asserts and hangs in the same situation; this does the obvious thing instead, and the
+    //! caller's postcondition -- the task has finished -- holds either way. Note the divergence
+    //! from post(), which is deferred *always*, including from this thread. post() promises
+    //! ordering behind whatever is already queued; this one promises completion, and the two want
+    //! opposite answers here.
+    //!
+    //! @return true if the task ran; false if it was refused or discarded undelivered.
+    bool Thread::invokeAndWait
+        (
+        std::function<void()> aTask  //!< The callable to run. Ignored (returns false) if empty.
+        )
+    {
+        if( !aTask || mData == nullptr || mData->thread() == nullptr )
+        {
+            return false;
+        }
+
+        if( isCurrentThread( mData.get() ) )
+        {
+            aTask();
+            return true;
+        }
+
+        auto blockingCall = std::make_shared<Private::BlockingCall>();
+
+        if( !dispatchMetaCallTo( mData.get(), this,
+            [task = std::move( aTask ),
+            guard = Private::BlockingCallGuard( blockingCall )]() mutable
+            {
+                task();
+                guard.markRan();
+            } ) )
+        {
+            return false;
+        }
+
+        return blockingCall->wait();
+    }
+
     //! Runs one pass of this thread's event loop, then returns.
     //!
     //! For a thread that has its own native loop and therefore never calls exec(): call this from

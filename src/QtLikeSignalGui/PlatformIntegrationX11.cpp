@@ -490,8 +490,8 @@ namespace QtLikeSignalGui
 
             if( chosen == nullptr || count == 0 )
             {
-                std::fprintf( stderr,
-                    "QtLikeSignalGui: no visual with id 0x%lx on this screen\n", aSettings.mVisualId );
+                std::fprintf( stderr, "QtLikeSignalGui: no visual with id 0x%lx on this screen\n",
+                    aSettings.mVisualId );
                 if( chosen != nullptr )
                 {
                     XFree( chosen );
@@ -702,10 +702,10 @@ namespace QtLikeSignalGui
         // is on its way out -- XDestroyWindow generates events of its own.
         mWindows.erase(
             std::remove_if( mWindows.begin(), mWindows.end(),
-                [aWindow]( const Tracked& aEntry )
-                {
-                    return aEntry.mWindow == aWindow;
-                } ),
+            [aWindow]( const Tracked& aEntry )
+            {
+                return aEntry.mWindow == aWindow;
+            } ),
             mWindows.end() );
 
         if( mDisplay != nullptr && windowId != 0 )
@@ -864,6 +864,31 @@ namespace QtLikeSignalGui
         adopted->mUpdatePending = true;
     }
 
+    //! Reports whether there is an X server this process can actually reach.
+    //!
+    //! **Opens a connection and closes it, rather than reading DISPLAY.** A set variable says only
+    //! that someone intended an X session, not that the server is listening: it survives into a
+    //! console login, points at a server that has since exited, and is inherited by a process whose
+    //! session was never X at all. Connecting is the same question the backend will ask a moment
+    //! later, so an answer here cannot disagree with what createWindow() finds.
+    //!
+    //! Silent on failure, unlike ensureOwnDisplay(). This is a question being asked, and "no" is
+    //! one of the two expected answers; the diagnostic belongs to the caller that had already
+    //! decided X11 was the platform.
+    //!
+    //! @return true if a connection was opened.
+    bool PlatformIntegrationX11::isAvailable()
+    {
+        Display* const display = XOpenDisplay( nullptr );
+        if( display == nullptr )
+        {
+            return false;
+        }
+
+        XCloseDisplay( display );
+        return true;
+    }
+
     //! Opens a connection of this backend's own, for createWindow() and nativeDisplay().
     //!
     //! Only ever called when there is none: a connection handed in by adoptWindow() is used as it
@@ -910,7 +935,8 @@ namespace QtLikeSignalGui
             mDeleteWindowAtom = XInternAtom( display, "WM_DELETE_WINDOW", False );
         }
 
-        const std::shared_ptr<QtLikeSignal::EventDispatcherLinux> dispatcher = currentLinuxDispatcher();
+        const std::shared_ptr<QtLikeSignal::EventDispatcherLinux> dispatcher =
+            currentLinuxDispatcher();
         if( !dispatcher )
         {
             std::fprintf( stderr,
@@ -955,7 +981,8 @@ namespace QtLikeSignalGui
         // synchronous: the callback will not run again, not even for a readiness the current poll()
         // round has already observed. That is what makes it safe to free everything the callback
         // touches immediately afterwards.
-        const std::shared_ptr<QtLikeSignal::EventDispatcherLinux> dispatcher = currentLinuxDispatcher();
+        const std::shared_ptr<QtLikeSignal::EventDispatcherLinux> dispatcher =
+            currentLinuxDispatcher();
         if( dispatcher )
         {
             dispatcher->unregisterEventSource( mConnectionFd );

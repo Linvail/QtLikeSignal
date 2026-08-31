@@ -618,6 +618,21 @@ namespace QtLikeSignalGui
                 return 0;
             }
 
+            case WM_COMMAND:
+            {
+                // A menu item, not a control notification. Controls send WM_COMMAND too, and tell
+                // themselves apart by a non-null lParam holding their window handle; this library
+                // creates no controls, but a caller that adds one should still see its
+                // notification reach DefWindowProc rather than be reported as a menu choice.
+                if( aLParam == 0 && HIWORD( aWParam ) == 0 )
+                {
+                    WindowSystemInterface::handleMenuCommand( self,
+                        static_cast<int>( LOWORD( aWParam ) ) );
+                    return 0;
+                }
+                break;
+            }
+
             case WM_SETFOCUS:
                 WindowSystemInterface::handleFocusChange( self, true );
                 return 0;
@@ -720,7 +735,8 @@ namespace QtLikeSignalGui
 
         if( RegisterClass( &windowClass ) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS )
         {
-            std::fprintf( stderr, "QtLikeSignalGui: RegisterClass() failed (%lu)\n", GetLastError() );
+            std::fprintf( stderr, "QtLikeSignalGui: RegisterClass() failed (%lu)\n",
+                GetLastError() );
             return false;
         }
 
@@ -775,7 +791,8 @@ namespace QtLikeSignalGui
 
         if( handle == nullptr )
         {
-            std::fprintf( stderr, "QtLikeSignalGui: CreateWindowEx() failed (%lu)\n", GetLastError() );
+            std::fprintf( stderr, "QtLikeSignalGui: CreateWindowEx() failed (%lu)\n",
+                GetLastError() );
             return nullptr;
         }
 

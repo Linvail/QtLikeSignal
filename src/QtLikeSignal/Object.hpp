@@ -24,6 +24,7 @@
 #ifndef QT_LIKE_SIGNAL_OBJECT_HPP
 #define QT_LIKE_SIGNAL_OBJECT_HPP
 
+#include "QtLikeSignal/BlockingCall.hpp"
 #include "QtLikeSignal/Event.hpp"
 #include "QtLikeSignal/Global.hpp"
 #include "QtLikeSignal/ThreadData.hpp"
@@ -255,7 +256,6 @@ namespace QtLikeSignal
         //!     destructor, so attaching to it would leave this object linked into storage that is
         //!     about to go away.
         //!
-        //! See ForAI/mission-parent-child-relationship.md.
         bool setParent
             (
             Object* aParent
@@ -667,7 +667,7 @@ namespace QtLikeSignal
         {
             #if __cplusplus >= 201703L
                 static_assert( std::is_invocable_v<Func, Args...>,
-                "The provided lambda or callable does not match the Signal's arguments." );
+                    "The provided lambda or callable does not match the Signal's arguments." );
             #endif
 
             return connectImpl( aSignal, aContext, std::forward<Func>( aSlot ), aType );
@@ -938,12 +938,42 @@ namespace QtLikeSignal
         //! Thread object happens to live in -- a Thread is constructed on one thread and then runs on
         //! another, so routing post() through its Object affinity would deliver to whoever created it
         //! until its loop started and re-pointed the affinity at itself.
+        //!
+        //! A template purely so the concrete callable type survives as far as the allocation:
+        //! MetaCallEvent::create() sizes one block to hold the event and the callable together,
+        //! which it cannot do once the type has been erased into a std::function. Everything that
+        //! is not the allocation stays in postMetaCall() below, which is not a template, so this
+        //! costs one small instantiation per connection signature rather than a copy of the parking
+        //! and dispatcher-resolution logic.
+        //!
+        //! The null check happens here rather than in postMetaCall() so that a call with nowhere to
+        //! go allocates nothing at all.
+        template <typename Callable>
+        static bool dispatchMetaCallTo
+            (
+            ThreadData* aData,      //!< Thread to deliver on; null means nowhere.
+            Object* aReceiver,      //!< Receiver; the queue key.
+            Callable&& aSlot        //!< Callback, of any callable type.
+            )
+        {
+            if( !aData )
+            {
+                return false;
+            }
+
+            return postMetaCall( aData, aReceiver,
+                MetaCallEvent::create( std::forward<Callable>( aSlot ) ) );
+        }
+
+        //! Queues, parks or discards an already-built metacall event. Takes ownership of @p aEvent.
+        //!
+        //! Everything dispatchMetaCallTo() does that does not depend on the callable's type.
         static bool
-        dispatchMetaCallTo
+        postMetaCall
             (
             ThreadData* aData,
             Object* aReceiver,
-            std::function<void()> aSlot
+            MetaCallEvent* aEvent
             );
 
         //! The one body shared by all ten connect() overloads.
@@ -1032,10 +1062,53 @@ namespace QtLikeSignal
                         return;
                     }
 
-                    if( aType == ConnectionType::Auto && isCurrentThread( ctxData ) )
+                    if( isCurrentThread( ctxData )
+                        && ( aType == ConnectionType::Auto
+                        || aType == ConnectionType::BlockingQueued ) )
                     {
-                        // Already on the receiver's thread: deliver inline, like Qt::AutoConnection.
+                        // Already on the receiver's thread: deliver inline, like
+                        // Qt::AutoConnection. BlockingQueued takes this branch too, where Qt
+                        // instead deadlocks and asserts -- see ConnectionType::BlockingQueued for
+                        // why running it is the better answer. Either way the slot has run by the
+                        // time emit() returns, which is all the caller was promised.
                         slot( aArgs ... );
+                        return;
+                    }
+
+                    if( aType == ConnectionType::BlockingQueued )
+                    {
+                        // The emitting thread waits here until the slot has finished, so nothing
+                        // the caller owns has to be copied to outlive the call: the argument pack
+                        // goes over as a tuple of references into a frame that cannot return until
+                        // the receiving thread is done with it. Qt passes the original arguments
+                        // across for the same reason.
+                        //
+                        // The guard is what settles the latch, and it does it from its destructor
+                        // rather than after the call, so a receiver destroyed before the loop
+                        // reaches this event -- or a loop torn down with the event still in it --
+                        // wakes the waiter instead of stranding it. See BlockingCallGuard.
+                        auto blockingCall = std::make_shared<Private::BlockingCall>();
+
+                        const bool queued = dispatchMetaCallTo( ctxData, aContext,
+                            [ctxAffinity, slot,
+                            guard = Private::BlockingCallGuard( blockingCall ),
+                            argRefs = std::forward_as_tuple(
+                                std::forward<decltype( aArgs )>( aArgs )... )]() mutable
+                            {
+                                if( ctxAffinity->isObjectAlive() )
+                                {
+                                    std::apply( slot, argRefs );
+                                    guard.markRan();
+                                }
+                            } );
+
+                        // Nothing was queued, so nothing will settle the latch from the other side
+                        // -- the closure died with the refusal and settled it already. Waiting
+                        // would return immediately, but not waiting says so more plainly.
+                        if( queued )
+                        {
+                            static_cast<void>( blockingCall->wait() );
+                        }
                         return;
                     }
 
@@ -1047,10 +1120,10 @@ namespace QtLikeSignal
                     // has no dispatcher the invocation is dropped, as Qt leaves events undelivered
                     // once the thread is gone.
                     //
-                    // The tuple lives in the closure itself rather than behind a make_shared box:
-                    // dispatchMetaCallTo() takes the std::function by value and moves it into the
-                    // MetaCallEvent, so the tuple is built once and never copied, and the second
-                    // heap allocation the box cost is gone.
+                    // The tuple lives in the closure itself rather than behind a make_shared box,
+                    // and the closure lives in the MetaCallEvent's own allocation rather than
+                    // behind a std::function, so the whole queued call is one heap block and the
+                    // tuple is built once and never copied.
                     dispatchMetaCallTo( ctxData, aContext,
                         [ctxAffinity, slot,
                         argTuple = std::make_tuple( std::forward<decltype( aArgs )>( aArgs )... )]()
@@ -1067,15 +1140,19 @@ namespace QtLikeSignal
             // threw the first away.
             // The receiver and its life token go into the connection node, so ending the connection
             // prunes the receiver's incoming list in the same step, whichever route ends it.
-            Connection handle = aSignal.connect( std::move( wrapper ), aContext, ctxAffinity );
+            // ctxAffinity is moved for the same reason the wrapper is: connect() takes it by value,
+            // this is its last use, and copying a shared_ptr costs an atomic increment here and a
+            // matching decrement when the local dies, which was measured and is not free.
+            Connection handle = aSignal.connect( std::move( wrapper ), aContext,
+                std::move( ctxAffinity ) );
 
             // Links the node into aContext's incoming list, and does nothing if a concurrent
             // disconnectAll() unlinked the connection while we were between the two lines. Both this
             // and the prune take aContext->mIncomingMutex, so one of the two orders always holds and
             // nothing is left linked for an unlink that already ran.
             // The Cleanup token this replaced got the same result from its own lifetime, and needed
-            // a paragraph to say why; see R29 in history/OPEN-RISKS-20260813.md for the lock that was
-            // added for a race a TSan probe then failed to reproduce, and reverted.
+            // a paragraph to say why. A lock was once added here for a race a TSan probe then
+            // failed to reproduce, and was reverted.
             handle.registerWithReceiver();
             return handle;
         }
@@ -1188,7 +1265,7 @@ namespace QtLikeSignal
         //! Intrusive: the list is threaded through the connection nodes themselves, so an incoming
         //! connection costs no allocation here and both linking and unlinking are O(1). It was a
         //! std::vector<Connection>, which cost a block per receiver and made unlinking a linear
-        //! scan -- see PERFORMANCE-20260813.md (P10) for the block, and (P7) for the scan.
+        //! scan. Both were measured before the list became intrusive.
         Private::ConnectionNode* mIncomingHead { nullptr };
 
         //! The lock guarding this object's incoming-connection list.
@@ -1198,7 +1275,7 @@ namespace QtLikeSignal
         //! the former carries an ABI-frozen structure supporting timed and recursive locking that
         //! nothing here asks for. libstdc++ is the other way round -- std::mutex 40,
         //! std::shared_mutex 56, a pthread_rwlock_t -- so there it stays std::mutex. Measured, not
-        //! assumed; see src/OBJECT-SIZE-REPORT.md.
+        //! assumed: the two sizes were read off both toolchains before the alias was written.
         //!
         //! Only the exclusive half of the interface is ever used -- lock(), try_lock(), unlock() --
         //! which both types provide with identical semantics under std::lock_guard. Nothing takes a
@@ -1213,7 +1290,7 @@ namespace QtLikeSignal
         //! them a real defect. Doing it here would mean writing the lock *and* its
         //! __tsan_mutex_pre_lock annotations, and an annotation that is subtly wrong hides real
         //! races rather than merely reporting fake ones. This alias keeps that a one-line change if
-        //! the bytes ever justify the risk. See ForAI/mission-object-size.md.
+        //! the bytes ever justify the risk.
         #if defined( _MSC_VER )
             using Lock = std::shared_mutex;
         #else
@@ -1275,7 +1352,7 @@ namespace QtLikeSignal
             //! against, and that is *already* diagnosed as misuse by ~Object()'s own
             //! namesOtherRunningThread() warning; 40 bytes on every boxed object (80 on MSVC) to
             //! make one already-reported bug marginally less bad was the wrong trade. Qt guards
-            //! its equivalent list no more than this. See ForAI/mission-object-size.md.
+            //! its equivalent list no more than this.
             //!
             //! Behind a pointer for the same reason as mObjectName: 24 bytes of empty vector in
             //! every tree node, to serve the objects that run a timer, is the wrong way round.
@@ -1289,7 +1366,7 @@ namespace QtLikeSignal
             //! thread the parent and all its children live in. QObjectData::parent and
             //! QObjectData::children are unguarded for exactly the same reason -- Qt carries no
             //! per-object mutex at all. A std::mutex here would be 40 bytes to lock something no
-            //! two threads may legally reach at once. See ForAI/mission-object-size.md.
+            //! two threads may legally reach at once.
             Object* mParent { nullptr };
 
             //! Head of this object's child list, or null when it has none.

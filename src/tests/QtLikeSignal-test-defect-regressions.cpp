@@ -861,8 +861,8 @@ TEST( ObjectDefectTest, CallLaterRecoversAfterFirstDispatchFails )
 //! here is *not* what demonstrates the fix. The real signal came from ThreadSanitizer, which
 //! reported this race (as ~EventDispatcherDefault against Object::startTimer /
 //! registerTimer / Object::event / Thread::exec) on the old code while this very suite passed.
-//! Build with -fsanitize=thread to get that signal; see OPEN-RISKS for the exact command. Under a
-//! plain build this only checks the scenario runs to completion without crashing.
+//! Build with -fsanitize=thread to get that signal. Under a plain build this only checks the
+//! scenario runs to completion without crashing.
 TEST( ThreadDefectTest, DispatcherUseDuringThreadShutdownStress )
 {
     constexpr int kTrials = 40;
@@ -1291,16 +1291,16 @@ TEST( ObjectDefectTest, QueuedCallsToAnOrphanedObjectAreDropped )
     #else
 
         Object* orphan = makeOrphanedObject( []()
-        {
-            return new Object();
-        } );
+            {
+                return new Object();
+            } );
         ASSERT_NE( orphan, nullptr );
         ASSERT_EQ( orphan->thread(), nullptr );
 
         Signal<> sig;
         Object::connect( sig, orphan, []()
-        {
-        }, ConnectionType::Queued );
+            {
+            }, ConnectionType::Queued );
 
         constexpr int kRounds = 4;
         constexpr int kEmitsPerRound = 200000;
@@ -1413,7 +1413,7 @@ TEST( EventDispatcherDefaultDefectTest, LatePassDoesNotShiftARepeatingTimersCade
     std::this_thread::sleep_for( std::chrono::milliseconds( kLatePassMs ) );
 
     dispatcher.processEvents(
-            AbstractEventDispatcher::ProcessEventsFlag::WaitForMoreEvents );
+        AbstractEventDispatcher::ProcessEventsFlag::WaitForMoreEvents );
     ASSERT_EQ( recorder.mFireOffsetsMs.size(), 1u )
         << "the overdue timer should fire on the first pass that services it";
 
@@ -1491,7 +1491,7 @@ TEST( EventDispatcherDefaultDefectTest, TimerKilledDuringDispatchDoesNotStillFir
     dispatcher.registerTimer( 2, 0, &recorder );
 
     dispatcher.processEvents(
-            AbstractEventDispatcher::ProcessEventsFlag::WaitForMoreEvents );
+        AbstractEventDispatcher::ProcessEventsFlag::WaitForMoreEvents );
 
     EXPECT_EQ( recorder.mFiredIds.size(), 1u )
         << "timer 2 was killed from inside timer 1's handler but still fired in the same pass, "
@@ -1841,8 +1841,8 @@ TEST( EventDispatcherDefaultDefectTest, WakeCallbackMayReEnterTheDispatcherFromE
 //!
 //! The storage is atomic because this is the one member of this helper that is genuinely shared:
 //! onCall() runs on the worker, while the test's waitFor() polls the same variable from the main
-//! thread with no lock between them. As a plain Thread* that was a data race -- reported by
-//! ThreadSanitizer under linux64-clang, and filed as R33 in OPEN-RISKS-20260816.md. The tests still
+//! thread with no lock between them. As a plain Thread* that was a data race, reported by
+//! ThreadSanitizer under linux64-clang. The tests still
 //! passed, because gtest checks assertions rather than thread safety, which is exactly why the
 //! sanitizer signal on the test binaries is worth keeping clean.
 class ThreadRecordingReceiver : public Object

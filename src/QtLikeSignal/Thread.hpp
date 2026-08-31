@@ -166,7 +166,7 @@ namespace QtLikeSignal
         void processEvents
             (
             AbstractEventDispatcher::ProcessEventsFlag aFlag
-                = AbstractEventDispatcher::ProcessEventsFlag::AllEvents
+            = AbstractEventDispatcher::ProcessEventsFlag::AllEvents
             );
 
         void setWakeCallback
@@ -192,6 +192,33 @@ namespace QtLikeSignal
         //! never started, or it has already finished. A post to a thread that is *starting* is
         //! parked and delivered when its loop comes up, so that case does not refuse.
         [[nodiscard]] bool post
+            (
+            std::function<void()> aTask
+            );
+
+        //! Runs @p aTask on this thread's loop and blocks until it has finished.
+        //!
+        //! What post() is missing: post() says the task was *queued*, this says it is *done*. It is
+        //! the primitive behind ConnectionType::BlockingQueued, and is offered separately because
+        //! plenty of callers want to hand a thread some work and wait without there being a signal
+        //! anywhere in sight -- a render loop asking its render thread to sync is the usual case.
+        //!
+        //! **Returns a value by writing into the caller's own frame.** There is no templated
+        //! return type here because none is needed: the caller is blocked for the whole call, so a
+        //! local captured by reference is alive and safe to write.
+        //!
+        //! ```
+        //! int answer = 0;
+        //! const bool ran = worker.invokeAndWait( [&answer]() { answer = compute(); } );
+        //! ```
+        //!
+        //! Called from this thread itself, the task runs inline rather than deadlocking. See
+        //! ConnectionType::BlockingQueued for why that is the answer rather than an assertion.
+        //!
+        //! @return true if the task ran to completion; false if it was refused, or was discarded
+        //!         undelivered because this thread's loop ended first. **false means the task did
+        //!         not run**, so anything the caller expected it to write is untouched.
+        [[nodiscard]] bool invokeAndWait
             (
             std::function<void()> aTask
             );

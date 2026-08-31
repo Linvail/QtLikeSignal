@@ -139,6 +139,12 @@ namespace QtLikeSignalGui
             bool aGained
             );
 
+        static void handleMenuCommand
+            (
+            Window* aWindow,
+            int aCommandId
+            );
+
         static void handleWindowDestroyed
             (
             Window* aWindow

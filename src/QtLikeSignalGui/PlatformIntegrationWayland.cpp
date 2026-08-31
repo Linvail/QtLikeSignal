@@ -35,7 +35,9 @@
 #include <wayland-client.h>
 #include <wayland-cursor.h>
 
-#include <libdecor.h>
+#if defined( HAVE_LIBDECOR_0 )
+    #include <libdecor.h>
+#endif
 
 // Generated beside this file by wayland-scanner; see the wscript. xdg-shell comes from
 // wayland-protocols, ivi-application from the copy vendored under deps/.
@@ -64,10 +66,12 @@ namespace QtLikeSignalGui
         xdg_toplevel* mXdgToplevel { nullptr };   //!< Its toplevel, on the desktop shell.
         ivi_surface* mIviSurface { nullptr };     //!< Its ivi role, on the automotive shell.
 
-        libdecor* mDecor { nullptr };             //!< The decoration context, when libdecor loaded.
-        libdecor_frame* mDecorFrame { nullptr };  //!< The window's decoration frame.
-        wl_callback* mDecorReadyCallback { nullptr };   //!< Sync that reports libdecor is ready.
-        bool mDecorReady { false };               //!< Set by that sync.
+        #if defined( HAVE_LIBDECOR_0 )
+            libdecor* mDecor { nullptr };         //!< The decoration context, when libdecor loaded.
+            libdecor_frame* mDecorFrame { nullptr }; //!< The window's decoration frame.
+            wl_callback* mDecorReadyCallback { nullptr }; //!< Sync that reports libdecor is ready.
+            bool mDecorReady { false };           //!< Set by that sync.
+        #endif
 
         wl_cursor_theme* mCursorTheme { nullptr };   //!< Where the pointer image comes from.
         wl_surface* mCursorSurface { nullptr };      //!< The surface the pointer image is on.
@@ -133,6 +137,9 @@ namespace QtLikeSignalGui
             return ( value != nullptr ) ? std::string( value ) : std::string();
         }
 
+        // Only libdecor draws decorations here, so with it out of the build there is nothing for
+        // this to answer for and it would be an unused function.
+        #if defined( HAVE_LIBDECOR_0 )
         //! Returns false when the caller has asked for an undecorated window.
         //!
         //! Wayland has no server-side decoration, so a plain xdg-shell toplevel is a bare rectangle
@@ -147,6 +154,7 @@ namespace QtLikeSignalGui
         {
             return environmentValue( "QTLIKESIGNAL_WAYLAND_DECORATIONS" ) != "0";
         }
+        #endif
 
         //! Maps an evdev button code to the button this library reports.
         //!
@@ -352,8 +360,9 @@ namespace QtLikeSignalGui
         //-------------------------------------------------------------------------------------
         // libdecor
         //-------------------------------------------------------------------------------------
-
-        //! Reports a decoration error. Nothing to do but say so; the window still works undecorated.
+        #if defined( HAVE_LIBDECOR_0 )
+        //! Reports a decoration error. Nothing to do but say so; the window still works
+        //! undecorated.
         static void decorError
             (
             libdecor* aContext,
@@ -362,8 +371,8 @@ namespace QtLikeSignalGui
             )
         {
             static_cast<void>( aContext );
-            std::fprintf( stderr, "QtLikeSignalGui: libdecor error %d: %s\n", static_cast<int>( aError ),
-                aMessage );
+            std::fprintf( stderr, "QtLikeSignalGui: libdecor error %d: %s\n",
+                static_cast<int>( aError ), aMessage );
         }
 
         //! Records that libdecor has finished binding its own globals.
@@ -452,6 +461,8 @@ namespace QtLikeSignalGui
             static_cast<void>( aSeatName );
             static_cast<void>( aData );
         }
+
+        #endif
 
         //-------------------------------------------------------------------------------------
         // Seat
@@ -724,7 +735,7 @@ namespace QtLikeSignalGui
 
         //-------------------------------------------------------------------------------------
 
-                //! The seat's human-readable name. Nothing here uses it.
+        //! The seat's human-readable name. Nothing here uses it.
         static void seatName
             (
             void* aData,
@@ -1041,9 +1052,11 @@ namespace QtLikeSignalGui
         static const wl_pointer_listener kPointerListener;
         static const wl_keyboard_listener kKeyboardListener;
         static const wl_touch_listener kTouchListener;
-        static const wl_callback_listener kDecorReadyListener;
-        static libdecor_interface kDecorInterface;
-        static libdecor_frame_interface kDecorFrameInterface;
+        #if defined( HAVE_LIBDECOR_0 )
+            static const wl_callback_listener kDecorReadyListener;
+            static libdecor_interface kDecorInterface;
+            static libdecor_frame_interface kDecorFrameInterface;
+        #endif
     };
 
     const wl_registry_listener WaylandListeners::kRegistryListener =
@@ -1107,25 +1120,27 @@ namespace QtLikeSignalGui
         &WaylandListeners::touchCancel
     };
 
-    const wl_callback_listener WaylandListeners::kDecorReadyListener =
-    {
-        &WaylandListeners::decorReady
-    };
+    #if defined( HAVE_LIBDECOR_0 )
+        const wl_callback_listener WaylandListeners::kDecorReadyListener =
+        {
+            &WaylandListeners::decorReady
+        };
 
-    //! Only the error callback is named: libdecor's remaining members are reserved slots, and
-    //! leaving them out value-initialises them to null, which is what reserved means.
-    libdecor_interface WaylandListeners::kDecorInterface =
-    {
-        &WaylandListeners::decorError
-    };
+        //! Only the error callback is named: libdecor's remaining members are reserved slots, and
+        //! leaving them out value-initialises them to null, which is what reserved means.
+        libdecor_interface WaylandListeners::kDecorInterface =
+        {
+            &WaylandListeners::decorError
+        };
 
-    libdecor_frame_interface WaylandListeners::kDecorFrameInterface =
-    {
-        &WaylandListeners::decorFrameConfigure,
-        &WaylandListeners::decorFrameClose,
-        &WaylandListeners::decorFrameCommit,
-        &WaylandListeners::decorFrameDismissPopup
-    };
+        libdecor_frame_interface WaylandListeners::kDecorFrameInterface =
+        {
+            &WaylandListeners::decorFrameConfigure,
+            &WaylandListeners::decorFrameClose,
+            &WaylandListeners::decorFrameCommit,
+            &WaylandListeners::decorFrameDismissPopup
+        };
+    #endif
 
     //! Constructs the backend. Nothing is connected until a window is created.
     PlatformIntegrationWayland::PlatformIntegrationWayland()
@@ -1140,20 +1155,22 @@ namespace QtLikeSignalGui
 
         Internals& internals = *mInternals;
 
-        // Before anything is destroyed. libdecor is not finished initialising when libdecor_new()
-        // returns, and unref-ing it mid-flight is a crash inside libdecor rather than an error it
-        // reports -- which is what happened here until this call was added, on the path where a
-        // connection is opened and no window is ever created. GGL waits in the same place for the
-        // same reason.
-        waitForDecorReady();
+        #if defined( HAVE_LIBDECOR_0 )
+            // Before anything is destroyed. libdecor is not finished initialising when
+            // libdecor_new() returns, and unref-ing it mid-flight is a crash inside libdecor
+            // rather than an error it reports -- which is what happened here until this call
+            // was added, on the path where a connection is opened and no window is ever
+            // created. GGL waits in the same place for the same reason.
+            waitForDecorReady();
 
-        if( internals.mDecorReadyCallback != nullptr )
-        {
-            // Still outstanding, so the wait above gave up rather than being answered. The callback
-            // is ours and libdecor will not free it.
-            wl_callback_destroy( internals.mDecorReadyCallback );
-            internals.mDecorReadyCallback = nullptr;
-        }
+            if( internals.mDecorReadyCallback != nullptr )
+            {
+                // Still outstanding, so the wait above gave up rather than being answered.
+                // The callback is ours and libdecor will not free it.
+                wl_callback_destroy( internals.mDecorReadyCallback );
+                internals.mDecorReadyCallback = nullptr;
+            }
+        #endif
 
         if( internals.mCursorTheme != nullptr )
         {
@@ -1186,10 +1203,14 @@ namespace QtLikeSignalGui
         {
             ivi_application_destroy( internals.mIvi );
         }
-        if( internals.mDecor != nullptr )
-        {
-            libdecor_unref( internals.mDecor );
-        }
+
+        #if defined( HAVE_LIBDECOR_0 )
+            if( internals.mDecor != nullptr )
+            {
+                libdecor_unref( internals.mDecor );
+            }
+        #endif
+
         if( internals.mWmBase != nullptr )
         {
             xdg_wm_base_destroy( internals.mWmBase );
@@ -1247,6 +1268,33 @@ namespace QtLikeSignalGui
         return mInternals->mDisplay;
     }
 
+    //! Reports whether there is a compositor this process can actually reach.
+    //!
+    //! **Connects and disconnects, rather than reading WAYLAND_DISPLAY.** A set variable says only
+    //! that someone intended a Wayland session, and the socket it names may be gone; the connection
+    //! is the fact. The graphics layer's display provider has always probed this way before
+    //! choosing an EGL platform, and detection that disagreed with it would be worse than no
+    //! detection at all.
+    //!
+    //! Only the connection, not the globals: connectDisplay() is what discovers whether the
+    //! compositor offers a wl_compositor, and a session that has one but not the other is a
+    //! compositor problem to report rather than a reason to pick a different platform.
+    //!
+    //! Silent on failure. This is a question, and "no" is one of the two expected answers.
+    //!
+    //! @return true if a connection was made.
+    bool PlatformIntegrationWayland::isAvailable()
+    {
+        wl_display* const display = wl_display_connect( nullptr );
+        if( display == nullptr )
+        {
+            return false;
+        }
+
+        wl_display_disconnect( display );
+        return true;
+    }
+
     //! Connects to the compositor and binds the globals this backend needs.
     //!
     //! Two roundtrips, as GGL does: the first brings the registry's announcements, and the second
@@ -1287,24 +1335,27 @@ namespace QtLikeSignalGui
             return false;
         }
 
-        if( internals.mWmBase != nullptr && decorationsWanted() )
-        {
-            // libdecor draws the title bar and the close button. Wayland has no server-side
-            // decoration to fall back on, so without this an xdg-shell window is a bare rectangle
-            // the user cannot close. It depends on xdg_wm_base, which is why it is set up only
-            // here and not on the ivi path -- an ivi surface has no decoration by design.
-            internals.mDecor = libdecor_new( internals.mDisplay,
-                &WaylandListeners::kDecorInterface );
-
-            if( internals.mDecor != nullptr )
+        #if defined( HAVE_LIBDECOR_0 )
+            if( internals.mWmBase != nullptr && decorationsWanted() )
             {
-                libdecor_dispatch( internals.mDecor, 0 );
+                // libdecor draws the title bar and the close button. Wayland has no
+                // server-side decoration to fall back on, so without this an xdg-shell window
+                // is a bare rectangle the user cannot close. It depends on xdg_wm_base, which
+                // is why it is set up only here and not on the ivi path -- an ivi surface has
+                // no decoration by design.
+                internals.mDecor = libdecor_new( internals.mDisplay,
+                    &WaylandListeners::kDecorInterface );
 
-                internals.mDecorReadyCallback = wl_display_sync( internals.mDisplay );
-                wl_callback_add_listener( internals.mDecorReadyCallback,
-                    &WaylandListeners::kDecorReadyListener, this );
+                if( internals.mDecor != nullptr )
+                {
+                    libdecor_dispatch( internals.mDecor, 0 );
+
+                    internals.mDecorReadyCallback = wl_display_sync( internals.mDisplay );
+                    wl_callback_add_listener( internals.mDecorReadyCallback,
+                        &WaylandListeners::kDecorReadyListener, this );
+                }
             }
-        }
+        #endif
 
         if( internals.mShm != nullptr )
         {
@@ -1402,7 +1453,8 @@ namespace QtLikeSignalGui
 
             if( internals.mIviSurface == nullptr )
             {
-                std::fprintf( stderr, "QtLikeSignalGui: ivi_application_surface_create() failed\n" );
+                std::fprintf( stderr,
+                    "QtLikeSignalGui: ivi_application_surface_create() failed\n" );
                 return false;
             }
 
@@ -1414,49 +1466,54 @@ namespace QtLikeSignalGui
             return true;
         }
 
-        if( internals.mDecor != nullptr )
-        {
-            // libdecor makes the xdg objects itself, so this path must not also make them, and it
-            // cannot decorate anything until its own globals have arrived.
-            waitForDecorReady();
-
-            internals.mDecorFrame = libdecor_decorate( internals.mDecor, internals.mSurface,
-                &WaylandListeners::kDecorFrameInterface, this );
-
-            if( internals.mDecorFrame != nullptr )
+        #if defined( HAVE_LIBDECOR_0 )
+            if( internals.mDecor != nullptr )
             {
-                libdecor_state* const state = libdecor_state_new( internals.mWidth,
-                    internals.mHeight );
-                libdecor_frame_commit( internals.mDecorFrame, state, nullptr );
-                libdecor_state_free( state );
+                // libdecor makes the xdg objects itself, so this path must not also make
+                // them, and it cannot decorate anything until its own globals have arrived.
+                waitForDecorReady();
 
-                if( !internals.mAppId.empty() )
+                internals.mDecorFrame = libdecor_decorate( internals.mDecor, internals.mSurface,
+                    &WaylandListeners::kDecorFrameInterface, this );
+
+                if( internals.mDecorFrame != nullptr )
                 {
-                    libdecor_frame_set_app_id( internals.mDecorFrame, internals.mAppId.c_str() );
+                    libdecor_state* const state = libdecor_state_new( internals.mWidth,
+                        internals.mHeight );
+                    libdecor_frame_commit( internals.mDecorFrame, state, nullptr );
+                    libdecor_state_free( state );
+
+                    if( !internals.mAppId.empty() )
+                    {
+                        libdecor_frame_set_app_id( internals.mDecorFrame,
+                            internals.mAppId.c_str() );
+                    }
+                    libdecor_frame_set_title( internals.mDecorFrame, internals.mTitle.c_str() );
+
+                    // Fixed size, as GGL fixes it. The surface's size is the renderer's to
+                    // choose, and a compositor-driven resize would change it underneath a GL
+                    // context sized for the old one.
+                    libdecor_frame_set_min_content_size( internals.mDecorFrame, internals.mWidth,
+                        internals.mHeight );
+                    libdecor_frame_set_max_content_size( internals.mDecorFrame, internals.mWidth,
+                        internals.mHeight );
+                    libdecor_frame_unset_capabilities( internals.mDecorFrame,
+                        LIBDECOR_ACTION_RESIZE );
+                    libdecor_frame_unset_capabilities( internals.mDecorFrame,
+                        LIBDECOR_ACTION_FULLSCREEN );
+                    libdecor_frame_unset_capabilities( internals.mDecorFrame,
+                        LIBDECOR_ACTION_MINIMIZE );
+
+                    libdecor_frame_map( internals.mDecorFrame );
+                    wl_display_roundtrip( internals.mDisplay );
+                    return true;
                 }
-                libdecor_frame_set_title( internals.mDecorFrame, internals.mTitle.c_str() );
 
-                // Fixed size, as GGL fixes it. The surface's size is the renderer's to choose, and
-                // a compositor-driven resize would change it underneath a GL context sized for the
-                // old one.
-                libdecor_frame_set_min_content_size( internals.mDecorFrame, internals.mWidth,
-                    internals.mHeight );
-                libdecor_frame_set_max_content_size( internals.mDecorFrame, internals.mWidth,
-                    internals.mHeight );
-                libdecor_frame_unset_capabilities( internals.mDecorFrame, LIBDECOR_ACTION_RESIZE );
-                libdecor_frame_unset_capabilities( internals.mDecorFrame,
-                    LIBDECOR_ACTION_FULLSCREEN );
-                libdecor_frame_unset_capabilities( internals.mDecorFrame,
-                    LIBDECOR_ACTION_MINIMIZE );
-
-                libdecor_frame_map( internals.mDecorFrame );
-                wl_display_roundtrip( internals.mDisplay );
-                return true;
+                std::fprintf( stderr,
+                    "QtLikeSignalGui: libdecor_decorate() failed; falling back to an undecorated "
+                    "window\n" );
             }
-
-            std::fprintf( stderr,
-                "QtLikeSignalGui: libdecor_decorate() failed; falling back to an undecorated window\n" );
-        }
+        #endif
 
         if( internals.mWmBase == nullptr )
         {
@@ -1499,17 +1556,19 @@ namespace QtLikeSignalGui
         return true;
     }
 
+    #if defined( HAVE_LIBDECOR_0 )
     //! Waits until libdecor has finished binding its own globals and loading its plugin.
     //!
     //! libdecor_new() returns before either has happened, and until they have, the context can
     //! neither decorate a surface nor be torn down: libdecor_decorate() gets no decoration, and
-    //! libdecor_unref() crashes. The sync callback set up in connectDisplay() is what reports that
-    //! it is safe, and this is the wait for it.
+    //! libdecor_unref() crashes. The sync callback set up in connectDisplay() is what
+    //! reports that it is safe, and this is the wait for it.
     //!
-    //! Bounded, unlike GGL's, which loops until ready. A destructor is one of the two callers, and
-    //! a compositor that never answers would otherwise hang a program on its way out -- a worse
-    //! failure than an undecorated window. Each pass blocks in a round trip rather than spinning,
-    //! so the bound is on server replies, not on iterations of a busy loop.
+    //! Bounded, unlike GGL's, which loops until ready. A destructor is one of the two
+    //! callers, and a compositor that never answers would otherwise hang a program on its
+    //! way out -- a worse failure than an undecorated window. Each pass blocks in a round
+    //! trip rather than spinning, so the bound is on server replies, not on iterations of
+    //! a busy loop.
     void PlatformIntegrationWayland::waitForDecorReady()
     {
         Internals& internals = *mInternals;
@@ -1527,6 +1586,7 @@ namespace QtLikeSignalGui
             }
         }
     }
+    #endif
 
     //! Sets the pointer image, which on Wayland is the client's job.
     void PlatformIntegrationWayland::applyCursor()
@@ -1599,7 +1659,8 @@ namespace QtLikeSignalGui
             return true;
         }
 
-        const std::shared_ptr<QtLikeSignal::EventDispatcherLinux> dispatcher = currentLinuxDispatcher();
+        const std::shared_ptr<QtLikeSignal::EventDispatcherLinux> dispatcher =
+            currentLinuxDispatcher();
         if( !dispatcher )
         {
             std::fprintf( stderr,
@@ -1642,7 +1703,8 @@ namespace QtLikeSignalGui
         // Unregistered from the loop's own thread, so EventDispatcherLinux's contract makes the
         // call synchronous: the callback will not run again, not even for a readiness the current
         // poll() round has already observed.
-        const std::shared_ptr<QtLikeSignal::EventDispatcherLinux> dispatcher = currentLinuxDispatcher();
+        const std::shared_ptr<QtLikeSignal::EventDispatcherLinux> dispatcher =
+            currentLinuxDispatcher();
         if( dispatcher )
         {
             dispatcher->unregisterEventSource( mConnectionFd );
@@ -1683,7 +1745,8 @@ namespace QtLikeSignalGui
             {
                 if( wl_display_dispatch_pending( display ) < 0 )
                 {
-                    std::fprintf( stderr, "QtLikeSignalGui: wl_display_dispatch_pending() failed\n" );
+                    std::fprintf( stderr,
+                        "QtLikeSignalGui: wl_display_dispatch_pending() failed\n" );
                     return;
                 }
             }
@@ -1733,7 +1796,8 @@ namespace QtLikeSignalGui
             return;
         }
 
-        std::fprintf( stderr, "QtLikeSignalGui: wl_display_flush() failed (%d); quitting\n", errno );
+        std::fprintf( stderr, "QtLikeSignalGui: wl_display_flush() failed (%d); quitting\n",
+            errno );
         unregisterConnection();
         QtLikeSignal::CoreApplication::quit();
     }
@@ -1749,7 +1813,8 @@ namespace QtLikeSignalGui
             return;
         }
 
-        const std::shared_ptr<QtLikeSignal::EventDispatcherLinux> dispatcher = currentLinuxDispatcher();
+        const std::shared_ptr<QtLikeSignal::EventDispatcherLinux> dispatcher =
+            currentLinuxDispatcher();
         if( !dispatcher )
         {
             return;
@@ -1815,11 +1880,14 @@ namespace QtLikeSignalGui
 
         Internals& internals = *mInternals;
 
-        if( internals.mDecorFrame != nullptr )
-        {
-            libdecor_frame_unref( internals.mDecorFrame );
-            internals.mDecorFrame = nullptr;
-        }
+        #if defined( HAVE_LIBDECOR_0 )
+            if( internals.mDecorFrame != nullptr )
+            {
+                libdecor_frame_unref( internals.mDecorFrame );
+                internals.mDecorFrame = nullptr;
+            }
+        #endif
+
         if( internals.mXdgToplevel != nullptr )
         {
             xdg_toplevel_destroy( internals.mXdgToplevel );
@@ -1867,11 +1935,14 @@ namespace QtLikeSignalGui
         Internals& internals = *mInternals;
         internals.mTitle = aTitle;
 
-        if( internals.mDecorFrame != nullptr )
-        {
-            libdecor_frame_set_title( internals.mDecorFrame, aTitle.c_str() );
-        }
-        else if( internals.mXdgToplevel != nullptr )
+        #if defined( HAVE_LIBDECOR_0 )
+            if( internals.mDecorFrame != nullptr )
+            {
+                libdecor_frame_set_title( internals.mDecorFrame, aTitle.c_str() );
+            }
+            else
+        #endif
+        if( internals.mXdgToplevel != nullptr )
         {
             xdg_toplevel_set_title( internals.mXdgToplevel, aTitle.c_str() );
         }
@@ -1915,12 +1986,15 @@ namespace QtLikeSignalGui
 
         Internals& internals = *mInternals;
 
-        if( internals.mDecorFrame != nullptr )
-        {
-            libdecor_frame_set_min_content_size( internals.mDecorFrame, aWidth, aHeight );
-            libdecor_frame_set_max_content_size( internals.mDecorFrame, aWidth, aHeight );
-        }
-        else if( internals.mXdgToplevel != nullptr )
+        #if defined( HAVE_LIBDECOR_0 )
+            if( internals.mDecorFrame != nullptr )
+            {
+                libdecor_frame_set_min_content_size( internals.mDecorFrame, aWidth, aHeight );
+                libdecor_frame_set_max_content_size( internals.mDecorFrame, aWidth, aHeight );
+            }
+            else
+        #endif
+        if( internals.mXdgToplevel != nullptr )
         {
             xdg_toplevel_set_min_size( internals.mXdgToplevel, aWidth, aHeight );
             xdg_toplevel_set_max_size( internals.mXdgToplevel, aWidth, aHeight );

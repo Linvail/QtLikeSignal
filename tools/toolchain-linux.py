@@ -59,7 +59,7 @@ def _check_optional_packages(ctx):
       * It reaches the build as a uselib. `uselib_store="X11"` sets env.HAVE_X11 along with
         INCLUDES_X11, LIBPATH_X11 and LIB_X11, so a target writes use=["X11"] and gets all of them,
         propagated down the use chain like any other dependency. That is what removed the hand-kept
-        list of link libraries every consumer of QtMimicGui used to have to repeat.
+        list of link libraries every consumer of QtLikeSignalGui used to have to repeat.
 
     mandatory=False throughout: a missing package is a fact to record, not a reason to fail.
     """

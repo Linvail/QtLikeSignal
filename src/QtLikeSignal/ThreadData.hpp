@@ -18,7 +18,7 @@
 //! reference in a registry that is deliberately never emptied, so a raw ThreadData* is valid from
 //! any thread at any time, forever. That is what lets Affinity hold one in a plain atomic pointer
 //! instead of a shared_ptr behind a mutex -- 48 bytes off every Object, and an atomic load rather
-//! than a lock on the path every cross-thread emit takes (P2 in history/PERFORMANCE-20260813.md).
+//! than a lock on the path every cross-thread emit takes.
 //!
 //! What that costs is bounded and small: sizeof(ThreadData) plus a control block, once per Thread
 //! ever *created*, held for the life of the process. Nothing else leaks with it -- the dispatcher

@@ -73,9 +73,12 @@ def build(bld):
     # Wayland, which needs code generated from the protocol XML before it can be compiled at all.
     if bld.env.DEST_OS == "linux":
         if not bld.env.HAVE_WAYLAND_CLIENT:
+            # libdecor-0-dev is deliberately not named. The backend guards every decoration call
+            # on HAVE_LIBDECOR_0 and builds without it, so it is not what is missing here and
+            # asking for it would send someone after a package many embedded targets do not have.
             bld.build_msg(
                 "QtLikeSignalGui backend",
-                "wayland skipped (install libwayland-dev libdecor-0-dev)",
+                "wayland skipped (install libwayland-dev)",
                 color="YELLOW",
             )
         else:
