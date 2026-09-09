@@ -3,8 +3,8 @@
 
 //! @file
 //!
-//! Tests for QtLikeSignalGui: the portable input types, platform selection, and -- where a window system
-//! exists -- real windows and the signals their input arrives on.
+//! Tests for QtLikeSignalGui: the portable input types, platform selection, and -- where a window
+//! system exists -- real windows and the signals their input arrives on.
 
 #include <gtest/gtest.h>
 
@@ -337,10 +337,10 @@ TEST( GuiWindowSystemInterfaceTest, KeyModifiersFollowTheLastEvent )
 
 //! Every reporting function tolerates a null window.
 //!
-//! Not defensiveness for its own sake. A backend routes an event by looking up the window it arrived
-//! for, and a lookup that finds nothing -- an event for a window already destroyed, or for a foreign
-//! surface on Wayland -- is an ordinary outcome rather than a bug. Qt's own wl_touch handler returns
-//! early on exactly that case.
+//! Not defensiveness for its own sake. A backend routes an event by looking up the window it
+//! arrived for, and a lookup that finds nothing -- an event for a window already destroyed, or for
+//! a foreign surface on Wayland -- is an ordinary outcome rather than a bug. Qt's own wl_touch
+//! handler returns early on exactly that case.
 TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
 {
     const MouseEvent mouse;
@@ -363,6 +363,7 @@ TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
     WindowSystemInterface::handleTouchFrame( nullptr );
     WindowSystemInterface::handleTouchCancel( nullptr );
     WindowSystemInterface::handleResize( nullptr, 10, 10 );
+    WindowSystemInterface::handleDevicePixelRatioChanged( nullptr, 2.0 );
     WindowSystemInterface::handleExpose( nullptr );
     WindowSystemInterface::handleCloseRequest( nullptr );
     WindowSystemInterface::handleFocusChange( nullptr, true );
@@ -374,8 +375,8 @@ TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
 #if defined( _WIN32 )
 
     // The tests below check the library's answers against Windows' own -- GetClientRect is what a
-    // renderer would size its viewport from, so it is the authority on whether the drawable came out
-    // right. That is the one thing worth reaching past the abstraction to verify.
+    // renderer would size its viewport from, so it is the authority on whether the drawable came
+    // out right. That is the one thing worth reaching past the abstraction to verify.
     #ifndef WIN32_LEAN_AND_MEAN
         #define WIN32_LEAN_AND_MEAN
     #endif
@@ -397,8 +398,8 @@ TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
         Window* const window = application.createWindow( settings );
         ASSERT_NE( nullptr, window );
 
-        // The handle is what an external OpenGL library is handed, so it has to exist before anything
-        // is shown and without the loop having run.
+        // The handle is what an external OpenGL library is handed, so it has to exist before
+        // anything is shown and without the loop having run.
         EXPECT_NE( nullptr, window->nativeHandle() );
         EXPECT_EQ( 640, window->width() );
         EXPECT_EQ( 480, window->height() );
@@ -450,9 +451,9 @@ TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
 
     //! Attaching a menu bar leaves the drawable client area exactly the size it was.
     //!
-    //! The whole point of the requested size is that it is what WGL will present to. A menu bar lives
-    //! outside the client area, so a bare SetMenu() would quietly take its height off the bottom of
-    //! every frame; setMenu() grows the window instead.
+    //! The whole point of the requested size is that it is what WGL will present to. A menu bar
+    //! lives outside the client area, so a bare SetMenu() would quietly take its height off the
+    //! bottom of every frame; setMenu() grows the window instead.
     TEST( GuiWindowTest, AttachingAMenuKeepsTheClientAreaTheRequestedSize )
     {
         GuiApplication application;
@@ -475,7 +476,8 @@ TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
         AppendMenu( menu, MF_POPUP, reinterpret_cast<UINT_PTR>( fileMenu ), TEXT( "&File" ) );
 
         // The outer window must grow by the menu's height for the client area to stay put, so the
-        // before/after window height is what proves the client area was preserved rather than clamped.
+        // before/after window height is what proves the client area was preserved rather than
+        // clamped.
         RECT before {};
         GetWindowRect( static_cast<HWND>( window->nativeHandle() ), &before );
 
@@ -517,8 +519,9 @@ TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
         EXPECT_EQ( 800, client.right - client.left );
         EXPECT_EQ( 600, client.bottom - client.top );
 
-        // The window's own record follows, because SetWindowPos sends WM_SIZE and the resize travels
-        // the ordinary path -- so a renderer needs no special case for a programmatic resize.
+        // The window's own record follows, because SetWindowPos sends WM_SIZE and the resize
+        // travels the ordinary path -- so a renderer needs no special case for a programmatic
+        // resize.
         EXPECT_EQ( 800, window->width() );
         EXPECT_EQ( 600, window->height() );
         EXPECT_GE( recorder.mResizeCount, 1 );
@@ -547,10 +550,150 @@ TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
         EXPECT_EQ( 320, recorder.mLastWidth );
         EXPECT_EQ( 240, recorder.mLastHeight );
 
-        // A slot asking the window for its size during the emission must get the new one, which is why
-        // the write happens first. Checked afterwards for the same value.
+        // A slot asking the window for its size during the emission must get the new one, which is
+        // why the write happens first. Checked afterwards for the same value.
         EXPECT_EQ( 320, window->width() );
         EXPECT_EQ( 240, window->height() );
+    }
+
+    //! A window starts at a usable ratio, whatever backend created it.
+    //!
+    //! The value every coordinate this library reports is implicitly multiplied by, so a window
+    //! that started at zero or at something negative would make width() meaningless.
+    //!
+    //! **Not asserted to be 1.0, and that is the point of the test rather than a weakening of it.**
+    //! 1.0 is the default a Window is constructed with, but X11 reads `Xft.dpi` and Win32 asks
+    //! GetDpiForWindow while the window is still being built, so a desktop at 150 % legitimately
+    //! hands back 1.5 here. An equality check would pass on an unscaled machine and fail on the
+    //! developer's, which is a test measuring the desk it runs on.
+    TEST( GuiWindowTest, ADevicePixelRatioStartsAtSomethingUsable )
+    {
+        GuiApplication application;
+        ASSERT_TRUE( application.hasPlatform() );
+
+        Window* const window = application.createWindow( WindowSettings() );
+        ASSERT_NE( nullptr, window );
+
+        EXPECT_GT( window->devicePixelRatio(), 0.0 );
+    }
+
+    //! Creating a window does not emit the change signal, whatever scale the backend found.
+    //!
+    //! The contract getDevicePixelRatioChanged() states. A backend that knows the scale during
+    //! creation records it instead, because nothing can be connected to a window that has not been
+    //! returned yet -- so an emission there reaches nobody while still costing the signal its
+    //! meaning. Connecting afterwards and asking for the ratio is how a caller learns the starting
+    //! value, and this test is written the way such a caller would be.
+    TEST( GuiWindowTest, CreationReportsNoDevicePixelRatioChange )
+    {
+        GuiApplication application;
+        ASSERT_TRUE( application.hasPlatform() );
+
+        Window* const window = application.createWindow( WindowSettings() );
+        ASSERT_NE( nullptr, window );
+
+        const double atCreation = window->devicePixelRatio();
+
+        int changes = 0;
+        QtLikeSignal::Object::connect( window->getDevicePixelRatioChanged(), window,
+            [&changes]( double )
+            {
+                ++changes;
+            } );
+
+        // Re-reporting the value the window already has is filtered, so a backend re-reading its
+        // scale is not a change either.
+        WindowSystemInterface::handleDevicePixelRatioChanged( window, atCreation );
+        EXPECT_EQ( 0, changes );
+
+        WindowSystemInterface::handleDevicePixelRatioChanged( window, atCreation * 2.0 );
+        EXPECT_EQ( 1, changes );
+        EXPECT_DOUBLE_EQ( atCreation * 2.0, window->devicePixelRatio() );
+    }
+
+    //! Reporting a ratio records it before the signal, and emits it once.
+    //!
+    //! The same contract handleResize() keeps, and for the same reason: a renderer's slot asks the
+    //! window for the numbers it needs rather than trusting only what it was handed, so the window
+    //! has to be right by the time the slot runs.
+    TEST( GuiWindowTest, ADevicePixelRatioIsRecordedBeforeEmitting )
+    {
+        GuiApplication application;
+        ASSERT_TRUE( application.hasPlatform() );
+
+        Window* const window = application.createWindow( WindowSettings() );
+        ASSERT_NE( nullptr, window );
+
+        // Every ratio below is derived from the one creation found, never written as a literal.
+        // X11 and Win32 read the desktop's scale while building the window, so a hard-coded 2.0
+        // here is the same value the window already holds on a 200 % screen -- and an equal report
+        // is filtered, so the signal this test is about would never be emitted. The test would
+        // then fail on the developer's machine and pass on the build server.
+        const double atCreation = window->devicePixelRatio();
+        const double changed    = atCreation * 2.0;
+
+        int count = 0;
+        double seen = 0.0;
+        double duringEmission = 0.0;
+
+        QtLikeSignal::Object::connect( window->getDevicePixelRatioChanged(), window,
+            [&]( double aRatio )
+            {
+                ++count;
+                seen = aRatio;
+                duringEmission = window->devicePixelRatio();
+            }, QtLikeSignal::ConnectionType::Direct );
+
+        WindowSystemInterface::handleDevicePixelRatioChanged( window, changed );
+
+        EXPECT_EQ( 1, count );
+        EXPECT_DOUBLE_EQ( changed, seen );
+        EXPECT_DOUBLE_EQ( changed, duringEmission )
+            << "a slot asking the window during the emission got the old ratio.";
+        EXPECT_DOUBLE_EQ( changed, window->devicePixelRatio() );
+    }
+
+    //! A ratio equal to the current one, or not positive, changes nothing and says nothing.
+    //!
+    //! Both filters live in WindowSystemInterface rather than in four backends, so a backend may
+    //! call it every time it re-reads the scale. Wayland does exactly that: wl_output sends its
+    //! properties as a burst, and the ratio is recomputed at the end of every one.
+    TEST( GuiWindowTest, ADevicePixelRatioIgnoresRepeatsAndNonsense )
+    {
+        GuiApplication application;
+        ASSERT_TRUE( application.hasPlatform() );
+
+        Window* const window = application.createWindow( WindowSettings() );
+        ASSERT_NE( nullptr, window );
+
+        // Relative to the ratio creation found, for the reason the test above says: a literal 1.0
+        // is what an unscaled host starts at, so "report the value it already has" would become
+        // "report a different one" on a 150 % screen and every count below would be out by one.
+        // Zero and the negative stay literal -- they are rejected whatever the window holds.
+        const double atCreation = window->devicePixelRatio();
+        const double changed    = atCreation * 2.0;
+
+        int count = 0;
+        QtLikeSignal::Object::connect( window->getDevicePixelRatioChanged(), window,
+            [&count]( double )
+            {
+                ++count;
+            }, QtLikeSignal::ConnectionType::Direct );
+
+        WindowSystemInterface::handleDevicePixelRatioChanged( window, atCreation );
+        EXPECT_EQ( 0, count ) << "the ratio it already had was reported as a change.";
+
+        WindowSystemInterface::handleDevicePixelRatioChanged( window, changed );
+        EXPECT_EQ( 1, count );
+
+        WindowSystemInterface::handleDevicePixelRatioChanged( window, changed );
+        EXPECT_EQ( 1, count ) << "the same ratio twice was reported twice.";
+
+        WindowSystemInterface::handleDevicePixelRatioChanged( window, 0.0 );
+        WindowSystemInterface::handleDevicePixelRatioChanged( window, -2.0 );
+        EXPECT_EQ( 1, count );
+        EXPECT_DOUBLE_EQ( changed, window->devicePixelRatio() )
+            << "a ratio that cannot be true was allowed to replace one that was.";
     }
 
     //! A press reaches the window's signal and updates the application-wide button set.
@@ -587,8 +730,8 @@ TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
 
     //! A touch frame with no window named goes to the window that took the last touch down.
     //!
-    //! wl_touch reports frame against the seat rather than against a surface, so this routing is the
-    //! only thing that makes the signal usable when more than one window exists.
+    //! wl_touch reports frame against the seat rather than against a surface, so this routing is
+    //! the only thing that makes the signal usable when more than one window exists.
     TEST( GuiWindowTest, TouchFrameFollowsTheWindowThatTookTheLastDown )
     {
         GuiApplication application;
@@ -640,8 +783,9 @@ TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
 
     //! A close request emits the signal, and the default policy hides the window.
     //!
-    //! Hidden rather than destroyed: the application may still hold a GL context bound to the handle,
-    //! and the library must not pull that out from under it. See GuiApplication::handleCloseRequested().
+    //! Hidden rather than destroyed: the application may still hold a GL context bound to the
+    //! handle, and the library must not pull that out from under it. See
+    //! GuiApplication::handleCloseRequested().
     TEST( GuiWindowTest, CloseRequestEmitsAndHidesUnderTheDefaultPolicy )
     {
         GuiApplication application;
@@ -686,9 +830,9 @@ TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
 
     //! Deleting the window from the close slot is survivable.
     //!
-    //! The close policy runs after the signal, so without the lifetime check in handleCloseRequest()
-    //! this is a use-after-free -- and destroying the window on close is an entirely reasonable thing
-    //! for an application to do.
+    //! The close policy runs after the signal, so without the lifetime check in
+    //! handleCloseRequest() this is a use-after-free -- and destroying the window on close is an
+    //! entirely reasonable thing for an application to do.
     TEST( GuiWindowTest, ClosingSlotMayDestroyTheWindow )
     {
         GuiApplication application;
@@ -716,8 +860,8 @@ TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
 
     //! -p drm selects the DRM backend, which adopts rather than creates.
     //!
-    //! Constructing the backend touches no device: libinput is opened by the first adoptWindow(), so
-    //! this runs anywhere, including a container with no /dev/input at all.
+    //! Constructing the backend touches no device: libinput is opened by the first adoptWindow(),
+    //! so this runs anywhere, including a container with no /dev/input at all.
     TEST( GuiDrmTest, PlatformArgumentSelectsTheDrmBackend )
     {
         QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "drm" } );
@@ -737,9 +881,10 @@ TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
 
     //! The DRM backend refuses an adoption that does not say how big the scanout is.
     //!
-    //! Refused rather than defaulted: every coordinate this backend produces is clamped or transformed
-    //! against that size, so guessing it would put the pointer and every touch point in the wrong place
-    //! with nothing to indicate why. Checked before libinput is touched, so no device is needed.
+    //! Refused rather than defaulted: every coordinate this backend produces is clamped or
+    //! transformed against that size, so guessing it would put the pointer and every touch point in
+    //! the wrong place with nothing to indicate why. Checked before libinput is touched, so no
+    //! device is needed.
     TEST( GuiDrmTest, AdoptionWithoutASizeIsRefused )
     {
         QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "drm" } );
@@ -782,8 +927,8 @@ TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
     //! Asking for the connection is what opens it, before there is any window.
     //!
     //! That order is the whole reason nativeDisplay() is not a passive query: an EGL library has to
-    //! reach eglGetPlatformDisplayEXT( EGL_PLATFORM_WAYLAND_EXT, display ) to choose a config, and it
-    //! has to do that before there is a surface to give the config to.
+    //! reach eglGetPlatformDisplayEXT( EGL_PLATFORM_WAYLAND_EXT, display ) to choose a config, and
+    //! it has to do that before there is a surface to give the config to.
     TEST( GuiWaylandTest, TheConnectionOpensBeforeAnyWindowExists )
     {
         QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "wayland" } );
@@ -802,7 +947,8 @@ TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
 
         EXPECT_EQ( 0u, application.windows().size() );
 
-        // The same connection every time: a second one would need a second registration with the loop.
+        // The same connection every time: a second one would need a second registration with the
+        // loop.
         EXPECT_EQ( display, application.nativeDisplay() );
     }
 
@@ -855,8 +1001,8 @@ TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
 
     //! Destroying the window releases the surface but leaves the connection open.
     //!
-    //! The connection outlives the window because the backend owns it: a program is free to destroy a
-    //! window and make another, and reconnecting would drop every global that was bound.
+    //! The connection outlives the window because the backend owns it: a program is free to destroy
+    //! a window and make another, and reconnecting would drop every global that was bound.
     TEST( GuiWaylandTest, DestroyingTheWindowKeepsTheConnection )
     {
         QtLikeSignalGuiTest::FakeCommandLine commandLine( { "-p", "wayland" } );

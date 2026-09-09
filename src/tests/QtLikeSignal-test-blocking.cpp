@@ -199,7 +199,8 @@ TEST( BlockingConnectionTest, ArgumentsAreNotCopied )
 //! Fails if a BlockingQueued emit to a receiver on the emitting thread deadlocks.
 //!
 //! Qt deadlocks here and asserts to say so. This runs the slot inline instead, which satisfies the
-//! only thing the caller was promised. A regression would hang rather than fail, hence the deadline.
+//! only thing the caller was promised. A regression would hang rather than fail, hence the
+//! deadline.
 TEST( BlockingConnectionTest, SameThreadRunsInlineRatherThanDeadlocking )
 {
     std::atomic<int> calls { 0 };

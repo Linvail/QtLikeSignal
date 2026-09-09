@@ -11,8 +11,8 @@
 //! This is exactly how Qt's QThreadData/QObject::thread() works internally.
 //!
 //! ThreadData also OWNS the thread's event dispatcher, which in turn owns the event queue and the
-//! timer list. Posting therefore goes through the ThreadData and never dereferences a Thread* that a
-//! concurrent ~Thread() could free.
+//! timer list. Posting therefore goes through the ThreadData and never dereferences a Thread* that
+//! a concurrent ~Thread() could free.
 //!
 //! **A ThreadData is never destroyed before the process is.** ThreadData::create() files a strong
 //! reference in a registry that is deliberately never emptied, so a raw ThreadData* is valid from
@@ -48,16 +48,16 @@ namespace QtLikeSignal
     //!
     //! Handed out by Object::threadData()/Thread::threadData() as an opaque handle. The dispatcher
     //! is held by shared_ptr and only ever reachable through dispatcher(), which hands back a
-    //! *strong* reference. That is what makes cross-thread use safe: a thread finishing can drop its
-    //! dispatcher at any moment, and an atomic raw pointer would only have made the pointer load
-    //! safe, not the object's lifetime -- the owning thread could free it between another thread's
-    //! load and its call. Holding a strong reference for the duration of the call keeps it alive
-    //! until that caller is done.
+    //! *strong* reference. That is what makes cross-thread use safe: a thread finishing can drop
+    //! its dispatcher at any moment, and an atomic raw pointer would only have made the pointer
+    //! load safe, not the object's lifetime -- the owning thread could free it between another
+    //! thread's load and its call. Holding a strong reference for the duration of the call keeps it
+    //! alive until that caller is done.
     //!
     //! Also outlives its Thread: mThread is set once by Thread's constructor and nulled by
-    //! ~Thread(), so anything holding only this data sees thread() == nullptr rather than a dangling
-    //! Thread*. Capturing a raw Thread* instead is not safe: an adopted Thread is destroyed at
-    //! native thread exit, and a user-owned one whenever its owner likes.
+    //! ~Thread(), so anything holding only this data sees thread() == nullptr rather than a
+    //! dangling Thread*. Capturing a raw Thread* instead is not safe: an adopted Thread is
+    //! destroyed at native thread exit, and a user-owned one whenever its owner likes.
     //!
     //! Lifetime is managed with shared_ptr rather than Qt's intrusive refcount. Note this class
     //! deliberately does NOT own its Thread: Qt's QThreadData does own the adopted QThread and
@@ -123,7 +123,8 @@ namespace QtLikeSignal
         std::shared_ptr<AbstractEventDispatcher> dispatcherOrPark
             (
             Object* aReceiver,
-            Event* aEvent
+            Event* aEvent,
+            int aPriority
             );
 
         //! Drops any parked events for @p aReceiver, called by ~Object() before it dies.
@@ -147,10 +148,22 @@ namespace QtLikeSignal
         std::shared_ptr<AbstractEventDispatcher> mDispatcher;  //!< This thread's dispatcher, if any.
 
         //! One event waiting for this thread to have a dispatcher at all.
+        //!
+        //! Carries the priority it was posted at, because parking is a delay and not a demotion.
+        //! Without it a telltale posted into the window between Thread::start() and the run body
+        //! creating a dispatcher would arrive at the default rank, behind whatever ordinary work
+        //! was posted after it -- and that window is start-up, which is exactly when a program
+        //! posts the events it most wants ordered.
+        //!
+        //! The overflow policy is deliberately *not* carried. A parked event has already been
+        //! accepted, so the question the policy answers -- what to do if there is no room -- has
+        //! been settled; setDispatcher() hands it over unconditionally, as moveToThread() does, for
+        //! the same reason.
         struct ParkedEvent
         {
             Object* mReceiver;
             Event*  mEvent;
+            int mPriority;
         };
 
         //! Events moved here by Object::moveToThread() before this thread had a dispatcher.
@@ -179,12 +192,12 @@ namespace QtLikeSignal
     //!
     //! Why this exists, in one sentence: a queued connection has to resolve the receiver's affinity
     //! at EMIT time (that is what makes moveToThread() affect connections made before it), but the
-    //! receiver may be destroyed concurrently, and disconnect() does not wait
-    //! for an in-flight emit -- so reading thread()/threadData() straight off the receiver Object is
-    //! a use-after-free. The connect() wrapper's life-token check narrows that window but does not
-    //! close it: seeing the object alive only proves ~Object() had not yet reached
-    //! markObjectDead() at the moment of the check, not that it cannot start immediately afterward,
-    //! concurrently with this thread going on to dereference the receiver's own members.
+    //! receiver may be destroyed concurrently, and disconnect() does not wait for an in-flight emit
+    //! -- so reading thread()/threadData() straight off the receiver Object is a use-after-free.
+    //! The connect() wrapper's life-token check narrows that window but does not close it: seeing
+    //! the object alive only proves ~Object() had not yet reached markObjectDead() at the moment of
+    //! the check, not that it cannot start immediately afterward, concurrently with this thread
+    //! going on to dereference the receiver's own members.
     //!
     //! The box breaks that dependency: connect() captures a shared_ptr<Affinity> at CONNECT time,
     //! and the wrapper resolves affinity through the box at EMIT time, never through the receiver.

@@ -21,23 +21,25 @@ namespace QtLikeSignalGui
 
     //! A native window that already exists, for the backends that adopt one rather than create it.
     //!
-    //! Three fields rather than one void*, because the platforms genuinely differ in what identifies
-    //! a window. X11 needs both a connection and a resource id, and the id is an integer rather than
-    //! a pointer -- squeezing an XID through a void* would be a cast at every use and a lie in the
-    //! type. Each backend documents which fields it reads and ignores the rest.
+    //! Three fields rather than one void*, because the platforms genuinely differ in what
+    //! identifies a window. X11 needs both a connection and a resource id, and the id is an integer
+    //! rather than a pointer -- squeezing an XID through a void* would be a cast at every use and a
+    //! lie in the type. Each backend documents which fields it reads and ignores the rest.
     struct NativeWindow
     {
         //! The connection the window lives on: an X11 Display*, or a Wayland wl_display*.
         //!
-        //! Required on X11 and Wayland, unused on Win32. On X11 this must be the very connection the
-        //! window was created on: events for a window are delivered to the client that created it,
-        //! so a second connection to the same server would see nothing.
+        //! Required on X11 and Wayland, unused on Win32. On X11 this must be the very connection
+        //! the window was created on: events for a window are delivered to the client that created
+        //! it, so a second connection to the same server would see nothing.
         void* mDisplay { nullptr };
 
-        //! The window itself where it is pointer-shaped: an HWND on Win32, a wl_surface* on Wayland.
+        //! The window itself where it is pointer-shaped: an HWND on Win32, a wl_surface* on
+        //! Wayland.
         void* mSurface { nullptr };
 
-        //! The window itself where it is an integer: the X11 Window id. Zero on the other platforms.
+        //! The window itself where it is an integer: the X11 Window id. Zero on the other
+        //! platforms.
         unsigned long mWindowId { 0 };
 
         //! Width of the drawable in pixels, for the backends that cannot ask.
@@ -60,18 +62,22 @@ namespace QtLikeSignalGui
     //! explained rather than read.
     struct WindowSettings
     {
-        //! Width of the **client area** in pixels: what can be drawn on, not the outer frame.
+        //! Width of the **client area**: what can be drawn on, not the outer frame.
         //!
-        //! A caller asking for 1280 means 1280 pixels to render into -- the surface WGL or EGL will
-        //! present to, with no border, caption or menu bar counted in it. The backend grows the
-        //! rectangle by whatever the frame needs.
+        //! In the same window-system units Window::width() reports, so a caller asking for 1280 is
+        //! asking for a client area 1280 units wide, with no border, caption or menu bar counted
+        //! in it. The backend grows the rectangle by whatever the frame needs.
+        //!
+        //! **On a scaled display that is not the same as 1280 device pixels**, and this library
+        //! does not convert it for you -- ask the created window for Window::devicePixelRatio()
+        //! and multiply. That function carries the whole rule.
         //!
         //! A window created here has no menu bar. Attaching one afterwards takes its height out of
         //! the client area, so use Window::setMenu() rather than the raw SetMenu(): it puts the
         //! client area back to the size asked for. See that function.
         int mWidth { 1280 };
 
-        //! Height of the client area in pixels.
+        //! Height of the client area, in the same units as mWidth.
         int mHeight { 800 };
 
         //! Caption text, in UTF-8. Converted to whatever the platform wants by the backend.
@@ -108,7 +114,8 @@ namespace QtLikeSignalGui
         //! unmatched. Ignored on every other platform.
         std::string mAppId;
 
-        //! The ivi-shell surface id to create the window with, or 0 for xdg-shell. **Wayland only.**
+        //! The ivi-shell surface id to create the window with, or 0 for xdg-shell. **Wayland
+        //! only.**
         //!
         //! ivi-shell is the automotive shell: there is no window manager, no decoration and no
         //! close button, and a surface is identified to the controller by this number rather than
@@ -132,13 +139,13 @@ namespace QtLikeSignalGui
     //! exists.
     //!
     //! **Lifetime.** Created windows are children of the GuiApplication, so they are destroyed with
-    //! it if the caller has not destroyed them first. Destroying a Window destroys the native window
-    //! with it -- so on Win32, any WGL context made current against nativeHandle() must be torn down
-    //! **before** the Window goes away, or the context outlives the HWND it is bound to.
+    //! it if the caller has not destroyed them first. Destroying a Window destroys the native
+    //! window with it -- so on Win32, any WGL context made current against nativeHandle() must be
+    //! torn down **before** the Window goes away, or the context outlives the HWND it is bound to.
     //!
     //! **Thread affinity.** A Window belongs to the thread that created it, which is the thread
-    //! running the loop. Every method here must be called from that thread: a native window is owned
-    //! by its creating thread on Win32, and the connection is used from one thread on X11 and
+    //! running the loop. Every method here must be called from that thread: a native window is
+    //! owned by its creating thread on Win32, and the connection is used from one thread on X11 and
     //! Wayland. The signals may of course be connected to slots living on other threads, which is
     //! what ConnectionType::Queued is for.
     class Window : public QtLikeSignal::Object
@@ -161,12 +168,14 @@ namespace QtLikeSignalGui
         //! **Null on X11**, where a window is an integer resource id rather than a pointer; use
         //! nativeWindowId() and nativeDisplay() there.
         //!
-        //! void* rather than the real type so this header does not pull <windows.h> or <X11/Xlib.h>,
-        //! and their macros, into every translation unit that includes it -- the same choice
-        //! EventDispatcherWin32 makes for its own message window. Cast it back at the call site.
+        //! void* rather than the real type so this header does not pull <windows.h> or
+        //! <X11/Xlib.h>, and their macros, into every translation unit that includes it -- the same
+        //! choice EventDispatcherWin32 makes for its own message window. Cast it back at the call
+        //! site.
         //!
-        //! Valid from the moment the window is created or adopted until this Window is destroyed, and
-        //! stable for that whole span: the handle is never recreated underneath a caller holding it.
+        //! Valid from the moment the window is created or adopted until this Window is destroyed,
+        //! and stable for that whole span: the handle is never recreated underneath a caller
+        //! holding it.
         //!
         //! This is what an external OpenGL library is handed to initialise WGL against.
         void* nativeHandle() const
@@ -188,16 +197,53 @@ namespace QtLikeSignalGui
             return mNative.mWindowId;
         }
 
-        //! Gets the current client-area width in pixels, as of the last resize reported.
+        //! Gets the current client-area width, as of the last resize reported.
+        //!
+        //! **In window-system units, which are not always device pixels.** Multiply by
+        //! devicePixelRatio() for the number of pixels a renderer has to fill; see that function,
+        //! which carries the whole of this rule and why the two differ.
         int width() const
         {
             return mWidth;
         }
 
-        //! Gets the current client-area height in pixels, as of the last resize reported.
+        //! Gets the current client-area height, as of the last resize reported. See width().
         int height() const
         {
             return mHeight;
+        }
+
+        //! Gets how many device pixels the window system puts in one of this window's units.
+        //!
+        //! 1.0 on an ordinary display, 2.0 where every unit is drawn as a 2x2 block of pixels, and
+        //! 1.5 on a screen set to 150 %. Never zero or negative.
+        //!
+        //! **This is the one number that makes every other coordinate here unambiguous**, because
+        //! the window systems do not agree on what they report:
+        //!
+        //! | backend | what width() and a MouseEvent position are |
+        //! |---|---|
+        //! | Wayland | surface-local units; multiply by this for pixels |
+        //! | X11 | device pixels already, and this reports what the desktop was configured at |
+        //! | Win32 | device pixels for a DPI-aware process, and this reports the monitor's scale |
+        //! | DRM | device pixels; there is no scaling layer, so this is always 1.0 |
+        //!
+        //! So a renderer sizing a surface wants `width() * devicePixelRatio()`, and a program
+        //! deciding how large to draw a button wants `width()` and this number separately.
+        //!
+        //! **Nothing here scales anything for you, and that is deliberate.** This library never
+        //! draws, so it reports the factor and leaves every conversion to whoever does. On Wayland
+        //! that includes telling the compositor what you did, with
+        //! `wl_surface_set_buffer_scale()` on nativeHandle().
+        //!
+        //! **On Windows it reports 1.0 until the program declares itself DPI-aware**, and that is
+        //! the truth rather than a gap: an unaware process is handed a virtual coordinate space
+        //! that really is 1:1 with what it draws, and the desktop stretches the result afterwards.
+        //! Declare per-monitor awareness and the same call starts reporting 1.5 with no change
+        //! here.
+        double devicePixelRatio() const
+        {
+            return mDevicePixelRatio;
         }
 
         //! Returns true if the window has been shown and not hidden since.
@@ -229,6 +275,47 @@ namespace QtLikeSignalGui
             void* aMenuHandle
             );
 
+        //! When an update asked for by requestUpdate() is delivered.
+        //!
+        //! Pacing decides *when* the answer to requestUpdate() arrives; it never changes what the
+        //! call means, which is always "I want to draw; tell me once, from inside a dispatch pass".
+        enum class UpdatePacing
+        {
+            //! Deliver as soon as the loop can. The default, and what this library did before
+            //! pacing existed.
+            //!
+            //! A renderer that asks for the next update from inside its own expose slot runs as
+            //! fast as the loop will go, drawing frames the display may never show.
+            Immediate,
+
+            //! Deliver when the display is ready for another frame.
+            //!
+            //! Needs a backend with a frame source -- hasFrameClock() says whether this window has
+            //! one. On Wayland that is wl_surface.frame. A backend without one keeps delivering
+            //! immediately, so asking for this is never worse than not asking.
+            //!
+            //! **A paced window that stops drawing stops updating**, and that is correct rather
+            //! than a fault: the display signals readiness for the *next* frame after being given
+            //! one. A renderer that takes an update and does not present has asked to be paced by
+            //! something it then declined to feed.
+            Display
+        };
+
+        //! Chooses when updates are delivered.
+        //!
+        //! Switching to Immediate releases a window that was waiting for a frame, so the update it
+        //! had asked for arrives rather than being stranded until some later frame reports in.
+        //! Otherwise turning pacing off would leave the request parked in the backend and deliver
+        //! it at a moment nothing asked for.
+        void setUpdatePacing
+            (
+            UpdatePacing aPacing
+            );
+
+        UpdatePacing updatePacing() const;
+
+        bool hasFrameClock() const;
+
         void requestUpdate();
 
         //! Emitted when a mouse button goes down over the window.
@@ -240,8 +327,8 @@ namespace QtLikeSignalGui
         //! Emitted when a mouse button comes up.
         //!
         //! Also delivered when the release happens outside the window, as long as the press was
-        //! inside it: the backend holds the mouse for the duration of a drag so the matching release
-        //! is never lost. MouseEvent::mPos may therefore be outside the client area.
+        //! inside it: the backend holds the mouse for the duration of a drag so the matching
+        //! release is never lost. MouseEvent::mPos may therefore be outside the client area.
         QtLikeSignal::SignalView<MouseEvent>& getMouseReleased() const
         {
             return mMouseReleased.view();
@@ -349,6 +436,20 @@ namespace QtLikeSignalGui
             return mResized.view();
         }
 
+        //! Emitted when devicePixelRatio() changes, with the new ratio.
+        //!
+        //! A window dragged between two monitors of different scale, or a desktop whose scale was
+        //! changed while the program ran. Not emitted at creation -- ask devicePixelRatio() for
+        //! the starting value; a signal nobody can have connected yet is not a report.
+        //!
+        //! A renderer that sizes anything in pixels has to rebuild it here, exactly as it does on
+        //! getResized(). The two can arrive in either order, and a backend that changes both sends
+        //! both.
+        QtLikeSignal::SignalView<double>& getDevicePixelRatioChanged() const
+        {
+            return mDevicePixelRatioChanged.view();
+        }
+
         //! Emitted when the window needs redrawing.
         //!
         //! Carries nothing: the drawable belongs to whatever created the GL context, and this
@@ -360,9 +461,9 @@ namespace QtLikeSignalGui
 
         //! Emitted when the user asks to close the window -- the close box, or Alt+F4.
         //!
-        //! **The window is not closed or destroyed by this.** It is a request, and what happens next
-        //! is the application's decision. If GuiApplication::quitOnLastWindowClosed() is set, which
-        //! it is by default, the loop is asked to quit right after this signal returns.
+        //! **The window is not closed or destroyed by this.** It is a request, and what happens
+        //! next is the application's decision. If GuiApplication::quitOnLastWindowClosed() is set,
+        //! which it is by default, the loop is asked to quit right after this signal returns.
         //!
         //! There is no way to veto from the slot. Signals carry no result, so a veto would need a
         //! mutable event object this library deliberately does not have; to keep a window open on
@@ -403,14 +504,15 @@ namespace QtLikeSignalGui
 
         //! Returns true while there is still a native window behind this object.
         //!
-        //! False once the backend has released it, which happens during destruction and is the state
-        //! every operation below checks for before touching the window system.
+        //! False once the backend has released it, which happens during destruction and is the
+        //! state every operation below checks for before touching the window system.
         bool hasNative() const
         {
             return mNative.mSurface != nullptr || mNative.mWindowId != 0;
         }
 
-        //! The backend that created or adopted this window and performs every native operation on it.
+        //! The backend that created or adopted this window and performs every native operation on
+        //! it.
         //!
         //! Not owned: the GuiApplication owns the integration, and it outlives every window it
         //! made. Never null while this object exists.
@@ -419,8 +521,15 @@ namespace QtLikeSignalGui
         //! The native window, or all-zero once the backend has released it.
         NativeWindow mNative;
 
-        int mWidth;              //!< Client-area width in pixels.
-        int mHeight;             //!< Client-area height in pixels.
+        int mWidth;              //!< Client-area width, in window-system units. See width().
+        int mHeight;             //!< Client-area height, in window-system units. See width().
+
+        //! Device pixels for each window-system unit. See devicePixelRatio().
+        //!
+        //! 1.0 until a backend says otherwise, which is the right answer for a backend that has no
+        //! scaling layer and the right starting point for one that reports its scale later.
+        double mDevicePixelRatio { 1.0 };
+
         bool mVisible { false }; //!< Whether show() has been called more recently than hide().
 
         QtLikeSignal::Signal<MouseEvent> mMousePressed;        //!< See getMousePressed().
@@ -437,7 +546,13 @@ namespace QtLikeSignalGui
         QtLikeSignal::Signal<> mTouchFrame;                    //!< See getTouchFrame().
         QtLikeSignal::Signal<> mTouchCancel;                   //!< See getTouchCancel().
         QtLikeSignal::Signal<int, int> mResized;               //!< See getResized().
+        //! See getDevicePixelRatioChanged().
+        QtLikeSignal::Signal<double> mDevicePixelRatioChanged;
+
         QtLikeSignal::Signal<> mExposed;                       //!< See getExposed().
+
+        //! When updates are delivered. See setUpdatePacing().
+        UpdatePacing mUpdatePacing { UpdatePacing::Immediate };
         QtLikeSignal::Signal<> mCloseRequested;                //!< See getCloseRequested().
         QtLikeSignal::Signal<bool> mFocusChanged;              //!< See getFocusChanged().
         QtLikeSignal::Signal<int> mMenuCommand;                //!< See getMenuCommand().

@@ -15,9 +15,8 @@ namespace
     using namespace QtLikeSignal;
 
     // ------------------------------------------------------------------------------------------------------
-    // The Kamikaze Slot test.
-    // The goal of this test is to ensure that a slot can safely disconnect itself during an emission without
-    // crashing the program.
+    // The Kamikaze Slot test. The goal of this test is to ensure that a slot can safely disconnect
+    // itself during an emission without crashing the program.
     // ------------------------------------------------------------------------------------------------------
     struct KamikazeReceiver : public Object
     {
@@ -98,9 +97,8 @@ namespace
     }
 
     // ------------------------------------------------------------------------------------------------------
-    // Chain Reaction test.
-    // The goal of this test is to ensure that a new connection made during an emission does not run in the current
-    // emission, but does run in subsequent emissions.
+    // Chain Reaction test. The goal of this test is to ensure that a new connection made during an
+    // emission does not run in the current emission, but does run in subsequent emissions.
     // ------------------------------------------------------------------------------------------------------
     struct ChainReactionReceiver : public Object
     {
@@ -162,9 +160,9 @@ namespace
     }
 
     // ------------------------------------------------------------------------------------------------------
-    // Nuke test.
-    // The goal of the "Nuke" test is to ensure that a massive, systemic state change during an emission
-    // doesn't crash the program, and that subsequent pending slots in the emission queue are properly aborted.
+    // Nuke test. The goal of the "Nuke" test is to ensure that a massive, systemic state change
+    // during an emission doesn't crash the program, and that subsequent pending slots in the
+    // emission queue are properly aborted.
     // ------------------------------------------------------------------------------------------------------
     struct NukeReceiver : public Object
     {
@@ -234,10 +232,10 @@ namespace
     }
 
     // ------------------------------------------------------------------------------------------------------
-    // Connect/Disconnect Storm test.
-    // The goal of this test is to hammer the signal's internal storage from multiple threads simultaneously.
-    // We want to force race conditions by having one thread constantly iterating over the connection list
-    // (via emit()) while several other threads are aggressively modifying that exact same list.
+    // Connect/Disconnect Storm test. The goal of this test is to hammer the signal's internal
+    // storage from multiple threads simultaneously. We want to force race conditions by having one
+    // thread constantly iterating over the connection list (via emit()) while several other threads
+    // are aggressively modifying that exact same list.
     // ------------------------------------------------------------------------------------------------------
     struct StormReceiver : public Object
     {
@@ -291,9 +289,9 @@ namespace
                 {
                     for( int j = 0; j < iterationsPerMutator; ++j )
                     {
-                        // Connect a slot
-                        // Must use ConnectionType::Direct because the main thread is stuck waiting on join instead of
-                        // running an event loop, so queued connections would never run.
+                        // Connect a slot Must use ConnectionType::Direct because the main thread is
+                        // stuck waiting on join instead of running an event loop, so queued
+                        // connections would never run.
                         Connection conn = Object::connect( sig, &receiver,
                             &StormReceiver::onTriggered, ConnectionType::Direct );
 
@@ -328,10 +326,10 @@ namespace
     }
 
     // ------------------------------------------------------------------------------------------------------
-    // Massive Fan-In test.
-    // The goal of this test is to hammer the receiver's event queue from dozens of threads simultaneously.
-    // We want to ensure that the internal queue holding cross-thread events is thread-safe, doesn't drop
-    // any emissions under heavy contention, and doesn't duplicate them.
+    // Massive Fan-In test. The goal of this test is to hammer the receiver's event queue from
+    // dozens of threads simultaneously. We want to ensure that the internal queue holding
+    // cross-thread events is thread-safe, doesn't drop any emissions under heavy contention, and
+    // doesn't duplicate them.
     // ------------------------------------------------------------------------------------------------------
     struct FanInReceiver : public QtLikeSignal::Object
     {
@@ -439,11 +437,10 @@ namespace
     }
 
     //------------------------------------------------------------------------------------------------------
-    // Deep Argument Copying test.
-    // The goal of this test is to verify that our library smartly shares the payload (e.g., using std::shared_ptr
-    // or perfectly forwarding it) rather than aggressively copying it.
-    // Note that even highly optimized Qt will copy the payload once per connected receiver, so we can't
-    // avoid that entirely.
+    // Deep Argument Copying test. The goal of this test is to verify that our library smartly
+    // shares the payload (e.g., using std::shared_ptr or perfectly forwarding it) rather than
+    // aggressively copying it. Note that even highly optimized Qt will copy the payload once per
+    // connected receiver, so we can't avoid that entirely.
     //------------------------------------------------------------------------------------------------------
     struct HeavyPayload : public Object
     {
@@ -615,9 +612,9 @@ namespace
     }
 
     //------------------------------------------------------------------------------------------------------
-    // The Black Hole Event Loop Test
-    // This test verifies that if a thread is destroyed while it still has unprocessed events sitting in its
-    // queue, it properly destroys those events and releases the captured arguments.
+    // The Black Hole Event Loop Test This test verifies that if a thread is destroyed while it
+    // still has unprocessed events sitting in its queue, it properly destroys those events and
+    // releases the captured arguments.
     //------------------------------------------------------------------------------------------------------
 
     // A payload that counts exactly how many instances of itself exist in memory.
@@ -727,10 +724,10 @@ namespace
     }
 
     //------------------------------------------------------------------------------------------------------
-    // Rapid-Fire Setup/Tear Down Test
-    // Because the connect function adds cleanup tokens to the receiver (aReceiver->mIncoming), we need to
-    // ensure that when a receiver is destroyed, boost::signals2 cleanly prunes the connection from the
-    // signal. If it doesn't, a long-lived signal will slowly leak memory as it accumulates dead connections.
+    // Rapid-Fire Setup/Tear Down Test Because the connect function adds cleanup tokens to the
+    // receiver (aReceiver->mIncoming), we need to ensure that when a receiver is destroyed,
+    // boost::signals2 cleanly prunes the connection from the signal. If it doesn't, a long-lived
+    // signal will slowly leak memory as it accumulates dead connections.
     //
     // AddressSanitizer is required for this test.
     //------------------------------------------------------------------------------------------------------

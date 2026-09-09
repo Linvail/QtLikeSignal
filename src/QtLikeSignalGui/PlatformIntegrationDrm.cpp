@@ -16,6 +16,9 @@
 #include "QtLikeSignal/EventDispatcherLinux.hpp"
 #include "QtLikeSignal/Thread.hpp"
 
+#include "QtLikeSignal/Log.hpp"
+#include "QtLikeSignalGui/LogCategories.hpp"
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -37,8 +40,8 @@ namespace QtLikeSignalGui
     //!
     //! extern "C" because it is handed to a C library as a function pointer, and a C++-linkage
     //! pointer is not the same type as the C-linkage one the struct declares. Every toolchain
-    //! accepts the mismatch, which is exactly why it is worth spelling correctly rather than relying
-    //! on that.
+    //! accepts the mismatch, which is exactly why it is worth spelling correctly rather than
+    //! relying on that.
     //!
     //! Plain open(), with no privilege escalation of any kind. /dev/input/event* is not world
     //! readable, so this succeeds only for a process that already has the access -- root, a member
@@ -80,7 +83,8 @@ namespace QtLikeSignalGui
             &qtLikeSignalGuiCloseRestricted
         };
 
-        //! Gets the running thread's dispatcher as an EventDispatcherLinux, or null if it is not one.
+        //! Gets the running thread's dispatcher as an EventDispatcherLinux, or null if it is not
+        //! one.
         std::shared_ptr<QtLikeSignal::EventDispatcherLinux> currentLinuxDispatcher()
         {
             QtLikeSignal::Thread* const current = QtLikeSignal::Thread::currentThread();
@@ -227,9 +231,9 @@ namespace QtLikeSignalGui
     {
         if( aNative.mWidth <= 0 || aNative.mHeight <= 0 )
         {
-            std::fprintf( stderr,
-                "QtLikeSignalGui: adoptWindow on DRM needs NativeWindow::mWidth and mHeight; there is no "
-                "window system to ask for the scanout size\n" );
+            qCWarning( gLogGuiDrm )
+                << "QtLikeSignalGui: adoptWindow on DRM needs NativeWindow::mWidth and mHeight;"
+                << "there is no window system to ask for the scanout size";
             return nullptr;
         }
 
@@ -237,8 +241,9 @@ namespace QtLikeSignalGui
         {
             // One scanout, one surface. A second would have no way to receive anything: with no
             // window system there is nothing in an input event that says which surface it meant.
-            std::fprintf( stderr,
-                "QtLikeSignalGui: the drm backend supports one surface, and one is already adopted\n" );
+            qCWarning( gLogGuiDrm )
+                <<
+                "QtLikeSignalGui: the drm backend supports one surface, and one is already adopted";
             return nullptr;
         }
 
@@ -255,9 +260,9 @@ namespace QtLikeSignalGui
         mPointerX = static_cast<double>( aNative.mWidth ) / 2.0;
         mPointerY = static_cast<double>( aNative.mHeight ) / 2.0;
 
-        // Nothing else will ever say this: with no window manager there is no focus to gain or lose,
-        // and a program asking GuiApplication::focusWindow() should get the one surface there is
-        // rather than a null that means something different here than it does everywhere else.
+        // Nothing else will ever say this: with no window manager there is no focus to gain or
+        // lose, and a program asking GuiApplication::focusWindow() should get the one surface there
+        // is rather than a null that means something different here than it does everywhere else.
         WindowSystemInterface::handleFocusChange( window, true );
 
         return window;
@@ -290,7 +295,8 @@ namespace QtLikeSignalGui
         static_cast<void>( aTitle );
     }
 
-    //! Records the flag and nothing else: what reaches the screen is the external library's scanout.
+    //! Records the flag and nothing else: what reaches the screen is the external library's
+    //! scanout.
     //!
     //! Not silently ignored, because isVisible() is still a question a program can reasonably ask
     //! and answer for itself -- it just does not mean the display turns off.
@@ -315,9 +321,10 @@ namespace QtLikeSignalGui
         static_cast<void>( aWidth );
         static_cast<void>( aHeight );
 
-        std::fprintf( stderr,
-            "QtLikeSignalGui: setClientSize() has no meaning on drm; the size is the display mode, which "
-            "belongs to whoever set it\n" );
+        qCWarning( gLogGuiDrm )
+            <<
+            "QtLikeSignalGui: setClientSize() has no meaning on drm; the size is the display mode,"
+            << "which belongs to whoever set it";
     }
 
     //! Asks for a repaint by posting one onto the loop.
@@ -381,12 +388,13 @@ namespace QtLikeSignalGui
 
         if( !explicitDevices.empty() )
         {
-            // The path interface: exactly the devices named, and no udev at all. What a container or
-            // a test rig needs, since udev's device database is not there to enumerate.
+            // The path interface: exactly the devices named, and no udev at all. What a container
+            // or a test rig needs, since udev's device database is not there to enumerate.
             libinput* const input = libinput_path_create_context( &kInterface, nullptr );
             if( input == nullptr )
             {
-                std::fprintf( stderr, "QtLikeSignalGui: libinput_path_create_context() failed\n" );
+                qCWarning( gLogGuiDrm )
+                    << "QtLikeSignalGui: libinput_path_create_context() failed";
                 return false;
             }
 
@@ -400,15 +408,16 @@ namespace QtLikeSignalGui
                 }
                 else
                 {
-                    std::fprintf( stderr, "QtLikeSignalGui: could not open input device \"%s\"\n",
-                        path.c_str() );
+                    qCWarning( gLogGuiDrm )
+                        << "QtLikeSignalGui: could not open input device" << path;
                 }
             }
 
             if( added == 0 )
             {
-                std::fprintf( stderr,
-                    "QtLikeSignalGui: QTLIKESIGNAL_INPUT_DEVICES named no device that could be opened\n" );
+                qCWarning( gLogGuiDrm )
+                    << "QtLikeSignalGui: QTLIKESIGNAL_INPUT_DEVICES named no device"
+                    << "that could be opened";
                 libinput_unref( input );
                 return false;
             }
@@ -420,7 +429,7 @@ namespace QtLikeSignalGui
             udev* const udevContext = udev_new();
             if( udevContext == nullptr )
             {
-                std::fprintf( stderr, "QtLikeSignalGui: udev_new() failed\n" );
+                qCWarning( gLogGuiDrm ) << "QtLikeSignalGui: udev_new() failed";
                 return false;
             }
 
@@ -428,7 +437,8 @@ namespace QtLikeSignalGui
                 udevContext );
             if( input == nullptr )
             {
-                std::fprintf( stderr, "QtLikeSignalGui: libinput_udev_create_context() failed\n" );
+                qCWarning( gLogGuiDrm )
+                    << "QtLikeSignalGui: libinput_udev_create_context() failed";
                 udev_unref( udevContext );
                 return false;
             }
@@ -438,9 +448,10 @@ namespace QtLikeSignalGui
 
             if( libinput_udev_assign_seat( input, seatName ) != 0 )
             {
-                std::fprintf( stderr,
-                    "QtLikeSignalGui: libinput_udev_assign_seat( \"%s\" ) failed; the process needs read "
-                    "access to /dev/input/event* (root, the input group, or logind)\n", seatName );
+                qCCritical( gLogGuiDrm )
+                    << "QtLikeSignalGui: libinput_udev_assign_seat() failed; the process needs read"
+                    << "access to /dev/input/event* (root, the input group, or logind). Seat"
+                    << seatName;
                 libinput_unref( input );
                 udev_unref( udevContext );
                 return false;
@@ -454,10 +465,10 @@ namespace QtLikeSignalGui
             currentLinuxDispatcher();
         if( !dispatcher )
         {
-            std::fprintf( stderr,
-                "QtLikeSignalGui: this thread is not running EventDispatcherLinux, so the input devices "
-                "cannot join the event loop; construct the GuiApplication on the thread that will "
-                "call exec()\n" );
+            qCWarning( gLogGuiDrm )
+                << "QtLikeSignalGui: this thread is not running EventDispatcherLinux, so the input"
+                << "devices cannot join the event loop; construct the GuiApplication on the thread"
+                << "that will call exec()";
             closeInput();
             return false;
         }
@@ -470,16 +481,17 @@ namespace QtLikeSignalGui
                 pumpInput( aEvents );
             } ) )
         {
-            std::fprintf( stderr, "QtLikeSignalGui: registerEventSource( %d ) was refused\n",
-                mInputFd );
+            qCWarning( gLogGuiDrm )
+                << "QtLikeSignalGui: registerEventSource() was refused for the libinput descriptor"
+                << mInputFd;
             mInputFd = -1;
             closeInput();
             return false;
         }
 
         // One drain before the loop ever blocks. Assigning the seat enumerates the devices, and the
-        // DEVICE_ADDED events for them are queued already -- with nothing left on the descriptor for
-        // poll() to report. Left there they would sit until the next real input arrived.
+        // DEVICE_ADDED events for them are queued already -- with nothing left on the descriptor
+        // for poll() to report. Left there they would sit until the next real input arrived.
         pumpInput( POLLIN );
         return true;
     }
@@ -538,9 +550,9 @@ namespace QtLikeSignalGui
 
         if( ( aEvents & ( POLLERR | POLLHUP | POLLNVAL ) ) != 0 )
         {
-            std::fprintf( stderr,
-                "QtLikeSignalGui: the libinput descriptor failed (revents 0x%x); input has stopped\n",
-                static_cast<unsigned int>( aEvents ) );
+            qCCritical( gLogGuiDrm )
+                << "QtLikeSignalGui: the libinput descriptor failed, so input has stopped; revents"
+                << QtLikeSignal::logHex( static_cast<unsigned int>( aEvents ) );
 
             // Input stops; the program does not. Unlike a lost X11 connection there is still a
             // display being scanned out and a renderer drawing to it, so ending the loop here would
@@ -553,7 +565,7 @@ namespace QtLikeSignalGui
 
         if( libinput_dispatch( input ) != 0 )
         {
-            std::fprintf( stderr, "QtLikeSignalGui: libinput_dispatch() failed\n" );
+            qCWarning( gLogGuiDrm ) << "QtLikeSignalGui: libinput_dispatch() failed";
             return;
         }
 
@@ -646,8 +658,8 @@ namespace QtLikeSignalGui
         {
             // get_dx(), not get_dx_unaccelerated(): the accelerated figure is the one libinput has
             // applied its pointer-acceleration profile to, which is what makes a mouse feel the way
-            // it does everywhere else on the machine. The unaccelerated value is for a program doing
-            // its own acceleration, which this is not.
+            // it does everywhere else on the machine. The unaccelerated value is for a program
+            // doing its own acceleration, which this is not.
             movePointerTo(
                 mPointerX + libinput_event_pointer_get_dx( pointer ),
                 mPointerY + libinput_event_pointer_get_dy( pointer ) );

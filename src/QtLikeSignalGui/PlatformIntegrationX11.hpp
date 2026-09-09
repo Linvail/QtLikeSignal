@@ -19,9 +19,9 @@ namespace QtLikeSignalGui
     //!
     //! **Both ways in, and they differ in exactly one thing: who destroys the window.** A created
     //! window is this backend's, and is destroyed with its Window. An adopted one belongs to the
-    //! external library that made it -- along with the GLX context still bound to it -- so releasing
-    //! it only undoes the event selection and leaves the window standing. Everything else is the
-    //! same: the same signals, the same drain, the same place in GuiApplication::windows().
+    //! external library that made it -- along with the GLX context still bound to it -- so
+    //! releasing it only undoes the event selection and leaves the window standing. Everything else
+    //! is the same: the same signals, the same drain, the same place in GuiApplication::windows().
     //!
     //! **The visual is X11's pixel format, and it is chosen once.** A window's visual is fixed at
     //! creation, and glXCreateWindow or eglCreateWindowSurface fails with BadMatch when it does not
@@ -31,16 +31,16 @@ namespace QtLikeSignalGui
     //! chooses a config itself, for the reason the Win32 backend never calls SetPixelFormat: doing
     //! it would spend the one chance the library needs.
     //!
-    //! **The connection may be ours or theirs.** Creating a window opens one if there is not already
-    //! one; adopting uses the one handed in. Whichever it is, only that one is registered with the
-    //! loop, and only a connection this backend opened is closed by it.
+    //! **The connection may be ours or theirs.** Creating a window opens one if there is not
+    //! already one; adopting uses the one handed in. Whichever it is, only that one is registered
+    //! with the loop, and only a connection this backend opened is closed by it.
     //!
-    //! **Joining the loop is the whole difference from Win32.** Windows gives every thread a message
-    //! queue whether it asks or not, so the Win32 backend needs no loop code at all. X11 has no such
-    //! thing: a display connection is a socket, and it is the program that must tell the loop about
-    //! it. EventDispatcherLinux::registerEventSource() takes XConnectionNumber( display ) and a
-    //! callback, and from then on the descriptor is one more entry in the poll(2) set the loop
-    //! already blocks in:
+    //! **Joining the loop is the whole difference from Win32.** Windows gives every thread a
+    //! message queue whether it asks or not, so the Win32 backend needs no loop code at all. X11
+    //! has no such thing: a display connection is a socket, and it is the program that must tell
+    //! the loop about it. EventDispatcherLinux::registerEventSource() takes XConnectionNumber(
+    //! display ) and a callback, and from then on the descriptor is one more entry in the poll(2)
+    //! set the loop already blocks in:
     //!
     //! @code
     //!   poll( [ eventfd, X11 socket ], timeout-until-next-timer )
@@ -50,8 +50,8 @@ namespace QtLikeSignalGui
     //! @endcode
     //!
     //! One poll(), three kinds of work, no helper thread and no polling interval. When nothing is
-    //! scheduled the timeout is -1 and the process uses no CPU, which is the mission's "100% cpu-spin
-    //! is not allowed".
+    //! scheduled the timeout is -1 and the process uses no CPU, which is the mission's "100%
+    //! cpu-spin is not allowed".
     //!
     //! **Draining is not one event per readiness.** poll() reports that the *socket* has bytes, but
     //! Xlib parses those bytes into events held in a queue inside this process. Reading one event
@@ -164,6 +164,12 @@ namespace QtLikeSignalGui
         bool prepareConnection();
 
         void unregisterConnection();
+
+        //! Records the desktop's scale on a newly created window. See the definition.
+        void reportDevicePixelRatio
+            (
+            Window* aWindow
+            );
 
         void pumpDisplay
             (

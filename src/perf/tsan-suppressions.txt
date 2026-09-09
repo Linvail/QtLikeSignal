@@ -2,7 +2,7 @@
 #
 # Usage:
 #   TSAN_OPTIONS=suppressions=src/perf/tsan-suppressions.txt \
-#       ./out/linux/Tests/linux64-clang/debug/src/perf/QtLikeSignal-Performance-Tests
+#       ./out/linux/QtLikeSignal/linux64-clang/debug/src/perf/QtLikeSignal-Performance-Tests
 #
 # Only QtLikeSignal-Performance-Tests needs this. QtLikeSignal-test is clean under TSan with no
 # suppressions at all, and must stay that way -- do not point this file at it, because a

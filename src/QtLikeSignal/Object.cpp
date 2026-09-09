@@ -10,11 +10,12 @@
 
 #include "QtLikeSignal/AbstractEventDispatcher.hpp"
 #include "QtLikeSignal/Event.hpp"
+#include "QtLikeSignal/Log.hpp"
+#include "QtLikeSignal/LogCategories.hpp"
 #include "QtLikeSignal/Thread.hpp"
 
 #include <algorithm>
 #include <climits>
-#include <cstdio>
 #include <deque>
 #include <unordered_map>
 
@@ -48,17 +49,18 @@ namespace QtLikeSignal
 
     namespace
     {
-        //! Process-wide pool of timer ids, handing out reusable ids rather than an ever-rising count.
+        //! Process-wide pool of timer ids, handing out reusable ids rather than an ever-rising
+        //! count.
         //!
-        //! Qt does the same with a lock-free QFreeList capped at 2^24 simultaneous timers; a mutex and a
-        //! deque is the proportionate equivalent here, since an id is taken once per startTimer() rather
-        //! than on any hot path.
+        //! Qt does the same with a lock-free QFreeList capped at 2^24 simultaneous timers; a mutex
+        //! and a deque is the proportionate equivalent here, since an id is taken once per
+        //! startTimer() rather than on any hot path.
         //!
-        //! Reuse is **FIFO, deliberately**. A freed id going straight back out (LIFO) would make the
-        //! narrowest recycling hazard trivially reachable: a handler that kills one timer and starts
-        //! another would get the same id back immediately, and any TimerEvent for the old timer still
-        //! in flight would then match the new one. Taking the oldest free id instead means an id is only
-        //! reused after every other freed id has been.
+        //! Reuse is **FIFO, deliberately**. A freed id going straight back out (LIFO) would make
+        //! the narrowest recycling hazard trivially reachable: a handler that kills one timer and
+        //! starts another would get the same id back immediately, and any TimerEvent for the old
+        //! timer still in flight would then match the new one. Taking the oldest free id instead
+        //! means an id is only reused after every other freed id has been.
         struct TimerIdPool
         {
             //! Takes an id, reusing the oldest freed one if there is any.
@@ -179,10 +181,10 @@ namespace QtLikeSignal
         Thread* const callerThread = Thread::currentThreadOrNull();
         if( callerThread && mAffinity->namesOtherRunningThread( callerThread ) )
         {
-            std::fprintf( stderr,
-                "Object::~Object: object destroyed from a thread other than the one it lives "
-                "in while that thread's event loop is still running; this is not safe. Use "
-                "deleteLater() to destroy an object from another thread.\n" );
+            qCWarning( gLogObject )
+                << "Object::~Object: object destroyed from a thread other than the one it lives"
+                << "in while that thread's event loop is still running; this is not safe. Use"
+                << "deleteLater() to destroy an object from another thread.";
         }
 
         // Invalidate the life flag first. connect()/callLater() wrappers running on other threads
@@ -398,19 +400,20 @@ namespace QtLikeSignal
             return true;
         }
 
-        // Transcribed from Qt's QObject::moveToThread(). The general rule is that only the thread that
-        // owns an object may re-home it, with one exception: an object that has no affinity yet may be
-        // adopted by the calling thread. That exception is what makes the two normal idioms work --
-        // moving a freshly constructed object onto a worker, and Thread adopting itself once its run
-        // loop starts -- while still rejecting one thread yanking another thread's live object away.
+        // Transcribed from Qt's QObject::moveToThread(). The general rule is that only the thread
+        // that owns an object may re-home it, with one exception: an object that has no affinity
+        // yet may be adopted by the calling thread. That exception is what makes the two normal
+        // idioms work -- moving a freshly constructed object onto a worker, and Thread adopting
+        // itself once its run loop starts -- while still rejecting one thread yanking another
+        // thread's live object away.
         Thread* const callerThread = Thread::currentThread();
         const bool adoptingUnownedObject = ( currentAffinity == nullptr )
             && ( aThread == callerThread );
         if( !adoptingUnownedObject && currentAffinity != callerThread )
         {
-            std::fprintf( stderr,
-                "Object::moveToThread: current thread is not the object's thread; cannot "
-                "move it to the target thread\n" );
+            qCWarning( gLogObject )
+                << "Object::moveToThread: current thread is not the object's thread; cannot"
+                << "move it to the target thread";
             return false;
         }
 
@@ -421,9 +424,9 @@ namespace QtLikeSignal
         // Qt refuses the same call for the same reason (qobject.cpp:1715).
         if( parent() != nullptr )
         {
-            std::fprintf( stderr,
-                "Object::moveToThread: object has a parent; move the parent instead, or "
-                "setParent(nullptr) first\n" );
+            qCWarning( gLogObject )
+                << "Object::moveToThread: object has a parent; move the parent instead, or"
+                << "setParent(nullptr) first";
             return false;
         }
 
@@ -456,8 +459,8 @@ namespace QtLikeSignal
     //!
     //! `next` is read before the child is moved, for the same reason: that child may be gone by the
     //! time the loop wants its sibling. What is *not* covered, here or in Qt, is a destructor that
-    //! deletes its own siblings while this walk is in progress; a queued delete arriving mid-walk is
-    //! ordinary, that is not.
+    //! deletes its own siblings while this walk is in progress; a queued delete arriving mid-walk
+    //! is ordinary, that is not.
     void Object::moveSubtreeToThread
         (
         Thread* aThread  //!< The thread the whole subtree moves to; nullptr clears affinity.
@@ -490,12 +493,12 @@ namespace QtLikeSignal
             return;
         }
 
-        // Take any active timers off the outgoing dispatcher before the affinity changes. Qt documents
-        // this behaviour ("all active timers for the object will be reset ... stopped in the current
-        // thread and restarted, with the same interval, in the targetThread"); without it the timers
-        // would keep firing on the thread the object just left, delivering timerEvent() somewhere it
-        // no longer lives. The caller is on that outgoing thread (push-only, checked above), so
-        // this cannot race its loop's own delivery pass.
+        // Take any active timers off the outgoing dispatcher before the affinity changes. Qt
+        // documents this behaviour ("all active timers for the object will be reset ... stopped in
+        // the current thread and restarted, with the same interval, in the targetThread"); without
+        // it the timers would keep firing on the thread the object just left, delivering
+        // timerEvent() somewhere it no longer lives. The caller is on that outgoing thread
+        // (push-only, checked above), so this cannot race its loop's own delivery pass.
         std::vector<AbstractEventDispatcher::TimerRegistration> timersToMove;
         {
             ThreadData* const oldData = mAffinity->data();
@@ -677,9 +680,9 @@ namespace QtLikeSignal
             // life flag is cleared before that loop runs, so this returns false instead.
             if( !aParent->mAffinity->isObjectAlive() )
             {
-                std::fprintf( stderr,
-                    "Object::setParent: the requested parent is being destroyed; the parent is "
-                    "unchanged\n" );
+                qCWarning( gLogObject )
+                    << "Object::setParent: the requested parent is being destroyed; the parent"
+                    << "is unchanged";
                 return false;
             }
 
@@ -691,9 +694,9 @@ namespace QtLikeSignal
             // free it. Keeping the old parent is the whole reason this function returns a bool.
             if( aParent->thread() != thread() )
             {
-                std::fprintf( stderr,
-                    "Object::setParent: the requested parent lives in a different thread; the "
-                    "parent is unchanged\n" );
+                qCWarning( gLogObject )
+                    << "Object::setParent: the requested parent lives in a different thread; the"
+                    << "parent is unchanged";
                 return false;
             }
 
@@ -707,9 +710,9 @@ namespace QtLikeSignal
             {
                 if( ancestor == this )
                 {
-                    std::fprintf( stderr,
-                        "Object::setParent: the requested parent is this object or one of its "
-                        "descendants; the parent is unchanged\n" );
+                    qCWarning( gLogObject )
+                        << "Object::setParent: the requested parent is this object or one of its"
+                        << "descendants; the parent is unchanged";
                     return false;
                 }
             }
@@ -787,13 +790,25 @@ namespace QtLikeSignal
             int aDepth            //!< How far down the tree it sits, for the indent.
             )
         {
+            // One string rather than a value per column, because a record puts a space
+            // between values and the indent has to be exact for a tree to read as one. The
+            // leading space is what makes every level four wider than the last: the pointer
+            // that follows is a second value and brings its own separator, so a line that
+            // started at column zero would sit one short of the rest.
             const std::string name = aNode->objectName();
-            std::fprintf( stderr, "%*s%s%s%s (%p)\n",
-                aDepth * 4, "",
-                name.empty() ? "" : "\"",
-                name.c_str(),
-                name.empty() ? "" : "\" ",
-                static_cast<const void*>( aNode ) );
+            std::string line( 1 + static_cast<std::size_t>( aDepth ) * 4, ' ' );
+            if( !name.empty() )
+            {
+                line += '\"';
+                line += name;
+                line += "\" ";
+            }
+
+            // Info and not Debug, unlike Qt's QObject::dumpObjectTree(), which goes to qDebug().
+            // Nobody calls this by accident: it produces output because it was asked to, and a
+            // dump that is silent unless a filter rule was set first is a dump that wasted the
+            // caller's time.
+            qCInfo( gLogObject ) << line << static_cast<const void*>( aNode );
 
             for( const Object* child = aNode->firstChild(); child != nullptr;
                 child = child->nextSibling() )
@@ -893,7 +908,8 @@ namespace QtLikeSignal
                     // event; postEvent() has already freed it. Fall through to the synchronous
                     // delete rather than leaking the object.
                     setFlag( kMayHaveQueuedWork );
-                    if( disp->postEvent( this, static_cast<Event*>( event ) ) )
+                    if( disp->postEvent( this, static_cast<Event*>( event ),
+                        OverflowPolicy::DropNewest, EventPriority::kNormal ) )
                     {
                         return;
                     }
@@ -934,36 +950,37 @@ namespace QtLikeSignal
     {
         if( aIntervalMs < 0 )
         {
-            std::fprintf( stderr, "Object::startTimer: interval cannot be negative\n" );
+            qCWarning( gLogTimer )
+                << "Object::startTimer: interval cannot be negative";
             return -1;
         }
 
         // Thread-confined, as in Qt. The timer lives in the dispatcher belonging to this object's
         // thread, and only that thread's event loop can ever deliver the resulting timerEvent().
-        // Registering from elsewhere would either race that dispatcher's lifetime or quietly install
-        // a timer whose events the caller is not positioned to receive, so refuse it outright rather
-        // than doing something surprising.
+        // Registering from elsewhere would either race that dispatcher's lifetime or quietly
+        // install a timer whose events the caller is not positioned to receive, so refuse it
+        // outright rather than doing something surprising.
         if( thread() != Thread::currentThread() )
         {
-            std::fprintf( stderr,
-                "Object::startTimer: timers cannot be started from another thread\n" );
+            qCWarning( gLogTimer )
+                << "Object::startTimer: timers cannot be started from another thread";
             return -1;
         }
 
         ThreadData* const data = threadData();
         if( !data )
         {
-            std::fprintf( stderr,
-                "Object::startTimer: object has no thread, so the timer cannot be started\n" );
+            qCWarning( gLogTimer )
+                << "Object::startTimer: object has no thread, so the timer cannot be started";
             return -1;
         }
 
         auto dispatcher = data->dispatcher();
         if( !dispatcher )
         {
-            std::fprintf( stderr,
-                "Object::startTimer: this thread has no event dispatcher, so the timer cannot "
-                "be started\n" );
+            qCWarning( gLogTimer )
+                << "Object::startTimer: this thread has no event dispatcher, so the timer cannot"
+                << "be started";
             return -1;
         }
 
@@ -972,7 +989,7 @@ namespace QtLikeSignal
         const int timerId = TimerIdPool::allocate();
         if( timerId < 0 )
         {
-            std::fprintf( stderr, "Object::startTimer: no timer ids left\n" );
+            qCWarning( gLogTimer ) << "Object::startTimer: no timer ids left";
             return -1;
         }
 
@@ -1004,8 +1021,8 @@ namespace QtLikeSignal
         // Thread-confined for the same reason as startTimer().
         if( thread() != Thread::currentThread() )
         {
-            std::fprintf( stderr,
-                "Object::killTimer: timers cannot be stopped from another thread\n" );
+            qCWarning( gLogTimer )
+                << "Object::killTimer: timers cannot be stopped from another thread";
             return;
         }
 
@@ -1027,6 +1044,28 @@ namespace QtLikeSignal
         {
             TimerIdPool::release( aTimerId );
         }
+    }
+
+    //! Gets how long until one of this object's timers next fires, in milliseconds. See the
+    //! declaration.
+    int Object::remainingTime
+        (
+        int aTimerId  //!< A timer id from startTimer().
+        ) const
+    {
+        ThreadData* const data = threadData();
+        if( !data )
+        {
+            return -1;
+        }
+
+        auto dispatcher = data->dispatcher();
+        if( !dispatcher )
+        {
+            return -1;
+        }
+
+        return dispatcher->timerRemainingTimeMs( aTimerId );
     }
 
     //! Stops the timer with id @p aTimerId.
@@ -1132,12 +1171,12 @@ namespace QtLikeSignal
             if( !dispatchMetaCall( aContext, metaCall, ConnectionType::Queued ) )
             {
                 // The target has no dispatcher yet, so this call can never run. Drop the registry
-                // entry we just created: leaving it behind is what made this failure permanent, since
-                // every later callLater() for the same target would find it, take the "already
-                // scheduled" branch above, and never dispatch again -- silently disabling that
-                // (context, slot) pair for the rest of the object's life, even once a dispatcher
-                // existed. Erasing lets the next call re-arm. This call is still lost; only a
-                // retry queue could save it, which would need its own ownership rules.
+                // entry we just created: leaving it behind is what made this failure permanent,
+                // since every later callLater() for the same target would find it, take the
+                // "already scheduled" branch above, and never dispatch again -- silently disabling
+                // that (context, slot) pair for the rest of the object's life, even once a
+                // dispatcher existed. Erasing lets the next call re-arm. This call is still lost;
+                // only a retry queue could save it, which would need its own ownership rules.
                 std::lock_guard<std::mutex> lock( CallLaterRegistry::sMutex );
                 CallLaterRegistry::sPending.erase( aKey );
             }
@@ -1209,8 +1248,8 @@ namespace QtLikeSignal
         // Swept more than once. A thread that resolved this object's affinity before the swap can
         // still be inside postEvent() on the old dispatcher, and its event would be stranded by a
         // single pass. Every such poster is already in flight, so the set drains; the cap is there
-        // because a caller that never stops posting to a moving object is misusing it, and a bounded
-        // loop is better than one that can be kept spinning.
+        // because a caller that never stops posting to a moving object is misusing it, and a
+        // bounded loop is better than one that can be kept spinning.
         constexpr int kMaxSweeps = 8;
         for( int sweep = 0; sweep < kMaxSweeps; ++sweep )
         {
@@ -1236,11 +1275,27 @@ namespace QtLikeSignal
                 // belongs to the destination's ThreadData -- see ThreadData::mParkedEvents, which
                 // is what makes "moveToThread() before start()" work.
                 const std::shared_ptr<AbstractEventDispatcher> newDispatcher
-                    = aNewData->dispatcherOrPark( this, event );
+                    = aNewData->dispatcherOrPark( this, event, EventPriority::kNormal );
                 if( newDispatcher )
                 {
-                    // postEvent() deletes the event itself when it refuses.
-                    newDispatcher->postEvent( this, event );
+                    // The priority the event was posted at is not carried across: the queue
+                    // it is leaving holds that, and takeEventsForReceiver() hands back bare Event
+                    // pointers. A move is rare and a demotion to kNormal is the conservative
+                    // answer -- an event does not silently gain rank by changing threads. Carrying
+                    // it would mean widening that hand-off, which is worth doing when something
+                    // needs it.
+                    //
+                    // Unconditionally, because this is a move rather than a post: every one
+                    // of these events was admitted once already, on the dispatcher it is leaving.
+                    // Putting them through admission again would let moveToThread() silently
+                    // destroy accepted work whenever the destination happened to sit near its
+                    // ceiling, which is a surprising place to lose an event. The method deletes
+                    // the event itself if it refuses, which it only does for a closed dispatcher.
+                    // At kNormal: takeEventsForReceiver() hands back bare Event pointers, so
+                    // the rank these were posted at is not recoverable here. A parked event does
+                    // keep its rank, because ThreadData records it -- see ParkedEvent.
+                    newDispatcher->postEventUnconditionally( this, event,
+                        EventPriority::kNormal );
                 }
             }
         }
@@ -1249,8 +1304,8 @@ namespace QtLikeSignal
     //! Routes an event to its handler. Returns true if the event was recognised and handled.
     //!
     //! Deliberately private and non-virtual: this is not an extension point. The event queue is the
-    //! sole caller (see the friend declaration in the header), and the set of event types is closed.
-    //! Override timerEvent() instead to react to timers.
+    //! sole caller (see the friend declaration in the header), and the set of event types is
+    //! closed. Override timerEvent() instead to react to timers.
     bool Object::event
         (
         Event* aEvent  //!< The event to handle.
@@ -1271,16 +1326,109 @@ namespace QtLikeSignal
             delete this;
             return true;
 
-        case Event::MetaCall:
-            static_cast<MetaCallEvent*>( aEvent )->placeMetaCall();
-            return true;
+        // Event::MetaCall is deliberately absent, and dispatchEvent() is where it goes instead.
+        // Routing one back through here would mean dereferencing the receiver to make this virtual
+        // call, which is exactly what a queued emit must never do -- see dispatchEvent().
 
         default:
-            // The only events that reach this queue are the three above, all posted by Object's own
-            // internals. Nothing can inject an arbitrary event for an arbitrary receiver, so any
-            // other type is unreachable rather than something to hand to a user hook.
+            // An application's own type, which this class knows nothing about. False means
+            // unhandled, and an override that recognises the type is what turns it into true --
+            // the same answer QObject::event() gives for a type no Qt class claims.
+            //
+            // Reached only through postEvent(), which admits nothing below Event::User. So the
+            // three casts above can never be handed an event that is not of the class they name:
+            // an application cannot construct one of those subclasses, and a plain Event carrying
+            // an internal type is refused at the queue's edge rather than arriving here.
             return false;
         }
+    }
+
+    //! Delivers one dispatched event, choosing a route that does not touch a receiver that need not
+    //! still be there. See the declaration.
+    bool Object::dispatchEvent
+        (
+        Object* aReceiver,  //!< Receiver the event was queued against; never null, checked by the caller.
+        Event* aEvent       //!< The event to deliver; never null, checked by the caller.
+        )
+    {
+        if( aEvent->type() == Event::MetaCall )
+        {
+            // The receiver is not dereferenced here, and that is the whole reason this function
+            // exists rather than the dispatcher calling event() straight.
+            //
+            // A queued emit names its receiver only as the key removeEventsForReceiver() matches
+            // on. Everything the call actually needs -- the slot, the arguments, and the life token
+            // that decides whether to run at all -- travels inside the event, so the pointer is
+            // never followed. That is what makes the documented pattern safe: destroy a receiver on
+            // one thread while its worker is still draining thousands of metacalls queued for it,
+            // and each one finds the token dead and does nothing.
+            //
+            // Reading the receiver's vtable to make a virtual call would end that. event() is
+            // virtual, so `aReceiver->event( aEvent )` loads the vptr -- from an object whose
+            // destructor may be running concurrently on another thread. The load is a genuine race
+            // rather than a pedantic one, and ThreadSanitizer reports it as such.
+            static_cast<MetaCallEvent*>( aEvent )->placeMetaCall();
+            return true;
+        }
+
+        // The remaining types dereference the receiver whatever route they take -- a timer reaches
+        // the virtual timerEvent(), and a deferred delete runs the destructor -- so going through
+        // the virtual hook costs them nothing they were not already paying. Both are posted by
+        // Object's own internals against a receiver that has to be alive to be delivered to, which
+        // is the contract ~Object() maintains by stripping the queue before it returns.
+        return aReceiver->event( aEvent );
+    }
+
+    //! Posts an application's event to the receiver's thread. See the declaration.
+    bool Object::postEvent
+        (
+        Object* aReceiver,       //!< Object to deliver to; null refuses the post.
+        Event* aEvent,           //!< The event; owned from here on, null refuses the post.
+        OverflowPolicy aPolicy,  //!< What to do if the receiving queue is full.
+        int aPriority            //!< Higher runs first.
+        )
+    {
+        if( !aEvent )
+        {
+            return false;
+        }
+
+        if( !aReceiver )
+        {
+            delete aEvent;
+            return false;
+        }
+
+        // The check that keeps event()'s three casts sound. An application can reach Event's
+        // protected constructor from its own subclass and pass MetaCall to it, and the result would
+        // be dispatched by casting to MetaCallEvent -- a cast to a class the object is not.
+        // Refusing here is what makes that unreachable rather than merely discouraged.
+        if( !Event::isUserType( aEvent->type() ) )
+        {
+            qCWarning( gLogObject )
+                << "postEvent refused a reserved event type "
+                << static_cast<int>( aEvent->type() )
+                << "; an application's own types start at Event::User ("
+                << static_cast<int>( Event::User ) << ").";
+            delete aEvent;
+            return false;
+        }
+
+        // Read here, once, and handed on as a plain pointer: a ThreadData outlives the process's
+        // use of it, so the answer cannot go stale underneath the post the way a Thread* could.
+        // This is the one place the receiver is dereferenced, which is why it must be alive for the
+        // duration of this call but not until delivery.
+        ThreadData* const data = aReceiver->threadData();
+        if( !data )
+        {
+            // No affinity, so no loop that would ever run this. Dropped rather than run inline on
+            // the calling thread: delivering to an object that lives nowhere, on whichever thread
+            // happened to post, is precisely the surprise moveToThread( nullptr ) exists to avoid.
+            delete aEvent;
+            return false;
+        }
+
+        return postEventTo( data, aReceiver, aEvent, aPolicy, aPriority );
     }
 
     //! Dispatches a metacall to the target object's event loop, honouring @p aType. Thread-safe.
@@ -1320,29 +1468,32 @@ namespace QtLikeSignal
         return true;
     }
 
-    //! Queues, parks or discards a metacall event on an explicitly named thread.
+    //! Queues, parks or discards an event on an explicitly named thread.
     //!
     //! Everything dispatchMetaCallTo() does that does not depend on the callable's type, split out
-    //! so that only the allocation is a template. dispatchMetaCallTo() has already rejected a null
+    //! so that only the allocation is a template, and the same body the public postEvent() reaches
+    //! once it has resolved the receiver's affinity. Both callers have already rejected a null
     //! @p aData, so reaching here means there is a thread to aim at.
     //!
     //! Takes ownership of @p aEvent on every path: it is handed to the dispatcher, parked, or
     //! deleted here.
     //!
-    //! Thread-safe. @p aReceiver is not dereferenced *by this function*: it is handed to postEvent()
-    //! purely as the key that removeEventsForReceiver() later matches on. It is dereferenced
-    //! afterwards, when the dispatcher drains the queue and calls aReceiver->event(), so the
-    //! receiver has to still be alive at that point. What guarantees that is ~Object(), which calls
-    //! removeEventsForReceiver() and deletes every event still queued for the object before it goes
-    //! away.
+    //! Thread-safe. @p aReceiver is not dereferenced *by this function*: it is handed to the
+    //! dispatcher's postEvent() purely as the key that removeEventsForReceiver() later matches on.
+    //! It is dereferenced afterwards, when the dispatcher drains the queue and calls
+    //! aReceiver->event(), so the receiver has to still be alive at that point. What guarantees
+    //! that is ~Object(), which calls removeEventsForReceiver() and deletes every event still
+    //! queued for the object before it goes away.
     //!
     //! Returns true if the call was queued; false if the thread has no dispatcher, in which case
     //! the call is dropped.
-    bool Object::postMetaCall
+    bool Object::postEventTo
         (
-        ThreadData* aData,   //!< Thread to deliver on; never null, checked by the caller.
-        Object* aReceiver,   //!< Receiver; the queue key here.
-        MetaCallEvent* aEvent                       //!< The built event; owned from here on.
+        ThreadData* aData,       //!< Thread to deliver on; never null, checked by the caller.
+        Object* aReceiver,       //!< Receiver; the queue key here.
+        Event* aEvent,           //!< The built event; owned from here on.
+        OverflowPolicy aPolicy,  //!< What to do if the receiving queue is full.
+        int aPriority            //!< Higher runs first.
         )
     {
         // A thread that is running but has not installed a dispatcher yet is in the window between
@@ -1374,16 +1525,16 @@ namespace QtLikeSignal
         {
             // Takes ownership of the event only when it parks; a dispatcher that appeared while we
             // were getting here is handed back instead, and then the post below is the normal path.
-            if( auto disp = aData->dispatcherOrPark( aReceiver, aEvent ) )
+            if( auto disp = aData->dispatcherOrPark( aReceiver, aEvent, aPriority ) )
             {
-                return disp->postEvent( aReceiver, static_cast<Event*>( aEvent ) );
+                return disp->postEvent( aReceiver, aEvent, aPolicy, aPriority );
             }
             return true;
         }
 
         if( auto disp = aData->dispatcher() )
         {
-            return disp->postEvent( aReceiver, static_cast<Event*>( aEvent ) );
+            return disp->postEvent( aReceiver, aEvent, aPolicy, aPriority );
         }
 
         delete aEvent;

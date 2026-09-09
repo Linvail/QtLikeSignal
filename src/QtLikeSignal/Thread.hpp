@@ -60,9 +60,15 @@ namespace QtLikeSignal
     public:
         //! Constructs an unstarted thread with an optional name and parent.
         //!
-        //! The name is descriptive only -- it is not pushed to the OS and nothing keys off it. It
-        //! exists so a thread can identify itself in a log or a test failure, which matters most
-        //! exactly when several are running at once.
+        //! **The name is Object::objectName().** Passing one here is the same as calling
+        //! setObjectName() afterwards, and there is no separate thread name to disagree with it.
+        //! An empty name leaves the object unnamed rather than storing an empty one.
+        //!
+        //! It exists so a thread can identify itself in a log or a test failure, which matters most
+        //! exactly when several are running at once -- and **start() gives it to the operating
+        //! system too**, so `ps -L` on Linux and a debugger's thread list on Windows show the same
+        //! name. Set it before start(); a rename afterwards changes what objectName() reports and
+        //! not what the OS was told, which is the same rule QThread states.
         //!
         //! **A parent owns the thread and will delete it**, as it would any other child, which for
         //! a Thread means the destructor's quit() and wait() run from the parent's destructor. That
@@ -95,7 +101,30 @@ namespace QtLikeSignal
             const Thread&
             ) = delete;
 
-        const std::string& name() const;
+        //! Sets the name the operating system reports for the **calling** thread.
+        //!
+        //! Static, and it acts on whichever thread calls it, because that is the only thread whose
+        //! name can always be set: some platforms let a thread be renamed from outside and some do
+        //! not. Nothing else in this class needs it, and it is public because a program that
+        //! never touches Thread may still want its own threads labelled in `ps -L` or a debugger.
+        //!
+        //! **Linux truncates to 15 characters.** That is the kernel's limit on a thread's comm
+        //! field, not a choice made here, and a longer name is cut rather than refused.
+        static void setNativeName
+            (
+            const std::string& aName  //!< New name, UTF-8. Empty does nothing.
+            );
+
+        //! @return the name the operating system has for the **calling** thread, or empty.
+        //!
+        //! What `ps -L` shows on Linux and what a debugger's thread list shows on Windows. Empty
+        //! when the thread was never named, and on Windows also when the system is older than the
+        //! thread-description API added in Windows 10.
+        //!
+        //! This is how an adopted thread gets a name without anybody having to give it one: the
+        //! thread already existed and whoever created it usually named it, so adoption reads that
+        //! name rather than inventing one. See Thread::currentThread().
+        static std::string nativeName();
 
         std::thread::id id() const;
 
@@ -172,6 +201,11 @@ namespace QtLikeSignal
         void setWakeCallback
             (
             std::function<void()> aCallback
+            );
+
+        void setDeadlineCallback
+            (
+            std::function<void( int aMsFromNow )> aCallback
             );
 
         bool isAdopted() const;
@@ -284,6 +318,24 @@ namespace QtLikeSignal
             Priority aPriority
             );
 
+        //! Labels the OS thread this object created, so `ps -L` and a debugger agree with
+        //! objectName().
+        //!
+        //! **Called from start(), on the calling thread, not from the new one.** Both platforms can
+        //! name a thread other than the caller -- pthread_setname_np takes a pthread_t and
+        //! SetThreadDescription takes a HANDLE -- and doing it here keeps the name where it can be
+        //! read safely. The new thread reading objectName() for itself would be a cross-thread read
+        //! of the very field its owner is free to be writing. Qt solves the same problem by copying
+        //! objectName into QThreadPrivate before pthread_create and letting the new thread apply
+        //! the copy; this needs no copy because it never leaves the owning thread.
+        //!
+        //! Does nothing if @p aName is empty or the OS thread does not exist. Implemented in
+        //! ThreadWin.cpp / ThreadPosix.cpp. Called with mPriorityMutex held.
+        void applyNativeName
+            (
+            const std::string& aName  //!< The name to give the OS thread, UTF-8.
+            );
+
         //! Everything the new thread must do whether or not run() is overridden.
         //!
         //! Kept separate from run() precisely so it cannot be overridden away: an override that
@@ -331,8 +383,6 @@ namespace QtLikeSignal
             bool mJoinable { false };
 
         #endif
-
-        std::string mName;                        //!< Thread name
 
         //! Id of the OS thread, published by threadBody() before anything else. Atomic because
         //! id() may be asked from any thread while the thread being described publishes it.
@@ -389,14 +439,15 @@ namespace QtLikeSignal
         //! every use of that handle (creation, priority application, wait()).
         //!
         //! Not merely protecting the enum. The run body clears the running flag while holding this
-        //! mutex, so a setPriority() that has observed it true under the same lock is guaranteed the
-        //! OS thread has not yet reached the end of its body -- without that, the handle could be
-        //! touched after the thread had exited. start() holds it across thread creation for the same
-        //! reason in reverse: nobody may see the flag true before the handle exists, and a UNIX
-        //! priority fix-up inside run() cannot run before the priority meant for THIS run is decided.
+        //! mutex, so a setPriority() that has observed it true under the same lock is guaranteed
+        //! the OS thread has not yet reached the end of its body -- without that, the handle could
+        //! be touched after the thread had exited. start() holds it across thread creation for the
+        //! same reason in reverse: nobody may see the flag true before the handle exists, and a
+        //! UNIX priority fix-up inside run() cannot run before the priority meant for THIS run is
+        //! decided.
         //!
-        //! It is never held across a blocking wait, so a waiter cannot keep the finishing thread from
-        //! taking it.
+        //! It is never held across a blocking wait, so a waiter cannot keep the finishing thread
+        //! from taking it.
         mutable std::mutex mPriorityMutex;
 
         Priority mPriority { InheritPriority };  //!< Priority applied to the current/most recent run.

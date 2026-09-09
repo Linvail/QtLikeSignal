@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! A real X11 program on QtLikeSignal: one window whose events arrive through QtLikeSignal's own
@@ -8,14 +11,14 @@
 //! signals.
 //!
 //! **This is not how to write a GUI program on this library.** QtLikeSignalGui exists for that, and
-//! QtLikeSignalGui-Demo-X11 is the demo to copy: it opens a window without naming Xlib once. What this
-//! program demonstrates is the other position -- a program that already owns its display
-//! connection, because an existing toolkit or an external GL library opened it, and wants QtLikeSignal's
-//! loop anyway. The X11Application class below is deliberately doing by hand what
+//! QtLikeSignalGui-Demo-X11 is the demo to copy: it opens a window without naming Xlib once. What
+//! this program demonstrates is the other position -- a program that already owns its display
+//! connection, because an existing toolkit or an external GL library opened it, and wants
+//! QtLikeSignal's loop anyway. The X11Application class below is deliberately doing by hand what
 //! PlatformIntegrationX11 does properly; read it as an integration example, not as a model.
 //!
-//! The Win32 demo beside this one shows the same seam through the other mechanism QtLikeSignal offers:
-//! there the dispatcher pumps the OS queue itself rather than waiting on a descriptor.
+//! The Win32 demo beside this one shows the same seam through the other mechanism QtLikeSignal
+//! offers: there the dispatcher pumps the OS queue itself rather than waiting on a descriptor.
 //!
 //! There is no XNextEvent() loop in this program. CoreApplication::exec() is the only loop, and the
 //! display connection reaches it through EventDispatcherLinux::registerEventSource() -- the socket
@@ -43,6 +46,8 @@
 #include "QtLikeSignal/Signal.hpp"
 #include "QtLikeSignal/Thread.hpp"
 #include "QtLikeSignal/Timer.hpp"
+
+#include "QtLikeSignal/Log.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -552,9 +557,9 @@ int main
 {
     X11Application app( aArgc, aArgv );
 
-    if( !app.createWindow( "QtLikeSignal demo -- X11 events and our own events", 1024, 640 ) )
+    if( !app.createWindow( "QtLikeSignal demo -- X11 events and our own events", 1280, 720 ) )
     {
-        std::fprintf( stderr, "failed to create the window\n" );
+        qCWarning( gLogDemo ) << "failed to create the window";
         return 1;
     }
 
@@ -606,7 +611,7 @@ int main
     }
 
     std::printf( "QtLikeSignal X11 demo running.\n" );
-    std::printf( "  window            : 1024x640 on DISPLAY=%s\n",
+    std::printf( "  window            : 1280x720 on DISPLAY=%s\n",
         std::getenv( "DISPLAY" ) != nullptr ? std::getenv( "DISPLAY" ) : "<unset>" );
     std::printf( "  event loop        : CoreApplication::exec()\n" );
     std::printf( "  X event source    : EventDispatcherLinux::registerEventSource( "

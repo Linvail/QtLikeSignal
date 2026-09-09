@@ -16,11 +16,12 @@
 //! promise that a sequence of two such calls is atomic.
 //!
 //! In particular, a query marked thread-safe may be **stale on return**. `Signal::empty()`,
-//! `Signal::receivers()`, `Thread::isRunning()` and `Thread::isFinished()` are all race-free and all
-//! answer about an instant that has already passed; another thread may connect, disconnect, start or
-//! finish before you act on the answer. Use them for diagnostics and assertions, not for decisions
-//! that must still hold a line later. Qt draws the same line: it marks `QThread::isRunning()`
-//! `\threadsafe` and separately warns that the thread may still be running afterwards.
+//! `Signal::receivers()`, `Thread::isRunning()` and `Thread::isFinished()` are all race-free and
+//! all answer about an instant that has already passed; another thread may connect, disconnect,
+//! start or finish before you act on the answer. Use them for diagnostics and assertions, not for
+//! decisions that must still hold a line later. Qt draws the same line: it marks
+//! `QThread::isRunning()` `\threadsafe` and separately warns that the thread may still be running
+//! afterwards.
 //!
 //! **"Not thread-safe" means the opposite is documented, not merely absent**, and it always names
 //! the thread that may call: "must be called from this object's own thread". Calling it from

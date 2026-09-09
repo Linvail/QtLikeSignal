@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! QtLikeSignalDemo::X11Application -- a CoreApplication that owns a real X11 window and turns the
@@ -10,11 +13,15 @@
 #define QT_LIKE_SIGNAL_DEMO_X11APPLICATION_HPP
 
 #include "QtLikeSignal/CoreApplication.hpp"
+#include "QtLikeSignal/LogCategory.hpp"
 #include "QtLikeSignal/Signal.hpp"
 
 #include "MouseEvent.hpp"
 
 #include <atomic>
+
+//! This demo's logging category, defined beside the application class it belongs to.
+QTLIKESIGNAL_DECLARE_LOG_CATEGORY( gLogDemo )
 
 namespace QtLikeSignalDemo
 {

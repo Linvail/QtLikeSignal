@@ -13,8 +13,9 @@
 #elif defined( __linux__ )
     #include "QtLikeSignal/EventDispatcherLinux.hpp"
 #endif
+#include "QtLikeSignal/Log.hpp"
+#include "QtLikeSignal/LogCategories.hpp"
 
-#include <cstdio>
 #include <memory>
 
 namespace QtLikeSignal
@@ -30,8 +31,14 @@ namespace QtLikeSignal
         Object* aParent            //!< Owner that will delete this thread; none by default.
         )
         : Object( aParent )
-        , mName( aName )
     {
+        // The name is the object name, and nothing else stores it. Empty is left alone rather than
+        // written, so an unnamed thread does not allocate an Extras just to hold "".
+        if( !aName.empty() )
+        {
+            setObjectName( aName );
+        }
+
         mData = ThreadData::create();
         mData->setThread( this );
     }
@@ -55,10 +62,10 @@ namespace QtLikeSignal
         // dispatcher is still reachable through this ThreadData.
         //
         // threadBody() already does both for a worker that ran a loop, so this is normally a no-op
-        // there. It exists for the case that had no equivalent: an *adopted* thread, whose Thread is
-        // destroyed by its thread_local owner as the native thread exits. Its dispatcher was never
-        // released, so it outlived the thread and kept accepting work nothing would ever run, and
-        // any deleteLater() still queued was freed as an event without its target ever being
+        // there. It exists for the case that had no equivalent: an *adopted* thread, whose Thread
+        // is destroyed by its thread_local owner as the native thread exits. Its dispatcher was
+        // never released, so it outlived the thread and kept accepting work nothing would ever run,
+        // and any deleteLater() still queued was freed as an event without its target ever being
         // deleted. Draining runs on the exiting thread itself, which is the thread those
         // destructors expect.
         if( auto dispatcher = mData->dispatcher() )
@@ -140,6 +147,16 @@ namespace QtLikeSignal
         mPriority = aPriority;
 
         startPlatformSpecific();
+
+        // Told to the operating system here, on this thread, and only here. The new thread could
+        // name itself, but it would have to read objectName() to do it -- a cross-thread read of
+        // the one field this thread's owner is free to be writing. Read on the owning thread
+        // instead, where it is safe by the ordinary rule, and applied to the new thread by handle.
+        //
+        // This is also why a rename after start() does not reach the OS: there is no second moment
+        // where the name can be read safely. QThread says the same thing to its own callers --
+        // "call setObjectName() before starting the thread".
+        applyNativeName( objectName() );
     }
 
     //! Everything the new thread must do whether or not run() is overridden: publish the thread id,
@@ -303,8 +320,8 @@ namespace QtLikeSignal
     //! same queue, MetaCallEvent and lifetime handling as every other queued call in this library
     //! (removeEventsForReceiver() on destruction, processDeferredDeletes() on shutdown) rather than
     //! a second, parallel task queue. Returns true if the task was queued; false if this thread has
-    //! no dispatcher yet (before start()/exec(), or after it has fully finished and released it), in
-    //! which case the task is dropped rather than run. Thread-safe.
+    //! no dispatcher yet (before start()/exec(), or after it has fully finished and released it),
+    //! in which case the task is dropped rather than run. Thread-safe.
     bool Thread::post
         (
         std::function<void()> aTask  //!< The callable to run on this thread. Ignored (returns false) if empty.
@@ -380,8 +397,8 @@ namespace QtLikeSignal
     //!
     //! **Defaults to not blocking**, which is what a foreign loop wants and what Qt's
     //! QCoreApplication::processEvents() does. The other setting parks the thread in our condition
-    //! variable until a QtLikeSignal call releases it, and the loop that owns the thread has no reason
-    //! to make one -- so on an idle thread that is a hang rather than a wait. Ask for
+    //! variable until a QtLikeSignal call releases it, and the loop that owns the thread has no
+    //! reason to make one -- so on an idle thread that is a hang rather than a wait. Ask for
     //! WaitForMoreEvents only if this thread genuinely has nothing else to do.
     void Thread::processEvents
         (
@@ -390,8 +407,8 @@ namespace QtLikeSignal
     {
         if( this != currentThread() )
         {
-            std::fprintf( stderr,
-                "Thread::processEvents: must be called from the thread it belongs to\n" );
+            qCWarning( gLogThread )
+                << "Thread::processEvents: must be called from the thread it belongs to";
             return;
         }
 
@@ -419,6 +436,39 @@ namespace QtLikeSignal
         if( auto dispatcher = mData->dispatcher() )
         {
             dispatcher->setWakeCallback( std::move( aCallback ) );
+        }
+    }
+
+    //! Installs the callback invoked whenever this thread's earliest timer deadline moves.
+    //! Thread-safe.
+    //!
+    //! **The half of the adopted-thread story that setWakeCallback() does not cover.** A wake
+    //! callback says "something was posted", which is everything a posted event needs. A timer
+    //! needs the other question answered -- how long may this loop sleep before it must call
+    //! processEvents() again -- and a native loop that never asks it runs its timers whenever some
+    //! unrelated event happens to wake it, and on an idle thread not at all.
+    //!
+    //! So a native loop wants both: wake on a post, and never sleep past the number this reports.
+    //!
+    //! @code
+    //!   thread->setWakeCallback( [&]() { nudgeNativeLoop(); } );
+    //!   thread->setDeadlineCallback( [&]( int aMsFromNow ) { armNativeTimer( aMsFromNow ); } );
+    //!   // ...and in the native loop, once it wakes for either reason:
+    //!   thread->processEvents();
+    //! @endcode
+    //!
+    //! -1 means nothing is scheduled and the loop may sleep indefinitely; 0 means a deadline has
+    //! already passed. Called once from inside this function with the deadline as it stands, so a
+    //! host does not have to poll for the first one. Runs with no dispatcher lock held, on
+    //! whichever thread moved the deadline, and must not block. Pass nullptr to remove it.
+    void Thread::setDeadlineCallback
+        (
+        std::function<void( int aMsFromNow )> aCallback  //!< Invoked on a move; nullptr clears.
+        )
+    {
+        if( auto dispatcher = mData->dispatcher() )
+        {
+            dispatcher->setDeadlineCallback( std::move( aCallback ) );
         }
     }
 
@@ -456,8 +506,8 @@ namespace QtLikeSignal
     {
         if( aPriority == InheritPriority )
         {
-            std::fprintf( stderr,
-                "Thread::setPriority: InheritPriority cannot be set, only reported\n" );
+            qCWarning( gLogThread )
+                << "Thread::setPriority: InheritPriority cannot be set, only reported";
             return;
         }
 
@@ -472,8 +522,8 @@ namespace QtLikeSignal
         #endif
         if( !mData->isThreadRunning() || !haveThread )
         {
-            std::fprintf( stderr,
-                "Thread::setPriority: cannot set priority, thread is not running\n" );
+            qCWarning( gLogThread )
+                << "Thread::setPriority: cannot set priority, thread is not running";
             return;
         }
 
@@ -498,7 +548,8 @@ namespace QtLikeSignal
     //!
     //! Matches Qt's isRunning(), which reads threadState == Running and which an adopted QThread
     //! sits in for its whole life. Thread-safe, and stale on return: the thread may start or finish
-    //! before you act on the answer. To synchronise with a thread's end, call wait(). See Global.hpp.
+    //! before you act on the answer. To synchronise with a thread's end, call wait(). See
+    //! Global.hpp.
     bool Thread::isRunning() const
     {
         return mData->isThreadRunning();
@@ -530,11 +581,6 @@ namespace QtLikeSignal
 
     //! Gets this thread's descriptive name, empty if it was not given one. Thread-safe: the name
     //! is set at construction and never changes.
-    const std::string& Thread::name() const
-    {
-        return mName;
-    }
-
     //! Gets a subscription-only view of the signal emitted when this thread's event loop starts
     //! running (Qt-like QThread::started()). Thread-safe.
     SignalView<>& Thread::getStarted() const
@@ -577,7 +623,14 @@ namespace QtLikeSignal
             sAdopting = true;
             // Built with no affinity (currentThread() reports nullptr while sAdopting is set);
             // adoptCallingThread() points it at itself immediately.
-            sAdoptedThread.reset( new Thread( "adopted" ) );
+            //
+            // Named from the operating system rather than from a literal. The thread already
+            // existed and whoever created it has usually named it -- a renderer's "render", a
+            // pool's "worker-3" -- so reading that is more useful than every adopted thread in the
+            // process answering "adopted". nativeName() is empty when nobody named it, and then
+            // the literal is the fallback rather than the rule.
+            const std::string nativeName = Thread::nativeName();
+            sAdoptedThread.reset( new Thread( nativeName.empty() ? "adopted" : nativeName ) );
             sAdopting = false;
 
             sAdoptedThread->adoptCallingThread();

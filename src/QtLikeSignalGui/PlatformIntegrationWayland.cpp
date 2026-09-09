@@ -20,11 +20,16 @@
 #include "QtLikeSignal/EventDispatcherLinux.hpp"
 #include "QtLikeSignal/Thread.hpp"
 
+#include "QtLikeSignal/Log.hpp"
+#include "QtLikeSignalGui/LogCategories.hpp"
+
 #include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <set>
 #include <string>
 
 #include <poll.h>
@@ -73,6 +78,20 @@ namespace QtLikeSignalGui
             bool mDecorReady { false };           //!< Set by that sync.
         #endif
 
+        //! Every wl_output the compositor has announced, and the scale each reports.
+        //!
+        //! Kept because a surface is told which outputs it is on, not what they are like: the
+        //! scale arrives on the output and the membership arrives on the surface, and the window's
+        //! ratio needs both. Keyed by the wl_output pointer, which is what wl_surface::enter and
+        //! leave hand over.
+        std::map<wl_output*, int> mOutputScales;
+
+        //! The outputs this window's surface is currently on, in the compositor's opinion.
+        //!
+        //! A window straddling two monitors is on both, which is exactly the case the scale has to
+        //! answer for. See scaleForSurface().
+        std::set<wl_output*> mSurfaceOutputs;
+
         wl_cursor_theme* mCursorTheme { nullptr };   //!< Where the pointer image comes from.
         wl_surface* mCursorSurface { nullptr };      //!< The surface the pointer image is on.
 
@@ -114,7 +133,8 @@ namespace QtLikeSignalGui
 
     namespace
     {
-        //! Gets the running thread's dispatcher as an EventDispatcherLinux, or null if it is not one.
+        //! Gets the running thread's dispatcher as an EventDispatcherLinux, or null if it is not
+        //! one.
         std::shared_ptr<QtLikeSignal::EventDispatcherLinux> currentLinuxDispatcher()
         {
             QtLikeSignal::Thread* const current = QtLikeSignal::Thread::currentThread();
@@ -144,8 +164,8 @@ namespace QtLikeSignalGui
         //!
         //! Wayland has no server-side decoration, so a plain xdg-shell toplevel is a bare rectangle
         //! with no title bar and no close button. libdecor draws one, which is what a desktop wants
-        //! and what GGL always does -- but a kiosk or an automotive target does not want a title bar
-        //! at all, and neither does anything running full screen.
+        //! and what GGL always does -- but a kiosk or an automotive target does not want a title
+        //! bar at all, and neither does anything running full screen.
         //!
         //! An environment variable rather than a WindowSettings field because it is a property of
         //! the machine the program was put on, not of the window the program asked for: the same
@@ -200,8 +220,8 @@ namespace QtLikeSignalGui
 
     //! The C callbacks libwayland dispatches through, and the listener tables that name them.
     //!
-    //! A struct of statics rather than free functions, so that one friend declaration on the backend
-    //! covers all of them. Every one takes the backend as its user data.
+    //! A struct of statics rather than free functions, so that one friend declaration on the
+    //! backend covers all of them. Every one takes the backend as its user data.
     struct WaylandListeners
     {
         //-------------------------------------------------------------------------------------
@@ -244,11 +264,166 @@ namespace QtLikeSignalGui
                     &wl_seat_interface, std::min( 4u, aVersion ) ) );
                 wl_seat_add_listener( internals.mSeat, &kSeatListener, self );
             }
+            else if( std::strcmp( aInterface, wl_output_interface.name ) == 0 )
+            {
+                // Version 2 is where the scale event arrives, and there is no point below it: an
+                // output that cannot report a scale contributes nothing this listener wants.
+                if( aVersion >= 2 )
+                {
+                    wl_output* const output = static_cast<wl_output*>( wl_registry_bind( aRegistry,
+                        aName, &wl_output_interface, std::min( 2u, aVersion ) ) );
+                    internals.mOutputScales[output] = 1;
+                    wl_output_add_listener( output, &kOutputListener, self );
+                }
+            }
             else if( std::strcmp( aInterface, ivi_application_interface.name ) == 0 )
             {
                 internals.mIvi = static_cast<ivi_application*>( wl_registry_bind( aRegistry, aName,
                     &ivi_application_interface, 1 ) );
             }
+        }
+
+        //! Works out the window's device-pixel ratio and reports it if it moved.
+        //!
+        //! **The largest scale of every output the surface is on, which is what the compositor
+        //! expects.** A window straddling a 1x and a 2x monitor has to be drawn for the sharper
+        //! one, because the compositor downscales for the other and cannot invent detail going the
+        //! other way. GTK and Qt pick the maximum for the same reason.
+        //!
+        //! Falls back to 1 when the surface is on no output the compositor has told us about,
+        //! which is the state between creating a surface and the first wl_surface::enter.
+        static void updateDevicePixelRatio
+            (
+            PlatformIntegrationWayland* aSelf  //!< The backend.
+            )
+        {
+            PlatformIntegrationWayland::Internals& internals = *aSelf->mInternals;
+
+            int scale = 0;
+            for( wl_output* const output : internals.mSurfaceOutputs )
+            {
+                const auto it = internals.mOutputScales.find( output );
+                if( it != internals.mOutputScales.end() )
+                {
+                    scale = std::max( scale, it->second );
+                }
+            }
+
+            if( scale <= 0 )
+            {
+                scale = 1;
+            }
+
+            WindowSystemInterface::handleDevicePixelRatioChanged( aSelf->mWindow,
+                static_cast<double>( scale ) );
+        }
+
+        //! The output's physical layout. Nothing here needs it, and it is required to exist.
+        static void outputGeometry
+            (
+            void* aData,
+            wl_output* aOutput,
+            std::int32_t aX,
+            std::int32_t aY,
+            std::int32_t aPhysicalWidth,
+            std::int32_t aPhysicalHeight,
+            std::int32_t aSubpixel,
+            const char* aMake,
+            const char* aModel,
+            std::int32_t aTransform
+            )
+        {
+            static_cast<void>( aData );
+            static_cast<void>( aOutput );
+            static_cast<void>( aX );
+            static_cast<void>( aY );
+            static_cast<void>( aPhysicalWidth );
+            static_cast<void>( aPhysicalHeight );
+            static_cast<void>( aSubpixel );
+            static_cast<void>( aMake );
+            static_cast<void>( aModel );
+            static_cast<void>( aTransform );
+        }
+
+        //! One of the output's modes. Not needed: the surface is told its own size by the shell.
+        static void outputMode
+            (
+            void* aData,
+            wl_output* aOutput,
+            std::uint32_t aFlags,
+            std::int32_t aWidth,
+            std::int32_t aHeight,
+            std::int32_t aRefresh
+            )
+        {
+            static_cast<void>( aData );
+            static_cast<void>( aOutput );
+            static_cast<void>( aFlags );
+            static_cast<void>( aWidth );
+            static_cast<void>( aHeight );
+            static_cast<void>( aRefresh );
+        }
+
+        //! The output has finished describing itself. Now the scale it sent can be acted on.
+        static void outputDone
+            (
+            void* aData,
+            wl_output* aOutput
+            )
+        {
+            static_cast<void>( aOutput );
+            updateDevicePixelRatio( static_cast<PlatformIntegrationWayland*>( aData ) );
+        }
+
+        //! How many device pixels this output puts in one surface unit.
+        //!
+        //! A whole number: this is wl_output's scale, which has no fractional form. The staging
+        //! protocol wp_fractional_scale_v1 and wl_surface::preferred_buffer_scale both do better,
+        //! and neither exists in the libwayland this builds against (1.20; they need 1.22), so
+        //! this is the mechanism available rather than the one preferred.
+        static void outputScale
+            (
+            void* aData,
+            wl_output* aOutput,
+            std::int32_t aFactor
+            )
+        {
+            PlatformIntegrationWayland* const self =
+                static_cast<PlatformIntegrationWayland*>( aData );
+            self->mInternals->mOutputScales[aOutput] = aFactor > 0 ? aFactor : 1;
+
+            // Not reported here. wl_output sends its properties as a burst ending in done(), and
+            // acting on each one separately would emit a signal for every intermediate state.
+        }
+
+        //! The surface is now shown on this output, so its scale joins the calculation.
+        static void surfaceEnter
+            (
+            void* aData,
+            wl_surface* aSurface,
+            wl_output* aOutput
+            )
+        {
+            static_cast<void>( aSurface );
+            PlatformIntegrationWayland* const self =
+                static_cast<PlatformIntegrationWayland*>( aData );
+            self->mInternals->mSurfaceOutputs.insert( aOutput );
+            updateDevicePixelRatio( self );
+        }
+
+        //! The surface has left this output.
+        static void surfaceLeave
+            (
+            void* aData,
+            wl_surface* aSurface,
+            wl_output* aOutput
+            )
+        {
+            static_cast<void>( aSurface );
+            PlatformIntegrationWayland* const self =
+                static_cast<PlatformIntegrationWayland*>( aData );
+            self->mInternals->mSurfaceOutputs.erase( aOutput );
+            updateDevicePixelRatio( self );
         }
 
         //! A global went away. Nothing here holds one whose loss is survivable, so this is silent.
@@ -371,8 +546,9 @@ namespace QtLikeSignalGui
             )
         {
             static_cast<void>( aContext );
-            std::fprintf( stderr, "QtLikeSignalGui: libdecor error %d: %s\n",
-                static_cast<int>( aError ), aMessage );
+            qCWarning( gLogGuiWayland )
+                << "QtLikeSignalGui: libdecor error" << static_cast<int>( aError ) << "-" <<
+                aMessage;
         }
 
         //! Records that libdecor has finished binding its own globals.
@@ -391,6 +567,33 @@ namespace QtLikeSignalGui
 
             wl_callback_destroy( aCallback );
             self->mInternals->mDecorReadyCallback = nullptr;
+        }
+
+        //! Reports that the compositor is ready to be given another frame.
+        //!
+        //! The frame clock. wl_surface_frame() queues a request for one of these; the renderer's
+        //! own commit, inside eglSwapBuffers, carries it to the compositor; and this fires when the
+        //! compositor wants the next frame. That is what paces a paced window.
+        static void frameReady
+            (
+            void* aData,
+            wl_callback* aCallback,
+            std::uint32_t aTime
+            )
+        {
+            static_cast<void>( aTime );
+
+            PlatformIntegrationWayland* const self =
+                static_cast<PlatformIntegrationWayland*>( aData );
+
+            // Destroyed here rather than reused: a wl_callback is one-shot, and the next frame gets
+            // a new one from wl_surface_frame(). Cleared before delivering, so a renderer that asks
+            // for the next frame from inside its expose slot -- which is the normal way to drive
+            // continuous drawing -- arms a fresh request rather than seeing this one still pending.
+            wl_callback_destroy( aCallback );
+            self->mFrameCallbackPending = false;
+
+            WindowSystemInterface::handleFrameReady( self->mWindow );
         }
 
         //! Applies a decoration configure, and reports the resize it implies.
@@ -1052,11 +1255,35 @@ namespace QtLikeSignalGui
         static const wl_pointer_listener kPointerListener;
         static const wl_keyboard_listener kKeyboardListener;
         static const wl_touch_listener kTouchListener;
+        static const wl_callback_listener kFrameListener;
+        static const wl_output_listener kOutputListener;
+        static const wl_surface_listener kSurfaceListener;
         #if defined( HAVE_LIBDECOR_0 )
             static const wl_callback_listener kDecorReadyListener;
             static libdecor_interface kDecorInterface;
             static libdecor_frame_interface kDecorFrameInterface;
         #endif
+    };
+
+    const wl_callback_listener WaylandListeners::kFrameListener =
+    {
+        &WaylandListeners::frameReady
+    };
+
+    //! What this backend listens to on every wl_output: the scale, and the burst it ends.
+    const wl_output_listener WaylandListeners::kOutputListener =
+    {
+        &WaylandListeners::outputGeometry,
+        &WaylandListeners::outputMode,
+        &WaylandListeners::outputDone,
+        &WaylandListeners::outputScale
+    };
+
+    //! What this backend listens to on the window's surface: which outputs it is shown on.
+    const wl_surface_listener WaylandListeners::kSurfaceListener =
+    {
+        &WaylandListeners::surfaceEnter,
+        &WaylandListeners::surfaceLeave
     };
 
     const wl_registry_listener WaylandListeners::kRegistryListener =
@@ -1309,9 +1536,9 @@ namespace QtLikeSignalGui
         internals.mDisplay = wl_display_connect( nullptr );
         if( internals.mDisplay == nullptr )
         {
-            std::fprintf( stderr,
-                "QtLikeSignalGui: wl_display_connect() failed; is WAYLAND_DISPLAY set and a compositor "
-                "running?\n" );
+            qCWarning( gLogGuiWayland )
+                << "QtLikeSignalGui: wl_display_connect() failed; is WAYLAND_DISPLAY set and a"
+                << "compositor running?";
             return false;
         }
 
@@ -1323,15 +1550,16 @@ namespace QtLikeSignalGui
 
         if( internals.mCompositor == nullptr )
         {
-            std::fprintf( stderr, "QtLikeSignalGui: the compositor offers no wl_compositor\n" );
+            qCWarning( gLogGuiWayland )
+                << "QtLikeSignalGui: the compositor offers no wl_compositor";
             return false;
         }
 
         if( internals.mWmBase == nullptr && internals.mIvi == nullptr )
         {
-            std::fprintf( stderr,
-                "QtLikeSignalGui: the compositor offers neither xdg-shell nor ivi-shell; at least one "
-                "is needed to give a surface a role\n" );
+            qCWarning( gLogGuiWayland )
+                << "QtLikeSignalGui: the compositor offers neither xdg-shell nor ivi-shell;"
+                << "at least one is needed to give a surface a role";
             return false;
         }
 
@@ -1379,8 +1607,9 @@ namespace QtLikeSignalGui
     {
         if( mWindow != nullptr )
         {
-            std::fprintf( stderr,
-                "QtLikeSignalGui: the wayland backend supports one window, and one already exists\n" );
+            qCWarning( gLogGuiWayland )
+                <<
+                "QtLikeSignalGui: the wayland backend supports one window, and one already exists";
             return nullptr;
         }
 
@@ -1398,14 +1627,22 @@ namespace QtLikeSignalGui
         internals.mSurface = wl_compositor_create_surface( internals.mCompositor );
         if( internals.mSurface == nullptr )
         {
-            std::fprintf( stderr, "QtLikeSignalGui: wl_compositor_create_surface() failed\n" );
+            qCWarning( gLogGuiWayland )
+                << "QtLikeSignalGui: wl_compositor_create_surface() failed";
             return nullptr;
         }
+
+        // Listened to for enter and leave, which is how the surface learns which outputs it is on
+        // and therefore what to scale by. The compositor sends the first enter after the surface
+        // has been mapped, so the window starts at a ratio of 1.0 and is corrected then.
+        wl_surface_add_listener( internals.mSurface, &WaylandListeners::kSurfaceListener,
+            this );
 
         if( !createShellObjects( aSettings ) )
         {
             wl_surface_destroy( internals.mSurface );
             internals.mSurface = nullptr;
+            internals.mSurfaceOutputs.clear();
             return nullptr;
         }
 
@@ -1453,8 +1690,8 @@ namespace QtLikeSignalGui
 
             if( internals.mIviSurface == nullptr )
             {
-                std::fprintf( stderr,
-                    "QtLikeSignalGui: ivi_application_surface_create() failed\n" );
+                qCWarning( gLogGuiWayland )
+                    << "QtLikeSignalGui: ivi_application_surface_create() failed";
                 return false;
             }
 
@@ -1509,15 +1746,16 @@ namespace QtLikeSignalGui
                     return true;
                 }
 
-                std::fprintf( stderr,
-                    "QtLikeSignalGui: libdecor_decorate() failed; falling back to an undecorated "
-                    "window\n" );
+                qCWarning( gLogGuiWayland )
+                    << "QtLikeSignalGui: libdecor_decorate() failed; falling back to an undecorated"
+                    << "window";
             }
         #endif
 
         if( internals.mWmBase == nullptr )
         {
-            std::fprintf( stderr, "QtLikeSignalGui: no shell is available for this surface\n" );
+            qCWarning( gLogGuiWayland )
+                << "QtLikeSignalGui: no shell is available for this surface";
             return false;
         }
 
@@ -1525,7 +1763,8 @@ namespace QtLikeSignalGui
             internals.mSurface );
         if( internals.mXdgSurface == nullptr )
         {
-            std::fprintf( stderr, "QtLikeSignalGui: xdg_wm_base_get_xdg_surface() failed\n" );
+            qCWarning( gLogGuiWayland )
+                << "QtLikeSignalGui: xdg_wm_base_get_xdg_surface() failed";
             return false;
         }
 
@@ -1535,7 +1774,8 @@ namespace QtLikeSignalGui
         internals.mXdgToplevel = xdg_surface_get_toplevel( internals.mXdgSurface );
         if( internals.mXdgToplevel == nullptr )
         {
-            std::fprintf( stderr, "QtLikeSignalGui: xdg_surface_get_toplevel() failed\n" );
+            qCWarning( gLogGuiWayland )
+                << "QtLikeSignalGui: xdg_surface_get_toplevel() failed";
             return false;
         }
 
@@ -1663,10 +1903,10 @@ namespace QtLikeSignalGui
             currentLinuxDispatcher();
         if( !dispatcher )
         {
-            std::fprintf( stderr,
-                "QtLikeSignalGui: this thread is not running EventDispatcherLinux, so the compositor "
-                "connection cannot join the event loop; construct the GuiApplication on the thread "
-                "that will call exec()\n" );
+            qCWarning( gLogGuiWayland )
+                << "QtLikeSignalGui: this thread is not running EventDispatcherLinux, so the"
+                << "compositor connection cannot join the event loop; construct the"
+                << "GuiApplication on the thread that will call exec()";
             return false;
         }
 
@@ -1679,8 +1919,10 @@ namespace QtLikeSignalGui
                 pumpDisplay( aEvents );
             } ) )
         {
-            std::fprintf( stderr, "QtLikeSignalGui: registerEventSource( %d ) was refused\n",
-                mConnectionFd );
+            qCWarning( gLogGuiWayland )
+                <<
+                "QtLikeSignalGui: registerEventSource() was refused for the compositor connection"
+                << mConnectionFd;
             mConnectionFd = -1;
             return false;
         }
@@ -1731,9 +1973,10 @@ namespace QtLikeSignalGui
 
         if( ( aEvents & ( POLLERR | POLLHUP | POLLNVAL ) ) != 0 )
         {
-            std::fprintf( stderr,
-                "QtLikeSignalGui: the compositor connection dropped (revents 0x%x); quitting\n",
-                static_cast<unsigned int>( aEvents ) );
+            qCCritical( gLogGuiWayland )
+                <<
+                "QtLikeSignalGui: the compositor connection dropped, so this is quitting; revents"
+                << QtLikeSignal::logHex( static_cast<unsigned int>( aEvents ) );
             unregisterConnection();
             QtLikeSignal::CoreApplication::quit();
             return;
@@ -1745,8 +1988,8 @@ namespace QtLikeSignalGui
             {
                 if( wl_display_dispatch_pending( display ) < 0 )
                 {
-                    std::fprintf( stderr,
-                        "QtLikeSignalGui: wl_display_dispatch_pending() failed\n" );
+                    qCWarning( gLogGuiWayland )
+                        << "QtLikeSignalGui: wl_display_dispatch_pending() failed";
                     return;
                 }
             }
@@ -1755,7 +1998,8 @@ namespace QtLikeSignalGui
             // itself if it fails, so there is nothing to undo here.
             if( wl_display_read_events( display ) < 0 )
             {
-                std::fprintf( stderr, "QtLikeSignalGui: wl_display_read_events() failed\n" );
+                qCWarning( gLogGuiWayland )
+                    << "QtLikeSignalGui: wl_display_read_events() failed";
                 return;
             }
         }
@@ -1763,7 +2007,8 @@ namespace QtLikeSignalGui
         // Runs the listeners, which is where every WindowSystemInterface call in this file happens.
         if( wl_display_dispatch_pending( display ) < 0 )
         {
-            std::fprintf( stderr, "QtLikeSignalGui: wl_display_dispatch_pending() failed\n" );
+            qCWarning( gLogGuiWayland )
+                << "QtLikeSignalGui: wl_display_dispatch_pending() failed";
             return;
         }
 
@@ -1796,8 +2041,8 @@ namespace QtLikeSignalGui
             return;
         }
 
-        std::fprintf( stderr, "QtLikeSignalGui: wl_display_flush() failed (%d); quitting\n",
-            errno );
+        qCCritical( gLogGuiWayland )
+            << "QtLikeSignalGui: wl_display_flush() failed, so this is quitting; errno" << errno;
         unregisterConnection();
         QtLikeSignal::CoreApplication::quit();
     }
@@ -1969,9 +2214,9 @@ namespace QtLikeSignalGui
 
     //! Sets the size the surface reports, and tells the shell the new fixed size.
     //!
-    //! The surface itself has no size on Wayland -- the buffer the renderer attaches decides that --
-    //! so this records the figure, updates the size the shell will hold the window to, and reports
-    //! the change. What actually appears follows on the renderer's next frame.
+    //! The surface itself has no size on Wayland -- the buffer the renderer attaches decides that
+    //! -- so this records the figure, updates the size the shell will hold the window to, and
+    //! reports the change. What actually appears follows on the renderer's next frame.
     void PlatformIntegrationWayland::setClientSize
         (
         Window* aWindow,   //!< Window to resize.
@@ -2004,12 +2249,71 @@ namespace QtLikeSignalGui
         flushOutgoing();
     }
 
-    //! Asks for a repaint by posting one onto the loop.
+    //! @return true. This backend paces on wl_surface.frame.
+    bool PlatformIntegrationWayland::hasFrameClock() const
+    {
+        return true;
+    }
+
+    //! Delivers the update a paced window was waiting for. See the declaration.
+    void PlatformIntegrationWayland::deliverPacedUpdate
+        (
+        Window* aWindow   //!< Window whose compositor is ready.
+        )
+    {
+        if( aWindow != mWindow || !mPacedUpdateRequested )
+        {
+            // Nothing asked for. A frame clock reports that the compositor is *ready*, which is not
+            // by itself a reason to draw -- a window that has stopped animating should stay
+            // stopped.
+            return;
+        }
+
+        mPacedUpdateRequested = false;
+        mStalledPacingReported = false;
+
+        WindowSystemInterface::handleExpose( aWindow );
+
+        // The renderer has just drawn, which on Wayland means requests sitting in libwayland's
+        // output buffer. Nothing writes them to the socket by itself, and one of them is the commit
+        // carrying the next frame request.
+        flushOutgoing();
+    }
+
+    //! Delivers a paced update that pacing was switched off underneath. See the declaration.
+    void PlatformIntegrationWayland::releasePacedUpdate
+        (
+        Window* aWindow   //!< Window whose pacing was switched off.
+        )
+    {
+        if( aWindow != mWindow || !mPacedUpdateRequested )
+        {
+            return;
+        }
+
+        // The frame callback is left armed rather than cancelled: a wl_callback cannot be
+        // withdrawn, only destroyed, and destroying one the compositor may already be delivering is
+        // the kind of lifetime question not worth opening for a case this rare. When it fires,
+        // frameReady() clears the pending flag and deliverPacedUpdate() finds nothing requested, so
+        // it delivers nothing. The callback simply goes to waste.
+        mPacedUpdateRequested = false;
+        mStalledPacingReported = false;
+
+        WindowSystemInterface::handleExpose( aWindow );
+        flushOutgoing();
+    }
+
+    //! Asks for a repaint, either straight away or when the compositor next wants a frame.
     //!
-    //! Wayland has no expose. The idiomatic way to be told when to draw is a wl_surface frame
-    //! callback, but that only fires after a commit, and this backend never commits -- the renderer
-    //! does, inside eglSwapBuffers. So the repaint is posted, exactly as the DRM backend posts one,
-    //! and arrives from inside a dispatch pass rather than from inside this call.
+    //! Wayland has no expose, and the idiomatic way to be told when to draw is a wl_surface frame
+    //! callback. That only fires after a commit, and this backend never commits -- the renderer
+    //! does, inside eglSwapBuffers. **The ordering that makes it work anyway is the whole trick:**
+    //! wl_surface_frame() *queues* the request, and the renderer's own commit carries it. Arming
+    //! after the commit instead would attach the request to the next one, a frame late, forever.
+    //!
+    //! So a paced update arms the callback and returns; the expose is delivered from frameReady().
+    //! An unpaced one is posted onto the loop, as the DRM backend posts one, so that it still
+    //! arrives from inside a dispatch pass rather than from inside this call.
     void PlatformIntegrationWayland::requestUpdate
         (
         Window* aWindow   //!< Window to repaint.
@@ -2025,6 +2329,42 @@ namespace QtLikeSignalGui
         // libwayland's output buffer, and this is the first moment anything in this library learns
         // that it might. Flushing an empty buffer costs nothing.
         flushOutgoing();
+
+        const bool paced = ( aWindow->updatePacing() == Window::UpdatePacing::Display );
+
+        // Paced, and something has already been committed for the request to ride on. The first
+        // update after pacing is switched on has no commit behind it and therefore no callback
+        // coming, so it falls through to the posted path below and bootstraps the cycle.
+        if( paced && mInternals->mSurface != nullptr && mHasDeliveredUpdate )
+        {
+            if( mFrameCallbackPending )
+            {
+                // Asked twice without drawing once. Correct to ignore -- the compositor still owes
+                // a callback -- but worth saying, because a renderer that took an update and did
+                // not present will now sit still and the reason is not obvious from the outside.
+                if( !mStalledPacingReported )
+                {
+                    mStalledPacingReported = true;
+                    qCWarning( gLogGuiWayland )
+                        << "QtLikeSignalGui: update requested while a frame callback is still"
+                        << "outstanding. A window paced on the display updates again only after it"
+                        << "presents; this one has not.";
+                }
+                return;
+            }
+
+            mPacedUpdateRequested = true;
+            mFrameCallbackPending = true;
+
+            wl_callback* const callback = wl_surface_frame( mInternals->mSurface );
+            wl_callback_add_listener( callback, &WaylandListeners::kFrameListener, this );
+
+            // Not flushed here on purpose. The request has to travel with the renderer's commit,
+            // and flushing now would send it on its own -- which is legal and useless, since a
+            // frame request with no attached buffer tells the compositor nothing to schedule
+            // against.
+            return;
+        }
 
         if( mUpdatePending )
         {
@@ -2043,6 +2383,7 @@ namespace QtLikeSignalGui
                 }
 
                 mUpdatePending = false;
+                mHasDeliveredUpdate = true;
 
                 if( mWindow != nullptr )
                 {

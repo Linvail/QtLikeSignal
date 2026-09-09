@@ -7,7 +7,8 @@
 
 #include "QtLikeSignal/Timer.hpp"
 
-#include <cstdio>
+#include "QtLikeSignal/Log.hpp"
+#include "QtLikeSignal/LogCategories.hpp"
 
 namespace QtLikeSignal
 {
@@ -26,9 +27,9 @@ namespace QtLikeSignal
     //! Destroys the timer, stopping it if it is still running.
     //!
     //! Matches QTimer::~QTimer(), and shares its consequence: killTimer() is thread-confined, so
-    //! destroying an *active* timer from a thread other than its own warns. That is a genuine misuse
-    //! signal, not noise -- destroy the timer on the thread it lives in. Nothing leaks either way,
-    //! because ~Object() strips this object's timer registrations regardless.
+    //! destroying an *active* timer from a thread other than its own warns. That is a genuine
+    //! misuse signal, not noise -- destroy the timer on the thread it lives in. Nothing leaks
+    //! either way, because ~Object() strips this object's timer registrations regardless.
     Timer::~Timer()
     {
         if( mActive )
@@ -52,9 +53,9 @@ namespace QtLikeSignal
     {
         if( aMsec < 0 )
         {
-            std::fprintf( stderr,
-                "%s: negative intervals aren't allowed; the interval will be set to 1 ms\n",
-                aCaller );
+            qCWarning( gLogTimer )
+                << aCaller << ": negative intervals aren't allowed; the interval will be set to"
+                << "1 ms";
             return 1;
         }
         return aMsec;
@@ -113,6 +114,16 @@ namespace QtLikeSignal
     int Timer::timerId() const
     {
         return mTimerId;
+    }
+
+    //! Gets how long until this timer next fires, in milliseconds, or -1 while it is not running.
+    int Timer::remainingTime() const
+    {
+        if( !mActive || mTimerId == -1 )
+        {
+            return -1;
+        }
+        return Object::remainingTime( mTimerId );
     }
 
     //! Gets a subscription-only view of the signal emitted each time the interval elapses
@@ -189,8 +200,9 @@ namespace QtLikeSignal
         // this object after user code has run.
         //
         // Note this narrows -- but does not eliminate -- the hazard of a directly-connected slot
-        // deleting the timer: emit() is still executing inside the Signal member of the object being
-        // destroyed. Use deleteLater() from a timeout slot; deleting outright is not supported.
+        // deleting the timer: emit() is still executing inside the Signal member of the object
+        // being destroyed. Use deleteLater() from a timeout slot; deleting outright is not
+        // supported.
         if( mSingleShot )
         {
             stop();

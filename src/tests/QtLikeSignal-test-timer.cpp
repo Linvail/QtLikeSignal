@@ -8,6 +8,7 @@
 //! the event loop's timer-aware wait).
 
 #include "QtLikeSignal-test-types.hpp"
+#include "TestCpuTime.hpp"
 
 #include "QtLikeSignal/Event.hpp"
 #include "QtLikeSignal/Object.hpp"
@@ -18,8 +19,10 @@
 #include "gtest/gtest.h"
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <future>
 #include <map>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -109,6 +112,17 @@ namespace
         {
             std::lock_guard<std::mutex> locker( mMutex );
             return mDelivered.size();
+        }
+
+        //! @return every id delivered so far, in the order it was delivered.
+        //!
+        //! For the tests that are about *order* rather than count: the dispatcher collects a pass's
+        //! expiries into one batch and delivers that batch in one go, so the order within it is
+        //! observable and has to stay put.
+        std::vector<int> delivered() const
+        {
+            std::lock_guard<std::mutex> locker( mMutex );
+            return mDelivered;
         }
 
         //! Runs on the next expiry, before it is recorded. Set from the timer's own thread.
@@ -510,11 +524,12 @@ namespace
                 const int id = timer.timerId();
                 ASSERT_GT( id, 0 );
 
+                // Constructed on the worker, because this lambda runs there -- an Object takes
+                // its affinity from the thread that builds it. No move is needed and none is made:
+                // an earlier version called moveToThread( &worker ) here, which was a self-move
+                // that did nothing, under a comment claiming it was a push from elsewhere.
                 Object context;
-
-                // Built here and pushed: Object takes a parent now, not a thread.
-
-                ASSERT_TRUE( context.moveToThread( &worker ) );
+                ASSERT_EQ( context.thread(), &worker );
                 int emitted = 0;
                 Object::connect( timer.getTimeout(), &context, [&emitted]()
                 {
@@ -629,7 +644,8 @@ namespace
 
         runOnThread( worker, [&]()
             {
-                // Registered back to back with the same interval, so they come due in the same pass.
+                // Registered back to back with the same interval, so they come due in the same
+                // pass.
                 idA.store( receiver.startTimer( 20 ) );
                 idB.store( receiver.startTimer( 20 ) );
             } );
@@ -1314,13 +1330,13 @@ namespace
     //! serviced its timers only on passes with nothing queued would still deliver every metacall,
     //! and would still fire its timers -- just never while there was work outstanding.
     //!
-    //! Note what is *not* claimed. One pass of the loop takes the whole mailbox in a single swap and
-    //! runs it before looking at the timers, so a timer cannot interleave *within* a batch -- queue
-    //! 400 slow metacalls in one go and exactly one expiry gets through, however long the batch
-    //! takes. That is the same granularity Qt has (sendPostedEvents drains the list, then timers are
-    //! processed). The guarantee is per pass, so the load here arrives in rounds: each round is
-    //! queued while the previous is still being chewed, which keeps every pass non-empty while
-    //! still giving the loop many passes to be measured over.
+    //! Note what is *not* claimed. One pass of the loop takes the whole mailbox in a single swap
+    //! and runs it before looking at the timers, so a timer cannot interleave *within* a batch --
+    //! queue 400 slow metacalls in one go and exactly one expiry gets through, however long the
+    //! batch takes. That is the same granularity Qt has (sendPostedEvents drains the list, then
+    //! timers are processed). The guarantee is per pass, so the load here arrives in rounds: each
+    //! round is queued while the previous is still being chewed, which keeps every pass non-empty
+    //! while still giving the loop many passes to be measured over.
     TEST( ThreadTimerTest, TimersKeepFiringWhileMailboxNeverEmpties )
     {
         constexpr int kRounds = 60;
@@ -1497,6 +1513,390 @@ namespace
 
         // Cleared only once the loop is joined, so nothing can be reading it.
         receiver.mOnTimer = nullptr;
+    }
+
+    //================================================================
+    // Cadence and ordering when the loop has been away
+    //================================================================
+
+    //! A pass that finds several timers due fires each exactly once, in the order they were
+    //! started.
+    //!
+    //! **Both halves of this are properties of the timer list, not of any one timer.**
+    //!
+    //! *Order.* The dispatcher keeps its timers ordered by deadline so that a pass which finds
+    //! nothing due costs one comparison instead of a walk. The order a *batch* is delivered in is a
+    //! separate thing, and it is the order the timers were started in -- so the three intervals
+    //! below are deliberately out of that order, and a delivery sorted by deadline would read
+    //! `a, c, b` and fail here.
+    //!
+    //! *Cadence.* Each timer is due several times over during the stall, and a loop that worked
+    //! off that backlog would deliver the shortest one four times in this pass and go on delivering
+    //! it for as long as it took to catch up -- for an animation tick, a burst of frames nobody
+    //! asked for. It resynchronises instead, which is what the second pass proves: every timer is
+    //! re-armed a full interval into the future, so there is nothing left to deliver.
+    TEST( ThreadTimerTest, StalledLoopFiresEachTimerOnceInStartOrder )
+    {
+        // Adopts this test's thread and is pumped by hand below, so the stall is exact rather than
+        // something a worker's loop has to be persuaded into.
+        Thread* const self = Thread::currentThread();
+        ASSERT_NE( self, nullptr );
+
+        RecordingObject receiver( self );
+
+        // Anything an earlier test left queued would land in the first batch below and be counted
+        // as one of ours.
+        self->processEvents();
+        ASSERT_EQ( receiver.total(), 0u );
+
+        // Started in this order, with deadlines deliberately in a different one.
+        const int first  = receiver.startTimer( 100 );
+        const int second = receiver.startTimer( 300 );
+        const int third  = receiver.startTimer( 200 );
+        ASSERT_GT( first, 0 );
+        ASSERT_GT( second, 0 );
+        ASSERT_GT( third, 0 );
+
+        // Longer than every interval, and more than four times the shortest, so a loop that
+        // delivered a backlog would be unmistakable.
+        std::this_thread::sleep_for( 500ms );
+
+        self->processEvents();
+
+        const std::vector<int> firstBatch = receiver.delivered();
+        EXPECT_EQ( firstBatch, ( std::vector<int> { first, second, third } ) )
+            << "a stalled pass delivered " << firstBatch.size()
+            << " expiries, and not one of each in the order the timers were started. Ordering the "
+            "timer list by deadline must not change the order a batch is delivered in.";
+
+        // Immediately, with the shortest interval a further 100 ms away. Every timer was re-armed
+        // from now rather than from the deadline it missed, so this pass has nothing to do.
+        self->processEvents();
+        EXPECT_EQ( receiver.total(), 3u )
+            << "the loop worked off a backlog of missed deadlines instead of resynchronising.";
+
+        receiver.killTimer( first );
+        receiver.killTimer( second );
+        receiver.killTimer( third );
+    }
+
+    //================================================================
+    // A thread running its own native loop
+    //================================================================
+
+    //! A timer on a thread with its own native loop fires on schedule, with no other traffic.
+    //!
+    //! **This is the case setWakeCallback() alone cannot serve.** A wake callback says "something
+    //! was posted", which is everything a posted event needs; a deadline is the opposite question
+    //! -- how long may this loop sleep before it must call processEvents() again -- and a loop with
+    //! no answer to it runs its timers whenever some unrelated event happens to wake it. On a
+    //! thread with nothing else going on, as here, that is never. It fails as jitter rather than as
+    //! a missing feature, which is the worst way for it to fail.
+    //!
+    //! So the loop below is written the way a host would write one: it blocks indefinitely when
+    //! nothing is scheduled, and for exactly as long as it is told otherwise. Nothing is posted to
+    //! it after the timer starts, so every wake it gets past that point comes from the deadline.
+    TEST( ThreadTimerTest, NativeLoopRunsTimersOnItsOwnDeadline )
+    {
+        constexpr int kIntervalMs = 50;
+        constexpr int kWantedFires = 4;
+
+        std::mutex mutex;
+        std::condition_variable cv;
+
+        // Guarded by mutex. -1 means nothing is scheduled, so the loop may sleep until woken --
+        // which is exactly the state that used to strand a timer forever.
+        int sleepMs = -1;
+        bool woken = false;
+        bool rearm = false;
+        bool stop = false;
+
+        std::atomic<bool> ready { false };
+        RecordingObject* receiver = nullptr;
+        int timerId = -1;
+
+        std::thread nativeLoop( [&]()
+            {
+                // Adopts this raw thread, which is the whole premise: it has a QtLikeSignal
+                // dispatcher but never calls exec().
+                Thread* const self = Thread::currentThread();
+
+                self->setWakeCallback( [&]()
+                {
+                    {
+                        std::lock_guard<std::mutex> lock( mutex );
+                        woken = true;
+                    }
+                    cv.notify_all();
+                } );
+
+                self->setDeadlineCallback( [&]( int aMsFromNow )
+                {
+                    {
+                        std::lock_guard<std::mutex> lock( mutex );
+                        sleepMs = aMsFromNow;
+
+                        // The wait below has to end on this as well as on a post. A loop parked
+                        // with no deadline at all is waiting on a predicate, and a new deadline
+                        // that does not appear in that predicate would leave it parked -- the same
+                        // silence this whole test is about, moved into the host.
+                        rearm = true;
+                    }
+                    cv.notify_all();
+                } );
+
+                // Born here, so it lives on this thread and its timer can be started here.
+                RecordingObject local;
+                receiver = &local;
+                timerId  = local.startTimer( kIntervalMs );
+                ready.store( true );
+
+                for( ;; )
+                {
+                    {
+                        std::unique_lock<std::mutex> lock( mutex );
+                        auto readyToRun = [&]()
+                        {
+                            return woken || rearm || stop;
+                        };
+
+                        if( sleepMs < 0 )
+                        {
+                            // No deadline: sleep until somebody says otherwise. A poll with a
+                            // timeout here would hide the very defect this test is about, by
+                            // delivering the timer on the next poll rather than on its deadline.
+                            cv.wait( lock, readyToRun );
+                        }
+                        else
+                        {
+                            cv.wait_for( lock, std::chrono::milliseconds( sleepMs ), readyToRun );
+                        }
+                        woken = false;
+                        rearm = false;
+                        if( stop )
+                        {
+                            break;
+                        }
+                    }
+
+                    self->processEvents();
+                }
+
+                local.killTimer( timerId );
+                self->setDeadlineCallback( nullptr );
+                self->setWakeCallback( nullptr );
+            } );
+
+        ASSERT_TRUE( waitFor( [&ready]()
+            {
+                return ready.load();
+            } ) ) << "the native loop never started.";
+        ASSERT_GT( timerId, 0 ) << "the timer could not be started on the adopted thread.";
+
+        const bool fired = waitFor( [&receiver]()
+            {
+                return receiver->total() >= static_cast<std::size_t>( kWantedFires );
+            } );
+
+        // Read before the loop is stopped. The receiver is a local of that thread, so it is gone
+        // by the time join() returns and the failure message below would be reading freed memory.
+        const std::size_t observed = receiver->total();
+
+        {
+            std::lock_guard<std::mutex> lock( mutex );
+            stop = true;
+        }
+        cv.notify_all();
+        nativeLoop.join();
+
+        EXPECT_TRUE( fired )
+            << "a " << kIntervalMs << " ms timer produced only " << observed
+            << " expiries on a thread running its own loop with no other traffic. The loop is "
+            "never told when the next deadline is, so it sleeps through it.";
+    }
+
+    //! A thread whose only timers are far in the future blocks rather than polling for them.
+    //!
+    //! The counterpart to the test above, and the reason its loop is allowed to sleep
+    //! indefinitely: a deadline that is hours away must produce a wait that is hours long, not a
+    //! wake ten times a second to ask again. Measured as CPU time against wall time, because that
+    //! is the only difference between the two that is visible from outside.
+    //!
+    //! CPU time comes from TestSupport::processCpuSeconds() rather than std::clock(); see
+    //! TestCpuTime.hpp for why the difference matters on Windows.
+    TEST( ThreadTimerTest, FarFutureTimersLeaveTheLoopBlocked )
+    {
+        constexpr int kRunMs = 400;
+
+        Thread worker( "idle-timers" );
+        worker.start();
+        ASSERT_TRUE( waitUntilRunning( worker ) );
+
+        RecordingObject receiver( &worker );
+
+        // An hour away, so nothing can come due inside the window measured below. Several of them,
+        // because the cost being ruled out is per-timer as well as per-pass.
+        std::vector<int> ids;
+        runOnThread( worker, [&]()
+            {
+                for( int i = 0; i < 32; ++i )
+                {
+                    ids.push_back( receiver.startTimer( 3600000 + i ) );
+                }
+            } );
+        ASSERT_EQ( ids.size(), 32u );
+
+        const double cpuBefore = TestSupport::processCpuSeconds();
+        const auto wallBefore = std::chrono::steady_clock::now();
+
+        std::this_thread::sleep_for( std::chrono::milliseconds( kRunMs ) );
+
+        const double cpuSeconds = TestSupport::processCpuSeconds() - cpuBefore;
+        const double wallSeconds
+            = std::chrono::duration<double>( std::chrono::steady_clock::now() - wallBefore ).count()
+            ;
+
+        ASSERT_GT( wallSeconds, 0.1 ) << "the measured window was too short to say anything.";
+
+        // Process-wide CPU over a window in which this test's own threads are the only ones with
+        // anything to do, so the bar is loose enough to survive whatever else the process is
+        // finishing and far below the one core a spinning loop would burn.
+        EXPECT_LT( cpuSeconds / wallSeconds, 0.5 )
+            << "the process burned " << cpuSeconds << "s of CPU over " << wallSeconds
+            << "s of wall time (ratio " << ( cpuSeconds / wallSeconds )
+            << ") while its only timers were an hour away -- the loop is waking to look at them "
+            "rather than waiting for the earliest deadline.";
+
+        EXPECT_EQ( receiver.total(), 0u ) << "a timer an hour away fired.";
+
+        runOnThread( worker, [&]()
+            {
+                for( const int id : ids )
+                {
+                    receiver.killTimer( id );
+                }
+            } );
+
+        worker.quit();
+        worker.wait();
+    }
+
+    //================================================================
+    // Remaining time
+    //================================================================
+
+    //! remainingTime() counts down while the timer runs, and reports -1 while it does not.
+    //!
+    //! QTimer::remainingTime() with the same two answers. Driven on this test's own thread, so the
+    //! reading is taken between passes rather than racing a loop that might deliver the expiry
+    //! half-way through the assertion.
+    TEST( TimerTest, RemainingTimeCountsDownAndIsMinusOneWhenStopped )
+    {
+        Thread* const self = Thread::currentThread();
+        ASSERT_NE( self, nullptr );
+
+        Timer timer;
+        EXPECT_EQ( timer.remainingTime(), -1 ) << "an unstarted timer reported a remaining time.";
+
+        timer.start( 1000 );
+        const int atStart = timer.remainingTime();
+        EXPECT_GT( atStart, 0 );
+        EXPECT_LE( atStart, 1000 );
+
+        std::this_thread::sleep_for( 50ms );
+
+        const int later = timer.remainingTime();
+        EXPECT_LT( later, atStart ) << "remainingTime() did not fall as the deadline approached.";
+        EXPECT_GE( later, 0 );
+
+        timer.stop();
+        EXPECT_EQ( timer.remainingTime(), -1 ) << "a stopped timer still reported a deadline.";
+    }
+
+    //! The dispatcher reports the *earliest* deadline of all its timers, and -1 when it has none.
+    //!
+    //! The loop-level question, as against Timer::remainingTime()'s per-timer one: this is what a
+    //! thread with its own native loop feeds to whatever it blocks in, so "earliest" and "-1 means
+    //! sleep until woken" are the two things it has to get right.
+    TEST( ThreadTimerTest, RemainingTimeMsReportsTheEarliestDeadline )
+    {
+        Thread* const self = Thread::currentThread();
+        ASSERT_NE( self, nullptr );
+
+        auto dispatcher = self->eventDispatcher();
+        ASSERT_NE( dispatcher, nullptr );
+
+        // Anything an earlier test left running would be an earlier deadline than the two below.
+        ASSERT_EQ( dispatcher->remainingTimeMs(), -1 )
+            << "this thread already had a timer, so nothing here would be the earliest.";
+
+        RecordingObject receiver( self );
+
+        const int distant = receiver.startTimer( 100000 );
+        ASSERT_GT( distant, 0 );
+        const int distantMs = dispatcher->remainingTimeMs();
+        EXPECT_GT( distantMs, 90000 );
+        EXPECT_LE( distantMs, 100000 );
+
+        // Started second and due first, so it must take over the answer -- which is the whole
+        // point: the front of the heap, not the most recent registration and not the first one.
+        const int soon = receiver.startTimer( 5000 );
+        ASSERT_GT( soon, 0 );
+        const int soonMs = dispatcher->remainingTimeMs();
+        EXPECT_GT( soonMs, 0 );
+        EXPECT_LE( soonMs, 5000 );
+
+        receiver.killTimer( soon );
+        EXPECT_GT( dispatcher->remainingTimeMs(), 90000 )
+            << "killing the earliest timer did not hand the answer back to the one behind it.";
+
+        receiver.killTimer( distant );
+        EXPECT_EQ( dispatcher->remainingTimeMs(), -1 )
+            << "a dispatcher with no timers left still reported a deadline, so a native loop "
+            "would keep waking for one that is not there.";
+    }
+
+    //! Asking about a timer the dispatcher does not have answers -1, whatever the id.
+    //!
+    //! The per-id query's other answer, and the one the rest of this suite never asks for.
+    //! `Timer::remainingTime()` cannot reach it: that class returns -1 from its own `mActive` flag
+    //! and never puts the question to the dispatcher at all, so a test has to ask through
+    //! `Object::remainingTime()` directly. Both ways of being absent are covered, because they
+    //! arrive at the same line from opposite directions -- an id that was never issued, and one
+    //! that was issued and then killed.
+    TEST( ObjectTimerTest, RemainingTimeIsMinusOneForATimerTheDispatcherDoesNotHave )
+    {
+        Thread* const self = Thread::currentThread();
+        ASSERT_NE( self, nullptr );
+
+        RecordingObject receiver( self );
+
+        // An id no startTimer() ever returned. Negative, so it cannot collide with a real one
+        // however the pool is behaving by the time this test runs.
+        EXPECT_EQ( receiver.remainingTime( -12345 ), -1 )
+            << "an id that was never issued reported a deadline.";
+
+        const int id = receiver.startTimer( 60000 );
+        ASSERT_GT( id, 0 );
+        EXPECT_GT( receiver.remainingTime( id ), 0 )
+            << "a running timer reported no deadline, so the -1 below would prove nothing.";
+
+        receiver.killTimer( id );
+        EXPECT_EQ( receiver.remainingTime( id ), -1 )
+            << "a killed timer still reported a deadline, so its registration outlived it.";
+    }
+
+    //! A detached object has no dispatcher to ask, so every id answers -1.
+    //!
+    //! The guard in front of the query rather than the query itself: `Object::remainingTime()`
+    //! reaches the dispatcher through this object's thread, and an object detached with
+    //! moveToThread(nullptr) has neither. Same shape as
+    //! `ObjectTimerTest.StartTimerWithoutAThreadIsRefused`.
+    TEST( ObjectTimerTest, RemainingTimeIsMinusOneWithoutAThread )
+    {
+        RecordingObject receiver;
+        ASSERT_TRUE( receiver.moveToThread( nullptr ) );
+        EXPECT_EQ( receiver.remainingTime( 1 ), -1 );
     }
 
 } // namespace

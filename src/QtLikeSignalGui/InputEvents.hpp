@@ -15,15 +15,20 @@
 
 namespace QtLikeSignalGui
 {
-    //! A position in whole pixels.
+    //! A position in whole window-system units, measured from the client area's top-left corner.
     //!
-    //! Integer rather than floating point: all three window systems report mouse positions in whole
-    //! pixels, and a double would only invite the impression that sub-pixel information exists.
-    //! Touch is the exception and carries its own doubles; see TouchDownEvent.
+    //! **The same units Window::width() reports, which are not always device pixels.** On a scaled
+    //! display a click at the far right of a 1280-unit window arrives as 1279 whether the screen
+    //! draws that window 1280 pixels wide or 1920. Window::devicePixelRatio() is the factor
+    //! between the two, and it carries the whole rule.
+    //!
+    //! Integer rather than floating point: all three window systems report mouse positions in
+    //! whole units, and a double would only invite the impression that sub-unit information
+    //! exists. Touch is the exception and carries its own doubles; see TouchDownEvent.
     struct Point
     {
-        int mX { 0 };   //!< Pixels from the left edge.
-        int mY { 0 };   //!< Pixels from the top edge.
+        int mX { 0 };   //!< Units from the left edge.
+        int mY { 0 };   //!< Units from the top edge.
     };
 
     //! One mouse button.
@@ -99,11 +104,11 @@ namespace QtLikeSignalGui
 
         //! Takes @p aButton out of the set, if it was in it.
         //!
-        //! Needed because the two window systems disagree about what a release message carries. Win32
-        //! reports the state *after* the change, so a release already excludes the button; X11
-        //! reports the state just *prior* to the event, so a ButtonRelease still has it set and the
-        //! backend has to take it out to produce the same answer. Without this the button would look
-        //! permanently held after the first click on X11.
+        //! Needed because the two window systems disagree about what a release message carries.
+        //! Win32 reports the state *after* the change, so a release already excludes the button;
+        //! X11 reports the state just *prior* to the event, so a ButtonRelease still has it set and
+        //! the backend has to take it out to produce the same answer. Without this the button would
+        //! look permanently held after the first click on X11.
         MouseButtons& remove
             (
             MouseButton aButton   //!< The button to take out.
@@ -397,7 +402,8 @@ namespace QtLikeSignalGui
         //! the two read alike.
         KeyModifiers mModifiers;
 
-        //! The text this keystroke produces, UTF-8 and NUL-terminated. Empty for a non-printing key.
+        //! The text this keystroke produces, UTF-8 and NUL-terminated. Empty for a non-printing
+        //! key.
         //!
         //! **Read this for text input, never mKey.** Which character a key produces depends on the
         //! layout, the modifiers and any dead key before it, and reconstructing that from a key
@@ -428,8 +434,8 @@ namespace QtLikeSignalGui
     //! A finger touching down, as wl_touch_listener::down reports it.
     //!
     //! The touch events mirror Wayland's wl_touch one for one, because Wayland is the only platform
-    //! QtLikeSignalGui reports touch on -- see the touch signals on Window. Inventing a different shape
-    //! would have meant translating into it and back out of it again for no reader's benefit.
+    //! QtLikeSignalGui reports touch on -- see the touch signals on Window. Inventing a different
+    //! shape would have meant translating into it and back out of it again for no reader's benefit.
     struct TouchDownEvent
     {
         //! The compositor's serial for this event.

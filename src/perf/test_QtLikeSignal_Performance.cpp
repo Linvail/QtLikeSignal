@@ -3,13 +3,13 @@
 
 //! @file
 //!
-//! Dispatch-overhead benchmarks for QtLikeSignal, measured -- where they are installed -- against Qt 6
-//! and boost::signals2.
+//! Dispatch-overhead benchmarks for QtLikeSignal, measured -- where they are installed -- against
+//! Qt 6 and boost::signals2.
 //!
-//! Covers the whole path a signal travels -- connect, emit, receive -- rather than any one function,
-//! so the numbers say what a user actually pays. Every library runs the same scenarios with the same
-//! slot bodies in the same process, which is the only way to make the comparison mean anything: same
-//! machine, same build flags, same cache state, interleaved in time.
+//! Covers the whole path a signal travels -- connect, emit, receive -- rather than any one
+//! function, so the numbers say what a user actually pays. Every library runs the same scenarios
+//! with the same slot bodies in the same process, which is the only way to make the comparison mean
+//! anything: same machine, same build flags, same cache state, interleaved in time.
 //!
 //!
 //! **Build this in release with no sanitizer before believing any number.** A `-O0` build, or one
@@ -29,9 +29,9 @@
 //! boost fills fewer rows than the others, because signals2 has no thread affinity and no event
 //! loop. See test_Boost_Performance.cpp for why those rows are left blank rather than redefined.
 //!
-//! These are microbenchmarks with no work between iterations, which is the condition most flattering
-//! to fixed per-emit overhead. Treat the ratios as meaningful and the absolute nanoseconds as
-//! indicative.
+//! These are microbenchmarks with no work between iterations, which is the condition most
+//! flattering to fixed per-emit overhead. Treat the ratios as meaningful and the absolute
+//! nanoseconds as indicative.
 
 #include "PerfHarness.hpp"
 
@@ -53,6 +53,7 @@ using PerfHarness::kConnectOps;
 using PerfHarness::kDirectOps;
 using PerfHarness::kQueuedOps;
 using PerfHarness::kQueuedRoundTripOps;
+using PerfHarness::kDeferredCallOps;
 using PerfHarness::kBlockingOps;
 using PerfHarness::kDisconnectOps;
 using PerfHarness::record;
@@ -178,8 +179,8 @@ TEST( Performance, QtLikeSignal_QueuedEmitCrossThread )
 //! measuring dispatch.
 //!
 //! The objection had real evidence behind it. Measured on Windows on 2026-08-26, Qt 6 delivered
-//! 99.8% of its events before its emit loop finished while QtLikeSignal delivered 77%, and Qt's entire
-//! cost sat in its emit loop -- total and emit-side agreed to within 0.4 ns/op.
+//! 99.8% of its events before its emit loop finished while QtLikeSignal delivered 77%, and Qt's
+//! entire cost sat in its emit loop -- total and emit-side agreed to within 0.4 ns/op.
 //!
 //! **This scenario was written to test that objection, and refutes it.** The emitter here waits for
 //! each delivery before making the next, so the queue holds at most one event, every emit pays a
@@ -294,6 +295,160 @@ TEST( Performance, QtLikeSignal_QueuedRoundTrip )
         std::chrono::duration<double, std::nano>( elapsed ).count() / kQueuedRoundTripOps );
 
     EXPECT_EQ( received.load(), kQueuedRoundTripOps );
+    worker.quit();
+    worker.wait();
+}
+
+//! Measures one pass of the loop with timers registered and none of them due.
+//!
+//! **The shape of this row matters more than its height.** A pass used to walk every registered
+//! timer twice -- once looking for expiries and once for the earliest deadline -- so it cost time
+//! proportional to how many timers existed whether or not any of them had anything to do. And the
+//! pass count is not set by the timers: a thread taking cross-thread posts runs a pass per wake, so
+//! the walk was charged to traffic that had nothing to do with timers. Three sizes, two orders of
+//! magnitude apart, so a row that grows with T is visible as growth rather than as a number nobody
+//! has anything to compare against.
+TEST( Performance, QtLikeSignal_IdlePassWithTimers )
+{
+    for( const int timers : PerfHarness::kIdlePassTimerCounts )
+    {
+        QtLikeSignal::Thread* const here = QtLikeSignal::Thread::currentThread();
+        ASSERT_NE( here, nullptr );
+
+        // Far enough out that none of them can come due during the run, which is the case being
+        // measured: the loop finding that it has nothing to do.
+        QtLikeSignal::Object holder;
+        std::vector<int> ids;
+        ids.reserve( timers );
+        for( int i = 0; i < timers; ++i )
+        {
+            ids.push_back( holder.startTimer( PerfHarness::kIdlePassIntervalMs ) );
+        }
+
+        const double ns = PerfHarness::bestOf( 5, [&]()
+            {
+                return timeLoop( PerfHarness::kIdlePassOps, [&]( int )
+                    {
+                        here->processEvents();
+                    } );
+            } );
+
+        record( PerfHarness::idlePassScenario( timers ), "QtLikeSignal", ns );
+
+        for( const int id : ids )
+        {
+            holder.killTimer( id );
+        }
+    }
+}
+
+//! Measures making one deferred call, lifetime-tracked -- our answer to boost's callback event.
+//!
+//! The same scenario as `Boost_DeferredCall`: call a member function later, on another thread, and
+//! have the call dropped if the receiver dies first. Boost answers it with a heap event holding a
+//! `boost::function`, owned by a `shared_ptr`, over a queue the application writes. Ours is a
+//! queued connection, and the gap between the two rows is what the payload costs.
+//!
+//! **Connected once, outside the timed region, on purpose.** That is the shape the scenario has in
+//! an application: a button that clicks a thousand times connects once and emits a thousand times.
+//! Building a fresh deferral per call is a different design -- it is what `singleShot()` does, and
+//! it allocates a helper Object each time -- so measuring it here would answer a question nobody
+//! asked. The boost side has no such choice: its event is per call by construction, and that
+//! asymmetry is part of what the pair reports.
+TEST( Performance, QtLikeSignal_DeferredCall )
+{
+    QtLikeSignal::Thread worker( "perf-deferred-call" );
+    worker.start();
+
+    std::promise<void> ready;
+    auto readyFuture = ready.get_future();
+    ASSERT_TRUE( worker.post( [&ready]()
+        {
+            ready.set_value();
+        } ) );
+    ASSERT_EQ( readyFuture.wait_for( std::chrono::seconds( 5 ) ), std::future_status::ready );
+
+    QtLikeSignal::Object receiver;
+    ASSERT_TRUE( receiver.moveToThread( &worker ) );
+
+    std::atomic<int> calls { 0 };
+    QtLikeSignal::Signal<> deferred;
+    QtLikeSignal::Object::connect( deferred, &receiver, [&calls]()
+        {
+            calls.fetch_add( 1, std::memory_order_release );
+        }, QtLikeSignal::ConnectionType::Queued );
+
+    const auto start = std::chrono::steady_clock::now();
+    for( int i = 0; i < kDeferredCallOps; ++i )
+    {
+        deferred.emit();
+    }
+    while( calls.load( std::memory_order_acquire ) < kDeferredCallOps )
+    {
+        std::this_thread::yield();
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
+    record( "deferred call, x-thread", "QtLikeSignal",
+        std::chrono::duration<double, std::nano>( elapsed ).count() / kDeferredCallOps );
+
+    EXPECT_EQ( calls.load(), kDeferredCallOps );
+    worker.quit();
+    worker.wait();
+}
+
+//! Measures the same deferred call with nothing tracking the receiver's lifetime.
+//!
+//! `post()` is our untracked path, and it is the fair counterpart of a `bind` over a raw `this`:
+//! neither side cancels if the receiver dies, and both capture an address and hope.
+//!
+//! **It measures cheaper than the tracked row, which is not what the shape of the two paths
+//! suggests.** `post()` takes a `std::function<void()>` by value, so a capture too large for its
+//! small buffer reaches the heap, while a queued connection fuses the callable into a pooled block
+//! and does not. That predicts the opposite of what both platforms report. What outweighs it is the
+//! rest of the connection path -- an emit takes the slot snapshot, then resolves affinity and
+//! lifetime per slot -- none of which a post does. So the row prices the machinery that makes a
+//! connection safe, and the gap between the two is what that safety costs, not what an allocation
+//! costs.
+TEST( Performance, QtLikeSignal_DeferredCallUntracked )
+{
+    QtLikeSignal::Thread worker( "perf-deferred-post" );
+    worker.start();
+
+    std::promise<void> ready;
+    auto readyFuture = ready.get_future();
+    ASSERT_TRUE( worker.post( [&ready]()
+        {
+            ready.set_value();
+        } ) );
+    ASSERT_EQ( readyFuture.wait_for( std::chrono::seconds( 5 ) ), std::future_status::ready );
+
+    std::atomic<int> calls { 0 };
+    bool allPosted = true;
+
+    const auto start = std::chrono::steady_clock::now();
+    for( int i = 0; i < kDeferredCallOps; ++i )
+    {
+        allPosted = worker.post( [&calls]()
+            {
+                calls.fetch_add( 1, std::memory_order_release );
+            } ) && allPosted;
+    }
+
+    // Checked before the wait, not after. A refused post is a call that will never arrive, so
+    // waiting on the count first would hang here rather than fail.
+    ASSERT_TRUE( allPosted );
+
+    while( calls.load( std::memory_order_acquire ) < kDeferredCallOps )
+    {
+        std::this_thread::yield();
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
+    record( "deferred call, untracked", "QtLikeSignal",
+        std::chrono::duration<double, std::nano>( elapsed ).count() / kDeferredCallOps );
+
+    EXPECT_EQ( calls.load(), kDeferredCallOps );
     worker.quit();
     worker.wait();
 }

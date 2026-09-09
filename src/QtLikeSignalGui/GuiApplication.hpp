@@ -54,18 +54,18 @@ namespace QtLikeSignalGui
     //!   }
     //! @endcode
     //!
-    //! **There is no message loop in a program built on this.** exec() runs the inherited QtLikeSignal
-    //! loop, and it is EventDispatcherWin32::processPlatformEvents() that pumps the OS messages
-    //! inside it. An external library that offers a pollEvents() of its own must not be asked to
-    //! pump on Windows: two PeekMessage loops on one thread queue is how the dispatcher's own wakeup
-    //! message gets eaten by the wrong reader.
+    //! **There is no message loop in a program built on this.** exec() runs the inherited
+    //! QtLikeSignal loop, and it is EventDispatcherWin32::processPlatformEvents() that pumps the OS
+    //! messages inside it. An external library that offers a pollEvents() of its own must not be
+    //! asked to pump on Windows: two PeekMessage loops on one thread queue is how the dispatcher's
+    //! own wakeup message gets eaten by the wrong reader.
     //!
-    //! **Which backend runs** is decided by choosePlatform(): the `-p` argument first
-    //! (`-p x11`, `-p wayland`), then the QTLIKESIGNAL_PLATFORM environment variable, then autodetection.
-    //! On Windows there is only ever one answer.
+    //! **Which backend runs** is decided by choosePlatform(): the `-p` argument first (`-p x11`,
+    //! `-p wayland`), then the QTLIKESIGNAL_PLATFORM environment variable, then autodetection. On
+    //! Windows there is only ever one answer.
     //!
-    //! Must be constructed on the thread that will call exec(), like CoreApplication itself, and for
-    //! the extra reason that a native window belongs to the thread that creates it.
+    //! Must be constructed on the thread that will call exec(), like CoreApplication itself, and
+    //! for the extra reason that a native window belongs to the thread that creates it.
     class GuiApplication : public QtLikeSignal::CoreApplication
     {
     public:

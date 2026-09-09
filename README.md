@@ -15,7 +15,7 @@ and the submodule that used to bootstrap them is gone.
 
 | path | what it is |
 |---|---|
-| `src/QtLikeSignal/` | the library -- event loop, threads, timers, signals |
+| `src/QtLikeSignal/` | the library -- event loop, threads, timers, signals, logging, properties, animation |
 | `src/QtLikeSignalGui/` | windows and input over it, one backend per window system |
 | `src/tests/` | the correctness suite (GoogleTest), one binary covering both libraries |
 | `src/demo/` | demo programs, one per window system |

@@ -33,8 +33,8 @@ namespace QtLikeSignalGuiTest
                 mStorage.push_back( argument );
             }
 
-            // Filled after mStorage is complete, never during: every push_back before this point may
-            // reallocate, and a pointer taken beforehand would be into the freed buffer.
+            // Filled after mStorage is complete, never during: every push_back before this point
+            // may reallocate, and a pointer taken beforehand would be into the freed buffer.
             mPointers.reserve( mStorage.size() );
             for( std::string& argument : mStorage )
             {

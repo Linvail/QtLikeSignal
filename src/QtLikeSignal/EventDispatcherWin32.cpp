@@ -7,7 +7,9 @@
 
 #include "QtLikeSignal/EventDispatcherWin32.hpp"
 
-#include <cstdio>
+#include "QtLikeSignal/Log.hpp"
+#include "QtLikeSignal/LogCategories.hpp"
+
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -118,9 +120,9 @@ namespace QtLikeSignal
                     windowClass.lpszClassName = windowClassName();
                     if( RegisterClass( &windowClass ) == 0 )
                     {
-                        std::fprintf( stderr,
-                        "EventDispatcherWin32: RegisterClass() failed (%lu)\n",
-                        GetLastError() );
+                        qCCritical( gLogDispatcher )
+                            << "EventDispatcherWin32: RegisterClass() failed; error"
+                            << GetLastError();
                     }
                 } );
         }
@@ -149,9 +151,10 @@ namespace QtLikeSignal
             // Not fatal: waitForEvents() falls back to the inherited condition-variable wait, which
             // still delivers our own events correctly. Only OS messages stop being serviced, so say
             // so rather than degrading silently.
-            std::fprintf( stderr,
-                "EventDispatcherWin32: CreateWindowEx() failed (%lu); falling back to the "
-                "cross-platform wait, so OS messages will not be dispatched\n", GetLastError() );
+            qCCritical( gLogDispatcher )
+                << "EventDispatcherWin32: CreateWindowEx() failed, so this falls back to the"
+                << "cross-platform wait and OS messages will not be dispatched; error"
+                << GetLastError();
         }
         else
         {
@@ -164,6 +167,20 @@ namespace QtLikeSignal
         }
 
         mMessageWindow = window;
+
+        // Auto-reset and initially unsignalled: it means "there is a wakeup to take", and the
+        // wait that takes it clears it. Manual reset would need clearing by hand on every path
+        // out of the wait, including the ones that did not come from a wake.
+        mWakeEvent = CreateEvent( nullptr, FALSE, FALSE, nullptr );
+
+        if( mWakeEvent == nullptr )
+        {
+            // Not fatal either: wakeWaiter() falls back to posting a message, which is what this
+            // dispatcher did before the event existed. Slower, and still correct.
+            qCWarning( gLogDispatcher )
+                << "EventDispatcherWin32: CreateEvent() failed, so wakeups fall back to posting a"
+                << "message; error" << GetLastError();
+        }
     }
 
     //! Destroys the dispatcher and its message-only window.
@@ -173,6 +190,12 @@ namespace QtLikeSignal
         {
             DestroyWindow( static_cast<HWND>( mMessageWindow ) );
             mMessageWindow = nullptr;
+        }
+
+        if( mWakeEvent != nullptr )
+        {
+            CloseHandle( static_cast<HANDLE>( mWakeEvent ) );
+            mWakeEvent = nullptr;
         }
     }
 
@@ -207,8 +230,24 @@ namespace QtLikeSignal
         // only for newly-arrived input; without it a message that arrived between the PeekMessage
         // drain and this call would be slept through until the next one. MWMO_ALERTABLE lets APCs
         // (and therefore alertable I/O completion) run.
-        MsgWaitForMultipleObjectsEx( 0, nullptr, timeout, QS_ALLINPUT,
-            MWMO_ALERTABLE | MWMO_INPUTAVAILABLE );
+        const HANDLE wake = static_cast<HANDLE>( mWakeEvent );
+        if( wake != nullptr )
+        {
+            MsgWaitForMultipleObjectsEx( 1, &wake, timeout, QS_ALLINPUT,
+                MWMO_ALERTABLE | MWMO_INPUTAVAILABLE );
+
+            // Cleared here rather than where a wakeup message used to be dequeued, because there
+            // is no message to dequeue any more. Nothing can be lost by clearing it on a wait
+            // that woke for some other reason: the event stays signalled until a wait consumes
+            // it, so the worst case is one redundant SetEvent, or one pass that returns without
+            // finding work. Both are cheaper than the wakeup this cannot drop.
+            mWakePending.store( false );
+        }
+        else
+        {
+            MsgWaitForMultipleObjectsEx( 0, nullptr, timeout, QS_ALLINPUT,
+                MWMO_ALERTABLE | MWMO_INPUTAVAILABLE );
+        }
 
         aLock.lock();
     }
@@ -216,8 +255,8 @@ namespace QtLikeSignal
     //! Wakes a thread blocked on the message queue. Thread-safe and non-blocking.
     void EventDispatcherWin32::wakeWaiter()
     {
-        // Keep the base behaviour too: waitForEvents() falls back to the condition variable when the
-        // window could not be created, and a waiter there still has to be notified.
+        // Keep the base behaviour too: waitForEvents() falls back to the condition variable when
+        // the window could not be created, and a waiter there still has to be notified.
         EventDispatcherDefault::wakeWaiter();
 
         if( mMessageWindow == nullptr )
@@ -230,6 +269,17 @@ namespace QtLikeSignal
         // collapsing a burst matters here rather than being a mere optimisation.
         if( mWakePending.exchange( true ) )
         {
+            return;
+        }
+
+        if( mWakeEvent != nullptr )
+        {
+            if( SetEvent( static_cast<HANDLE>( mWakeEvent ) ) == FALSE )
+            {
+                // Same reasoning as the failed post below: no wakeup is coming, so the collapse
+                // flag must not be left set or it would wedge the fast path shut for good.
+                mWakePending.store( false );
+            }
             return;
         }
 

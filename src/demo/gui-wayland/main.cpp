@@ -1,20 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
-//! A real Wayland program on QtLikeSignalGui: the library creates the surface and delivers the seat's
-//! input as signals, and this program draws into it.
+//! A real Wayland program on QtLikeSignalGui: the library creates the surface and delivers the
+//! seat's input as signals, and this program draws into it.
 //!
-//! **The split is the point, and it is the same one every backend makes.** QtLikeSignalGui connects to
-//! the compositor, binds the globals, gives the surface a role on xdg-shell or ivi-shell, and turns
-//! wl_pointer and wl_touch into Window's signals. It never attaches a buffer, because a Wayland
-//! surface's contents belong to whatever renders -- here a shared-memory buffer this program fills
-//! itself, in a real program an EGLSurface built from the same wl_display and wl_surface.
+//! **The split is the point, and it is the same one every backend makes.** QtLikeSignalGui connects
+//! to the compositor, binds the globals, gives the surface a role on xdg-shell or ivi-shell, and
+//! turns wl_pointer and wl_touch into Window's signals. It never attaches a buffer, because a
+//! Wayland surface's contents belong to whatever renders -- here a shared-memory buffer this
+//! program fills itself, in a real program an EGLSurface built from the same wl_display and
+//! wl_surface.
 //!
-//! That is why this file binds a wl_shm of its own from the connection QtLikeSignalGui opened: it is
-//! standing in for the renderer, and a renderer is entitled to the connection and the surface and
-//! nothing else.
+//! That is why this file binds a wl_shm of its own from the connection QtLikeSignalGui opened: it
+//! is standing in for the renderer, and a renderer is entitled to the connection and the surface
+//! and nothing else.
 //!
 //! There is no event loop here and no wl_display_dispatch call. exec() is the only loop, and
 //! PlatformIntegrationWayland registers the compositor socket with EventDispatcherLinux, so one
@@ -22,13 +26,26 @@
 //! nothing is happening the process uses no CPU at all -- watch it in top while the window sits
 //! idle, then move the pointer over it.
 //!
-//! Controls: move, click, scroll or touch anywhere in the window; the close button quits.
+//! Controls: move, click, scroll or touch anywhere in the window; the close button quits, and so
+//! does Ctrl+C -- a SignalWatcher turns it into a signal on the loop, so the teardown runs.
+//!
+//! A click also sends the top bar across. That is a PropertyAnimation: it moves a value, the value
+//! reports the change, and the report is what asks for the repaint. See the comment beside it in
+//! main() for why the animation is not driven from the frame instead, which is the arrangement
+//! that looks right and is not.
 
 #include "QtLikeSignalGui/GuiApplication.hpp"
 #include "QtLikeSignalGui/Window.hpp"
 
+#include "QtLikeSignal/AbstractAnimation.hpp"
+#include "QtLikeSignal/CoreApplication.hpp"
 #include "QtLikeSignal/Object.hpp"
+#include "QtLikeSignal/Property.hpp"
+#include "QtLikeSignal/PropertyAnimation.hpp"
+#include "QtLikeSignal/SignalWatcher.hpp"
 #include "QtLikeSignal/Timer.hpp"
+
+#include "QtLikeSignal/Log.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -41,6 +58,9 @@
 #include <unistd.h>
 
 #include <wayland-client.h>
+
+//! This demo's category.
+QTLIKESIGNAL_DEFINE_LOG_CATEGORY( gLogDemo, "demo.gui.wayland", "DGWA" )
 
 namespace Gui = QtLikeSignalGui;
 
@@ -81,9 +101,9 @@ namespace
 
     //! Draws into the window, standing in for the rendering library.
     //!
-    //! An ordinary QtLikeSignal::Object. It was handed a wl_display and a wl_surface and it paints them;
-    //! it never sees a wl_pointer, a listener or an event queue, because everything it reacts to
-    //! arrives as a signal.
+    //! An ordinary QtLikeSignal::Object. It was handed a wl_display and a wl_surface and it paints
+    //! them; it never sees a wl_pointer, a listener or an event queue, because everything it reacts
+    //! to arrives as a signal.
     class Renderer : public QtLikeSignal::Object
     {
     public:
@@ -123,15 +143,15 @@ namespace
 
         //! Binds wl_shm and makes the buffer the surface will show.
         //!
-        //! A registry of this renderer's own, on the connection QtLikeSignalGui opened. Two registries on
-        //! one display is ordinary Wayland: each client object is independent, and this is exactly
-        //! the position an EGL library is in when it calls eglGetPlatformDisplayEXT() on a display
-        //! somebody else connected.
+        //! A registry of this renderer's own, on the connection QtLikeSignalGui opened. Two
+        //! registries on one display is ordinary Wayland: each client object is independent, and
+        //! this is exactly the position an EGL library is in when it calls
+        //! eglGetPlatformDisplayEXT() on a display somebody else connected.
         bool initialise()
         {
             if( mDisplay == nullptr || mSurface == nullptr )
             {
-                std::fprintf( stderr, "no wl_display or wl_surface from the window\n" );
+                qCWarning( gLogDemo ) << "no wl_display or wl_surface from the window";
                 return false;
             }
 
@@ -141,7 +161,7 @@ namespace
 
             if( mShm == nullptr )
             {
-                std::fprintf( stderr, "the compositor offers no wl_shm\n" );
+                qCWarning( gLogDemo ) << "the compositor offers no wl_shm";
                 return false;
             }
 
@@ -291,15 +311,25 @@ namespace
 
         //! Counts a second of uptime and repaints.
         //!
-        //! A QtLikeSignal::Timer sharing the loop with the compositor socket. It keeps ticking while the
-        //! pointer floods the connection, which is the point: one poll() services both.
+        //! A QtLikeSignal::Timer sharing the loop with the compositor socket. It keeps ticking
+        //! while the pointer floods the connection, which is the point: one poll() services both.
         void onSecond()
         {
             ++mSeconds;
             mWindow->requestUpdate();
         }
 
+        //! @return the bar's position, which is what the animation in main() drives.
+        QtLikeSignal::Property<int>& sweepPosition()
+        {
+            return mSweepPosition;
+        }
+
         //! Paints and presents a frame.
+        //!
+        //! Nothing here advances the animation. It runs on the library's own clock, and this is
+        //! called because the value it moves reported a change -- see the comment beside the
+        //! animation in main() for why that direction, and not the other one.
         void onExposed()
         {
             if( mPixels == nullptr || mBuffer == nullptr )
@@ -326,6 +356,12 @@ namespace
             {
                 drawBlock( 16, mHeight - 48, 32, 32, kPressed );
             }
+
+            // The animated bar. Its position is a Property, so nothing here reads the
+            // animation -- the renderer reads the value, exactly as it would if a slider had set
+            // it.
+            drawBlock( ( mSweepPosition.get() * std::max( 0, mWidth - 48 ) ) / 1000, 8, 40, 10,
+                kCrosshair );
 
             if( mTouching )
             {
@@ -385,7 +421,8 @@ namespace
             const int fd = createSharedFile( bytes );
             if( fd < 0 )
             {
-                std::fprintf( stderr, "could not create a %zu byte buffer (%d)\n", bytes, errno );
+                qCWarning( gLogDemo )
+                    << "could not create a buffer of" << bytes << "bytes; errno" << errno;
                 return false;
             }
 
@@ -393,7 +430,7 @@ namespace
                 0 );
             if( pixels == MAP_FAILED )
             {
-                std::fprintf( stderr, "mmap() of the buffer failed (%d)\n", errno );
+                qCWarning( gLogDemo ) << "mmap() of the buffer failed; errno" << errno;
                 ::close( fd );
                 return false;
             }
@@ -486,6 +523,10 @@ namespace
         int mTouchCount { 0 };            //!< Total touches seen.
         int mWheelTotal { 0 };            //!< Accumulated vertical rotation.
         int mSeconds { 0 };               //!< Seconds since start, from the timer.
+
+        //! Where the animated bar is, from 0 to 1000. Driven by a PropertyAnimation in main().
+        QtLikeSignal::Property<int> mSweepPosition { 0 };
+
     };
 
     const wl_registry_listener Renderer::kRegistryListener =
@@ -506,15 +547,15 @@ int main
 
     if( !app.hasPlatform() || app.platformType() != Gui::PlatformType::Wayland )
     {
-        std::fprintf( stderr,
-            "this demo needs the wayland backend; pass -p wayland (platform is \"%s\")\n",
-            app.platformName() );
+        qCCritical( gLogDemo )
+            << "this demo needs the wayland backend; pass -p wayland. The platform is"
+            << app.platformName();
         return 1;
     }
 
     Gui::WindowSettings settings;
-    settings.mWidth  = 1000;
-    settings.mHeight = 640;
+    settings.mWidth  = 1280;
+    settings.mHeight = 720;
     settings.mTitle  = "QtLikeSignalGui demo -- Wayland";
     settings.mAppId  = "com.example.qtlikesignalgui.demo";
 
@@ -525,7 +566,7 @@ int main
     Gui::Window* const window = app.createWindow( settings );
     if( window == nullptr )
     {
-        std::fprintf( stderr, "failed to create the window\n" );
+        qCWarning( gLogDemo ) << "failed to create the window";
         return 1;
     }
 
@@ -548,11 +589,11 @@ int main
         direct );
     QtLikeSignal::Object::connect( window->getMouseEntered(), &renderer, &Renderer::onMouseEntered,
         direct );
-    QtLikeSignal::Object::connect( window->getMouseLeft(), &renderer, &Renderer::onMouseLeft,
-        direct );
+    QtLikeSignal::Object::connect( window->getMouseLeft(), &renderer, &Renderer::onMouseLeft, direct
+                                 );
     QtLikeSignal::Object::connect( window->getWheel(), &renderer, &Renderer::onWheel, direct );
-    QtLikeSignal::Object::connect( window->getTouchDown(), &renderer, &Renderer::onTouchDown,
-        direct );
+    QtLikeSignal::Object::connect( window->getTouchDown(), &renderer, &Renderer::onTouchDown, direct
+                                 );
     QtLikeSignal::Object::connect( window->getTouchMotion(), &renderer, &Renderer::onTouchMotion,
         direct );
     QtLikeSignal::Object::connect( window->getTouchUp(), &renderer, &Renderer::onTouchUp, direct );
@@ -565,6 +606,62 @@ int main
     QtLikeSignal::Object::connect( second.getTimeout(), &renderer, &Renderer::onSecond, direct );
     second.start( 1000 );
 
+    // **The animation is advanced by the library's own 16 ms clock, and the repaint follows the
+    // value rather than the other way round.** The tempting arrangement is the opposite one --
+    // switch the internal clock off with AbstractAnimation::tickExternally(), advance from inside
+    // the paint, and ask for another frame while the animation runs. It does not work for a
+    // program shaped like this one, in two different ways worth knowing before trying it:
+    //
+    //   * On immediate delivery, which is what a window has unless it asks otherwise, a paint that
+    //     asks for another frame is a loop with nothing throttling it. It repaints thousands of
+    //     times a second, and it looks like the window flashing rather than like an animation.
+    //   * With Display pacing it deadlocks instead. requestUpdate() arms a wl_surface.frame
+    //     callback, and that callback fires only after the surface is committed again -- but this
+    //     program commits only inside its paint, and the paint runs only when the callback fires.
+    //     Starting an animation from outside a paint therefore arms a callback nothing will ever
+    //     trigger. Measured: exactly one frame for the whole run.
+    //
+    // Driving animation from the frame clock is still the better arrangement for a renderer that
+    // presents every frame whatever happens -- a game does -- and tickExternally() exists for it.
+    // It is the wrong shape for a program that draws only when something changed, which is what
+    // this demo is.
+
+    // Only the end is set. Leaving the start unset is what makes the animation begin from
+    // wherever the bar currently is, so clicking again part way through picks it up rather than
+    // snapping it back -- which is the whole reason PropertyAnimation reads the property at
+    // start() when it was given no start value.
+    QtLikeSignal::PropertyAnimation<int> sweepAnimation( renderer.sweepPosition() );
+    sweepAnimation.setDuration( 900 );
+    sweepAnimation.setEasing( QtLikeSignal::Easing::Cubic_InOut );
+
+    // Started by a click rather than looping forever, so this demo keeps the property it was
+    // written to show: at rest it uses no CPU at all. An animation running for ever would repaint
+    // sixty times a second whether or not anything was looking.
+    QtLikeSignal::Property<int>& bar = renderer.sweepPosition();
+    QtLikeSignal::Object::connect( window->getMousePressed(), &renderer,
+        [&sweepAnimation, &bar]( Gui::MouseEvent )
+        {
+            // **The target is chosen from where the bar is, not from where it was last sent.**
+            // Toggling the previous end value looks equivalent and is not: the first click would
+            // toggle away from the end set at start-up and send the bar to the position it
+            // already held, so the first click did nothing and every one after it worked.
+            //
+            // Only the end is set. setRange() would fix the start as well, and the bar would jump
+            // to it before moving; leaving the start unset is what makes PropertyAnimation read
+            // the property at start(), so a click part way through picks the bar up where it is.
+            sweepAnimation.setEndValue( bar.get() >= 500 ? 0 : 1000 );
+            sweepAnimation.start();
+        }, direct );
+
+    // Each step of the sweep changes the property, and that is what asks for a repaint. The
+    // animation keeps advancing on its own clock whether or not a frame was drawn, so a step that
+    // leaves the value where it was simply does not repaint -- it stalls nothing.
+    QtLikeSignal::Object::connect( renderer.sweepPosition().getChanged(), &renderer,
+        [window]( int )
+        {
+            window->requestUpdate();
+        }, direct );
+
     window->show();
 
     // The first frame, which is also what maps the surface: a Wayland surface has no contents until
@@ -575,13 +672,37 @@ int main
     // the loop, which draws and then flushes.
     window->requestUpdate();
 
+    // Ctrl+C, and the SIGTERM a service manager sends, come back here as an ordinary signal on this
+    // thread instead of stopping the process where it stands. That is what lets the compositor
+    // connection be torn down in order, so this demo shows the whole shutdown path and not only the
+    // close button. Press Ctrl+C two times and the second one stops the process, whatever the first
+    // one is still doing.
+    QtLikeSignal::SignalWatcher shutdown;
+    QtLikeSignal::Object::connect( shutdown.getTriggered(), &renderer, []( int aSignal )
+        {
+            std::printf( "signal %d received; leaving the loop\n", aSignal );
+            QtLikeSignal::CoreApplication::quit();
+        }, direct );
+
     std::printf( "QtLikeSignalGui Wayland demo running.\n" );
     std::printf( "  platform        : %s\n", app.platformName() );
     std::printf( "  surface         : %p on fd %d\n", window->nativeHandle(),
         wl_display_get_fd( static_cast<wl_display*>( window->nativeDisplay() ) ) );
     std::printf( "  event loop      : GuiApplication::exec()\n" );
     std::printf( "  compositor sock : in the dispatcher's poll() set\n" );
+    std::printf( "  device pixels   : %.2f per unit, so %d x %d real pixels\n",
+        window->devicePixelRatio(),
+        static_cast<int>( window->width() * window->devicePixelRatio() ),
+        static_cast<int>( window->height() * window->devicePixelRatio() ) );
+    std::printf( "  animation       : advanced by the internal 16 ms clock\n" );
+    std::printf( "  shutdown        : %s\n",
+        shutdown.isWatching() ? "SIGINT and SIGTERM watched" : "not watched" );
     std::printf( "  no wl_display_dispatch loop in this program\n" );
+
+    // Flushed, because the loop below can run for hours and stdout is block-buffered the
+    // moment it is redirected to a file -- so without this the status above appears only
+    // when the program exits, which is exactly when it stops being useful.
+    std::fflush( stdout );
 
     const int result = app.exec();
 

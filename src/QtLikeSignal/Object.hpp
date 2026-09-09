@@ -27,13 +27,14 @@
 #include "QtLikeSignal/BlockingCall.hpp"
 #include "QtLikeSignal/Event.hpp"
 #include "QtLikeSignal/Global.hpp"
+#include "QtLikeSignal/Log.hpp"
+#include "QtLikeSignal/LogCategories.hpp"
 #include "QtLikeSignal/ThreadData.hpp"
 
 #include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -344,9 +345,9 @@ namespace QtLikeSignal
         //! wrong for a large model, so treat this as a diagnostic and wiring convenience rather
         //! than something to call in a loop.
         //!
-        //! Uses dynamic_cast because there is no moc here and therefore no qobject_cast. RTTI has to
-        //! stay enabled; neither toolchain disables it, and this is the first thing that would break
-        //! if one did.
+        //! Uses dynamic_cast because there is no moc here and therefore no qobject_cast. RTTI has
+        //! to stay enabled; neither toolchain disables it, and this is the first thing that would
+        //! break if one did.
         template <typename T>
         T* findChild
             (
@@ -374,6 +375,99 @@ namespace QtLikeSignal
         //! unnamed object prints as its address alone.
         void dumpObjectTree() const;
 
+        //! Posts @p aEvent to @p aReceiver's thread, to be delivered by its event() later.
+        //!
+        //! The application's way into the event queue, and the counterpart of
+        //! QCoreApplication::postEvent(). Asynchronous always: this call returns as soon as the
+        //! event is queued, and the receiver's event() runs on the thread @p aReceiver lives in.
+        //! There is no synchronous sendEvent() -- a caller wanting a slot to run right now already
+        //! has a direct connection or a plain function call.
+        //!
+        //! **Takes ownership of @p aEvent on every path.** It is deleted after delivery, deleted if
+        //! the post is refused, and deleted if @p aReceiver is destroyed before it is delivered.
+        //! Only the last of those is subtle: ~Object() strips the queue of everything aimed at the
+        //! object, which is what makes posting to an object that may be destroyed meanwhile safe.
+        //! A caller must therefore never touch @p aEvent again, and must never post one that lives
+        //! on the stack.
+        //!
+        //! **Only application types are accepted**, meaning Event::isUserType( aEvent->type() ).
+        //! An internal type is refused rather than queued: the dispatcher casts those to their
+        //! concrete subclasses, so accepting a hand-built one would be an invalid cast dressed up
+        //! as an ordinary post. The refusal is reported on the qtlikesignal.object log category.
+        //!
+        //! Thread-safe, and @p aReceiver may live in any thread. @p aReceiver must be alive for the
+        //! duration of this call -- its affinity is read here -- but need not survive until
+        //! delivery.
+        //!
+        //! **@p aPriority orders the queue.** Higher runs first and equal priorities keep posting
+        //! order, so the default leaves a plain FIFO. It reaches further than the order of a
+        //! waiting queue: a higher-priority event posted while a pass is already dispatching will
+        //! preempt the rest of that pass rather than waiting for it, and a full queue sheds from
+        //! its lowest priority rather than its front. Qt's own use of the mechanism is worth
+        //! copying -- in the whole of qtbase it demotes repaints once and promotes nothing.
+        //!
+        //! **What happens when the receiving queue is full** is @p aPolicy's business. A queue
+        //! is only ever full if the application gave it a capacity with
+        //! AbstractEventDispatcher::setEventQueueCapacity(); the default is unbounded, and then
+        //! DropNewest and DropOldest never do anything. Coalesce is the exception and acts at any
+        //! depth -- see OverflowPolicy.
+        //!
+        //! @return true if the event was queued, and also true when Coalesce found an equivalent
+        //! event already pending, since the caller's intent is then satisfied. False means the
+        //! event was not queued and has been deleted: it was refused as above, or @p aReceiver has
+        //! no thread affinity, or that thread's event loop has already stopped, or the queue was
+        //! full and @p aPolicy did not make room.
+        static bool postEvent
+            (
+            Object* aReceiver,  //!< Object to deliver to; null refuses the post.
+            Event* aEvent,      //!< The event; owned from here on, null refuses the post.
+            //! What to do if the receiving queue is at its capacity. Coalesce is refused for an
+            //! internal type, but every type postEvent() accepts is an application type anyway.
+            OverflowPolicy aPolicy = OverflowPolicy::DropNewest,
+            //! Higher runs first; equal priorities keep posting order. See EventPriority, and
+            //! prefer demoting what can wait over promoting what cannot.
+            int aPriority = EventPriority::kNormal
+            );
+
+        //! Handles one event delivered to this object. Override to handle an application's own
+        //! types; @return true if the event was handled.
+        //!
+        //! Runs on the thread this object lives in, so an override needs no locking of its own.
+        //! The base implementation handles the library's three internal types and returns false for
+        //! everything else, so an override should handle the types it knows and delegate the rest:
+        //!
+        //! @code
+        //!   bool Cluster::event( QtLikeSignal::Event* aEvent ) override
+        //!   {
+        //!       if( aEvent->type() == kBrakeWarning )
+        //!       {
+        //!           setTelltale( static_cast<BrakeWarningEvent*>( aEvent )->mOn );
+        //!           return true;
+        //!       }
+        //!       return QtLikeSignal::Object::event( aEvent );
+        //!   }
+        //! @endcode
+        //!
+        //! Delegating matters: timers and deleteLater() arrive here, so an override that answers
+        //! true without calling the base stops both for that object. A queued signal does **not**
+        //! come through here -- it is delivered without the receiver being dereferenced at all, so
+        //! that a receiver destroyed while its thread still holds queued emits stays safe -- and an
+        //! override therefore cannot intercept one. Qt routes its metacalls through event() and
+        //! accepts that hazard; this library does not.
+        //!
+        //! The event belongs to the caller, not to the override: it is deleted once this returns,
+        //! and keeping the pointer past that point is a dangling reference. Copy what is needed.
+        //!
+        //! **Do not call this directly with an internal type.** The branches below cast to a
+        //! concrete subclass, and only the library can build one of those -- an Event carrying an
+        //! internal type but not of that class would be an invalid cast. postEvent() cannot deliver
+        //! one; calling event() by hand bypasses that check, exactly as
+        //! QCoreApplication::sendEvent() does in Qt.
+        virtual bool event
+            (
+            Event* aEvent
+            );
+
         //! Called when one of this object's timers comes due. Override to react to it; the default
         //! does nothing. Delivered by the event loop of the thread the object lives in, so an
         //! override runs there and needs no locking of its own.
@@ -394,6 +488,19 @@ namespace QtLikeSignal
             (
             int aTimerId
             );
+
+        //! @return milliseconds until @p aTimerId next fires; 0 if it is already due, -1 if this
+        //! thread has no dispatcher or the id is not registered with it. Thread-safe.
+        //!
+        //! Unlike startTimer() and killTimer() this is **not** thread-confined: it changes nothing,
+        //! and the dispatcher answers it under its own lock. The answer is a sample all the same --
+        //! it is stale the moment it is returned, and it reads 0 for as long as the owning loop is
+        //! blocked, because a timer whose deadline has passed is due and stays due until a pass
+        //! delivers it.
+        int remainingTime
+            (
+            int aTimerId  //!< A timer id from startTimer().
+            ) const;
 
         //! Number of live connections where this object is the receiver. Thread-safe.
         //!
@@ -453,10 +560,10 @@ namespace QtLikeSignal
         //! Connect Overload 2: Connects an overloaded void member function slot inherited from
         //! a base class.
         //!
-        //! If the target slot is overloaded, the compiler cannot deduce `Slot` in
-        //! Overload 1. When the overloaded slot is defined in a base class of the receiver, type
-        //! deduction fails. This overload explicitly resolves the base class pointer so you can connect
-        //! inherited overloaded methods seamlessly.
+        //! If the target slot is overloaded, the compiler cannot deduce `Slot` in Overload 1. When
+        //! the overloaded slot is defined in a base class of the receiver, type deduction fails.
+        //! This overload explicitly resolves the base class pointer so you can connect inherited
+        //! overloaded methods seamlessly.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename SlotClass>
         static std::enable_if_t<obj_is_child_of<Receiver, SlotClass>, Connection> connect
@@ -504,8 +611,8 @@ namespace QtLikeSignal
         //! Connect Overload 4: Connects an overloaded non-void returning member function slot
         //! inherited from a base class.
         //!
-        //! If an overloaded inherited slot returns a value (e.g. `bool`), it won't match
-        //! the void-returning Overloads 2 and 3. This overload explicitly catches non-void slots from
+        //! If an overloaded inherited slot returns a value (e.g. `bool`), it won't match the
+        //! void-returning Overloads 2 and 3. This overload explicitly catches non-void slots from
         //! base classes (the return value is safely discarded during emission).
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename SlotClass, typename Ret>
@@ -604,10 +711,9 @@ namespace QtLikeSignal
         //! Connect Overload 8: Connects an overloaded non-void returning member function slot
         //! defined directly on the receiver.
         //!
-        //! If an overloaded slot returns a value (e.g. `bool`), it won't match the
-        //! void-returning Overload 6. This overload ensures connecting an overloaded method that returns
-        //! `Ret` compiles successfully.
-        //! signature.
+        //! If an overloaded slot returns a value (e.g. `bool`), it won't match the void-returning
+        //! Overload 6. This overload ensures connecting an overloaded method that returns `Ret`
+        //! compiles successfully. signature.
         template <template <typename ...> class SignalSource, typename ... SignalArgs,
             typename Receiver, typename Ret>
         static std::enable_if_t<is_obj<Receiver> && !is_void<Ret>, Connection> connect
@@ -910,16 +1016,12 @@ namespace QtLikeSignal
 
         ThreadData* threadData() const;
 
-        //! Carries this object's already-posted events across in moveToThread(). See the definition.
+        //! Carries this object's already-posted events across in moveToThread(). See the
+        //! definition.
         void migratePostedEvents
             (
             ThreadData* aOldData,
             ThreadData* aNewData
-            );
-
-        bool event
-            (
-            Event* aEvent
             );
 
         static bool
@@ -934,19 +1036,19 @@ namespace QtLikeSignal
         //!
         //! The shared core of the two overloads above, and the entry point for a caller that knows
         //! which thread it means rather than inferring it from an Object. Thread::post() needs
-        //! exactly that: it targets the thread's *own* queue, which is not the same as the queue the
-        //! Thread object happens to live in -- a Thread is constructed on one thread and then runs on
-        //! another, so routing post() through its Object affinity would deliver to whoever created it
-        //! until its loop started and re-pointed the affinity at itself.
+        //! exactly that: it targets the thread's *own* queue, which is not the same as the queue
+        //! the Thread object happens to live in -- a Thread is constructed on one thread and then
+        //! runs on another, so routing post() through its Object affinity would deliver to whoever
+        //! created it until its loop started and re-pointed the affinity at itself.
         //!
         //! A template purely so the concrete callable type survives as far as the allocation:
         //! MetaCallEvent::create() sizes one block to hold the event and the callable together,
         //! which it cannot do once the type has been erased into a std::function. Everything that
-        //! is not the allocation stays in postMetaCall() below, which is not a template, so this
+        //! is not the allocation stays in postEventTo() below, which is not a template, so this
         //! costs one small instantiation per connection signature rather than a copy of the parking
         //! and dispatcher-resolution logic.
         //!
-        //! The null check happens here rather than in postMetaCall() so that a call with nowhere to
+        //! The null check happens here rather than in postEventTo() so that a call with nowhere to
         //! go allocates nothing at all.
         template <typename Callable>
         static bool dispatchMetaCallTo
@@ -961,19 +1063,39 @@ namespace QtLikeSignal
                 return false;
             }
 
-            return postMetaCall( aData, aReceiver,
-                MetaCallEvent::create( std::forward<Callable>( aSlot ) ) );
+            return postEventTo( aData, aReceiver,
+                MetaCallEvent::create( std::forward<Callable>( aSlot ) ),
+                OverflowPolicy::DropNewest, EventPriority::kNormal );
         }
 
-        //! Queues, parks or discards an already-built metacall event. Takes ownership of @p aEvent.
+        //! Delivers one event the dispatcher has taken off its queue. @return true if it was
+        //! handled.
         //!
-        //! Everything dispatchMetaCallTo() does that does not depend on the callable's type.
+        //! The dispatcher's entry point, and **not** event() directly. Static and non-virtual on
+        //! purpose: a metacall must be delivered without dereferencing the receiver at all, which a
+        //! virtual call on that receiver cannot do. The definition carries the reasoning.
+        //!
+        //! Callers have already rejected a null receiver and a null event.
+        static bool dispatchEvent
+            (
+            Object* aReceiver,
+            Event* aEvent
+            );
+
+        //! Queues, parks or discards an already-built event. Takes ownership of @p aEvent.
+        //!
+        //! Everything dispatchMetaCallTo() does that does not depend on the callable's type, and
+        //! the same body the public postEvent() runs once it has resolved the receiver's affinity.
+        //! Both want identical parking, dispatcher-resolution and queued-work bookkeeping; the only
+        //! thing that differs is where the event came from, which this does not care about.
         static bool
-        postMetaCall
+        postEventTo
             (
             ThreadData* aData,
             Object* aReceiver,
-            MetaCallEvent* aEvent
+            Event* aEvent,
+            OverflowPolicy aPolicy,
+            int aPriority
             );
 
         //! The one body shared by all ten connect() overloads.
@@ -1113,8 +1235,8 @@ namespace QtLikeSignal
                     }
 
                     // Queued: the arguments have to outlive this call, so copy them once into a
-                    // tuple the closure owns. Re-check the life token when it finally runs, since it
-                    // was only checked at emit time and the receiver may be destroyed before the
+                    // tuple the closure owns. Re-check the life token when it finally runs, since
+                    // it was only checked at emit time and the receiver may be destroyed before the
                     // loop reaches it. Dispatched through the ThreadData, never a raw Thread*, so a
                     // concurrent ~Thread() cannot turn this into a use-after-free; if the target
                     // has no dispatcher the invocation is dropped, as Qt leaves events undelivered
@@ -1147,12 +1269,12 @@ namespace QtLikeSignal
                 std::move( ctxAffinity ) );
 
             // Links the node into aContext's incoming list, and does nothing if a concurrent
-            // disconnectAll() unlinked the connection while we were between the two lines. Both this
-            // and the prune take aContext->mIncomingMutex, so one of the two orders always holds and
-            // nothing is left linked for an unlink that already ran.
-            // The Cleanup token this replaced got the same result from its own lifetime, and needed
-            // a paragraph to say why. A lock was once added here for a race a TSan probe then
-            // failed to reproduce, and was reverted.
+            // disconnectAll() unlinked the connection while we were between the two lines. Both
+            // this and the prune take aContext->mIncomingMutex, so one of the two orders always
+            // holds and nothing is left linked for an unlink that already ran. The Cleanup token
+            // this replaced got the same result from its own lifetime, and needed a paragraph to
+            // say why. A lock was once added here for a race a TSan probe then failed to reproduce,
+            // and was reverted.
             handle.registerWithReceiver();
             return handle;
         }
@@ -1275,12 +1397,12 @@ namespace QtLikeSignal
         //! the former carries an ABI-frozen structure supporting timed and recursive locking that
         //! nothing here asks for. libstdc++ is the other way round -- std::mutex 40,
         //! std::shared_mutex 56, a pthread_rwlock_t -- so there it stays std::mutex. Measured, not
-        //! assumed: the two sizes were read off both toolchains before the alias was written.
+        //! assumed; see src/OBJECT-SIZE-REPORT.md.
         //!
         //! Only the exclusive half of the interface is ever used -- lock(), try_lock(), unlock() --
         //! which both types provide with identical semantics under std::lock_guard. Nothing takes a
-        //! shared lock, and nothing should start taking one without measuring first: a reader-writer
-        //! lock is slower than a plain mutex when every user is a writer.
+        //! shared lock, and nothing should start taking one without measuring first: a
+        //! reader-writer lock is slower than a plain mutex when every user is a writer.
         //!
         //! **An alias rather than a bare type, deliberately.** Qt's QBasicMutex is 8 bytes
         //! everywhere -- one tagged QBasicAtomicPointer -- and a hand-written equivalent would take
@@ -1454,8 +1576,8 @@ namespace QtLikeSignal
 
         if( aParent == nullptr )
         {
-            std::fprintf( stderr,
-                "Object::createChild: no parent to attach to; nothing was created\n" );
+            qCWarning( gLogObject )
+                << "Object::createChild: no parent to attach to; nothing was created";
             return nullptr;
         }
 

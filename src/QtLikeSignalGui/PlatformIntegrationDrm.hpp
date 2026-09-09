@@ -25,8 +25,8 @@ namespace QtLikeSignalGui
     //! **libinput is what makes that one job tractable.** The kernel's evdev interface reports
     //! millimetre-scale tablet ranges, per-slot multitouch protocol A/B differences, and mouse
     //! buttons as raw key codes; libinput is the layer that already knows how to read all of it and
-    //! is what every Wayland compositor uses. It hands out a single file descriptor, which joins the
-    //! loop exactly the way the X11 connection does:
+    //! is what every Wayland compositor uses. It hands out a single file descriptor, which joins
+    //! the loop exactly the way the X11 connection does:
     //!
     //! @code
     //!   poll( [ eventfd, libinput fd ], timeout-until-next-timer )
@@ -37,14 +37,15 @@ namespace QtLikeSignalGui
     //!
     //! **The pointer position is this backend's own invention, and it has to be.** libinput reports
     //! a mouse as a *relative* movement, because on real hardware that is what a mouse produces --
-    //! there is no screen, no cursor and no clamping until somebody decides there is. With no window
-    //! system to decide, this backend keeps the position itself and clamps it to the drawable, which
-    //! is why NativeWindow::mWidth and mHeight are required here and ignored on X11. Touchscreens
-    //! and tablets report absolute positions and are transformed into the same space.
+    //! there is no screen, no cursor and no clamping until somebody decides there is. With no
+    //! window system to decide, this backend keeps the position itself and clamps it to the
+    //! drawable, which is why NativeWindow::mWidth and mHeight are required here and ignored on
+    //! X11. Touchscreens and tablets report absolute positions and are transformed into the same
+    //! space.
     //!
-    //! **Access to the devices is the practical obstacle.** /dev/input/event* is not world readable:
-    //! a program using this backend runs as root, or belongs to the `input` group, or is handed
-    //! descriptors by logind or seatd. What is opened is decided as follows:
+    //! **Access to the devices is the practical obstacle.** /dev/input/event* is not world
+    //! readable: a program using this backend runs as root, or belongs to the `input` group, or is
+    //! handed descriptors by logind or seatd. What is opened is decided as follows:
     //!
     //!   - `QTLIKESIGNAL_INPUT_DEVICES`, a colon-separated list of device paths, opens exactly those
     //!     through libinput's path interface. This is the escape hatch for a container, a test rig,
@@ -180,8 +181,9 @@ namespace QtLikeSignalGui
 
         //! Every mouse button currently held.
         //!
-        //! Accumulated from the press and release events, because libinput reports the change rather
-        //! than the resulting state -- the opposite of what MouseEvent::mButtons has to carry.
+        //! Accumulated from the press and release events, because libinput reports the change
+        //! rather than the resulting state -- the opposite of what MouseEvent::mButtons has to
+        //! carry.
         MouseButtons mButtons;
 
         //! Modifiers held, accumulated from the modifier keys going down and up.
@@ -193,7 +195,8 @@ namespace QtLikeSignalGui
         //! True while a repaint has been posted to the loop and not yet run. See requestUpdate().
         bool mUpdatePending { false };
 
-        //! Kept alive exactly as long as this backend is, so a posted repaint can ask whether it is.
+        //! Kept alive exactly as long as this backend is, so a posted repaint can ask whether it
+        //! is.
         //!
         //! requestUpdate() puts a task on the loop that touches this object when it runs, and the
         //! two are not otherwise tied together: the task outlives the backend if the application is

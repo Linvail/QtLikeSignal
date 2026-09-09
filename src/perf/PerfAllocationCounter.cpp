@@ -22,17 +22,17 @@
 #include <new>
 
 #if defined( __SANITIZE_ADDRESS__ ) || defined( __SANITIZE_THREAD__ )
-    #define QTLS_PERF_ALLOCATION_COUNTER_SANITIZED 1
+    #define QT_LIKE_SIGNAL_PERF_ALLOCATION_COUNTER_SANITIZED 1
 #elif defined( __has_feature )
     #if __has_feature( address_sanitizer ) || __has_feature( thread_sanitizer )
-        #define QTLS_PERF_ALLOCATION_COUNTER_SANITIZED 1
+        #define QT_LIKE_SIGNAL_PERF_ALLOCATION_COUNTER_SANITIZED 1
     #endif
 #endif
-#if !defined( QTLS_PERF_ALLOCATION_COUNTER_SANITIZED )
-    #define QTLS_PERF_ALLOCATION_COUNTER_SANITIZED 0
+#if !defined( QT_LIKE_SIGNAL_PERF_ALLOCATION_COUNTER_SANITIZED )
+    #define QT_LIKE_SIGNAL_PERF_ALLOCATION_COUNTER_SANITIZED 0
 #endif
 
-#if !QTLS_PERF_ALLOCATION_COUNTER_SANITIZED
+#if !QT_LIKE_SIGNAL_PERF_ALLOCATION_COUNTER_SANITIZED
 
 namespace
 {
@@ -124,7 +124,7 @@ namespace PerfHarness
     }
 }
 
-#else // QTLS_PERF_ALLOCATION_COUNTER_SANITIZED
+#else // QT_LIKE_SIGNAL_PERF_ALLOCATION_COUNTER_SANITIZED
 
 namespace PerfHarness
 {
@@ -147,4 +147,4 @@ namespace PerfHarness
     }
 }
 
-#endif // QTLS_PERF_ALLOCATION_COUNTER_SANITIZED
+#endif // QT_LIKE_SIGNAL_PERF_ALLOCATION_COUNTER_SANITIZED

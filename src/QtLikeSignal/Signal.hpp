@@ -324,9 +324,9 @@ namespace QtLikeSignal
         //! snapshot of it, rebuilt only when it has changed. A run of emits with no connects costs
         //! no allocation, and a run of connects with no emits costs no copying.
         //!
-        //! Removal is O(1) and preserves order: the element is nulled where it stands, and the nulls
-        //! are compacted in bulk once they outnumber the live entries. Each slot knows its own
-        //! index, so nothing is searched for.
+        //! Removal is O(1) and preserves order: the element is nulled where it stands, and the
+        //! nulls are compacted in bulk once they outnumber the live entries. Each slot knows its
+        //! own index, so nothing is searched for.
         class Impl : public Private::SignalImplBase
         {
         public:
@@ -540,8 +540,8 @@ namespace QtLikeSignal
             //!
             //! For promptness, not dispatch correctness: a removed slot is skipped by its own flag
             //! either way, but the snapshot would otherwise keep it -- and the Cleanup token that
-            //! unlinks it from the receiver -- alive until the next emit. An emit already in flight is
-            //! unaffected; it holds its own reference to the old snapshot.
+            //! unlinks it from the receiver -- alive until the next emit. An emit already in flight
+            //! is unaffected; it holds its own reference to the old snapshot.
             void discardSnapshot() const
             {
                 mPublished.reset();

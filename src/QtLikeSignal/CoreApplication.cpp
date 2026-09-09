@@ -14,10 +14,11 @@
 #elif defined( __linux__ )
     #include "QtLikeSignal/EventDispatcherLinux.hpp"
 #endif
+#include "QtLikeSignal/Log.hpp"
+#include "QtLikeSignal/LogCategories.hpp"
 #include "QtLikeSignal/Event.hpp"
 #include "QtLikeSignal/Thread.hpp"
 
-#include <cstdio>
 
 namespace QtLikeSignal
 {
@@ -61,9 +62,9 @@ namespace QtLikeSignal
         CoreApplication* noInstanceYet = nullptr;
         if( !sInstance.compare_exchange_strong( noInstanceYet, this ) )
         {
-            std::fprintf( stderr,
-                "CoreApplication: there should be only one application object; the existing one "
-                "is kept and this one will not be reachable through instance()\n" );
+            qCWarning( gLogApp )
+                << "CoreApplication: there should be only one application object; the existing"
+                << "one is kept and this one will not be reachable through instance()";
         }
 
         // The calling thread is already adopted -- this object's own Object base asked for
@@ -108,8 +109,8 @@ namespace QtLikeSignal
         // Hand the thread back the plain dispatcher auto-adoption would have given it, rather than
         // leaving it with the platform one (whose eventfd or message window should not outlive the
         // application) or with none at all (which would silently break every Object still living on
-        // this thread). The thread itself stays adopted: it is owned by a thread_local in Thread and
-        // released when the native thread exits, not by us.
+        // this thread). The thread itself stays adopted: it is owned by a thread_local in Thread
+        // and released when the native thread exits, not by us.
         if( mMainThread )
         {
             mMainThread->mData->setDispatcher( std::make_shared<EventDispatcherDefault>() );
@@ -148,7 +149,8 @@ namespace QtLikeSignal
         // which refuses the same thing for the same reason.
         if( Thread::currentThread() != mMainThread )
         {
-            std::fprintf( stderr, "CoreApplication::exec: must be called from the main thread\n" );
+            qCWarning( gLogApp )
+                << "CoreApplication::exec: must be called from the main thread";
             return -1;
         }
 
@@ -158,7 +160,8 @@ namespace QtLikeSignal
         // it was told to. Refused rather than honoured, as Qt refuses it.
         if( mInExec.exchange( true ) )
         {
-            std::fprintf( stderr, "CoreApplication::exec: the event loop is already running\n" );
+            qCWarning( gLogApp )
+                << "CoreApplication::exec: the event loop is already running";
             return -1;
         }
 
@@ -179,10 +182,11 @@ namespace QtLikeSignal
     //! Static, so any thread can ask the application to stop without holding a pointer to it. Does
     //! nothing if no application exists.
     //!
-    //! **Thread-safety note:** may be called from any thread. Thread-safety is not guaranteed if the
-    //! CoreApplication object is being destroyed at the same time -- destroy it only after the
-    //! threads that may call this have stopped. Qt states the same caveat for QCoreApplication::quit()
-    //! and it has the same cause: the instance pointer is loaded, and then dereferenced.
+    //! **Thread-safety note:** may be called from any thread. Thread-safety is not guaranteed if
+    //! the CoreApplication object is being destroyed at the same time -- destroy it only after the
+    //! threads that may call this have stopped. Qt states the same caveat for
+    //! QCoreApplication::quit() and it has the same cause: the instance pointer is loaded, and then
+    //! dereferenced.
     void CoreApplication::exit
         (
         int aReturnCode  //!< Value exec() should return.
@@ -197,9 +201,9 @@ namespace QtLikeSignal
 
     //! Convenience for exit(0): stops the main event loop, returning 0 from exec(). Thread-safe.
     //!
-    //! **Thread-safety note:** may be called from any thread. Thread-safety is not guaranteed if the
-    //! CoreApplication object is being destroyed at the same time; see exit(), which this forwards
-    //! to and which carries the reasoning.
+    //! **Thread-safety note:** may be called from any thread. Thread-safety is not guaranteed if
+    //! the CoreApplication object is being destroyed at the same time; see exit(), which this
+    //! forwards to and which carries the reasoning.
     void CoreApplication::quit()
     {
         exit( 0 );
@@ -210,8 +214,8 @@ namespace QtLikeSignal
     //! Static, like exit()/quit(), so any thread can hand work to the main loop without holding a
     //! pointer to the application. See the declaration for what the return value means.
     //!
-    //! **Thread-safety note:** may be called from any thread. Thread-safety is not guaranteed if the
-    //! CoreApplication object is being destroyed at the same time; see exit() for why.
+    //! **Thread-safety note:** may be called from any thread. Thread-safety is not guaranteed if
+    //! the CoreApplication object is being destroyed at the same time; see exit() for why.
     bool CoreApplication::post
         (
         std::function<void()> aTask  //!< The callable to run on the main thread.

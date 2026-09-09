@@ -7,7 +7,8 @@
 
 #include "QtLikeSignal/Thread.hpp"
 
-#include <cstdio>
+#include "QtLikeSignal/Log.hpp"
+#include "QtLikeSignal/LogCategories.hpp"
 
 #include <windows.h>
 // _beginthreadex() rather than CreateThread(): it is the same OS thread either way, but it
@@ -17,8 +18,181 @@
 // exactly, so no function-pointer cast is needed.
 #include <process.h>
 
+#include <string>
+
 namespace QtLikeSignal
 {
+    namespace
+    {
+        //! Signature of SetThreadDescription, resolved at run time. See threadDescriptionApi().
+        using SetThreadDescriptionFn = HRESULT ( WINAPI* )( HANDLE, PCWSTR );
+
+        //! Signature of GetThreadDescription, resolved at run time. See threadDescriptionApi().
+        using GetThreadDescriptionFn = HRESULT ( WINAPI* )( HANDLE, PWSTR* );
+
+        //! The two thread-naming entry points, or null where the system does not have them.
+        //!
+        //! **Resolved with GetProcAddress rather than linked**, because they arrived in Windows 10
+        //! version 1607. Calling them directly would put a load-time dependency on that version
+        //! into every program that links this library, and a program that never names a thread
+        //! would fail to start on an older system for a diagnostic it does not use.
+        //!
+        //! Kernel32 is where the loader finds them; the implementation lives in KernelBase and is
+        //! forwarded. Looked up once -- the module is already loaded in every process, so no
+        //! reference is taken and none is released.
+        struct ThreadDescriptionApi
+        {
+            SetThreadDescriptionFn mSet;   //!< SetThreadDescription, or null.
+            GetThreadDescriptionFn mGet;   //!< GetThreadDescription, or null.
+        };
+
+        //! Gets the resolved entry points, looking them up on the first call.
+        //!
+        //! A function-local static, so the lookup happens once and the standard guarantees the
+        //! initialisation is thread-safe without a lock of ours.
+        const ThreadDescriptionApi& threadDescriptionApi()
+        {
+            static const ThreadDescriptionApi api = []()
+                {
+                    ThreadDescriptionApi resolved { nullptr, nullptr };
+                    const HMODULE kernel = GetModuleHandleW( L"kernel32.dll" );
+                    if( kernel != nullptr )
+                    {
+                        resolved.mSet = reinterpret_cast<SetThreadDescriptionFn>(
+                            GetProcAddress( kernel, "SetThreadDescription" ) );
+                        resolved.mGet = reinterpret_cast<GetThreadDescriptionFn>(
+                            GetProcAddress( kernel, "GetThreadDescription" ) );
+                    }
+                    return resolved;
+                }();
+            return api;
+        }
+
+        //! Converts UTF-8 to the UTF-16 Windows wants. Returns an empty string if it cannot.
+        std::wstring toWide
+            (
+            const std::string& aText  //!< UTF-8 text to convert.
+            )
+        {
+            if( aText.empty() )
+            {
+                return std::wstring();
+            }
+
+            const int length = MultiByteToWideChar( CP_UTF8, 0, aText.c_str(),
+                static_cast<int>( aText.size() ), nullptr, 0 );
+            if( length <= 0 )
+            {
+                return std::wstring();
+            }
+
+            std::wstring wide( static_cast<std::size_t>( length ), L'\0' );
+            MultiByteToWideChar( CP_UTF8, 0, aText.c_str(), static_cast<int>( aText.size() ),
+                &wide[0], length );
+            return wide;
+        }
+
+        //! Converts UTF-16 back to the UTF-8 the rest of this library speaks.
+        std::string toUtf8
+            (
+            const wchar_t* aText  //!< NUL-terminated UTF-16 text, or null.
+            )
+        {
+            if( aText == nullptr || aText[0] == L'\0' )
+            {
+                return std::string();
+            }
+
+            const int length = WideCharToMultiByte( CP_UTF8, 0, aText, -1, nullptr, 0,
+                nullptr, nullptr );
+            if( length <= 1 )
+            {
+                return std::string();
+            }
+
+            // One less than the count, because that count includes the terminator and a
+            // std::string carries its own.
+            std::string utf8( static_cast<std::size_t>( length - 1 ), '\0' );
+            WideCharToMultiByte( CP_UTF8, 0, aText, -1, &utf8[0], length, nullptr, nullptr );
+            return utf8;
+        }
+    }
+
+    //! Sets the calling thread's name, as a debugger and Task Manager report it.
+    void Thread::setNativeName
+        (
+        const std::string& aName  //!< New name, UTF-8. Empty does nothing.
+        )
+    {
+        if( aName.empty() )
+        {
+            return;
+        }
+
+        const SetThreadDescriptionFn setter = threadDescriptionApi().mSet;
+        if( setter == nullptr )
+        {
+            return;
+        }
+
+        const std::wstring wide = toWide( aName );
+        if( !wide.empty() )
+        {
+            // The failure is deliberately not reported. A refused name costs a label in a debugger
+            // and nothing else, and a warning here would be noise about a diagnostic.
+            setter( GetCurrentThread(), wide.c_str() );
+        }
+    }
+
+    //! Gets the calling thread's name from the OS, or an empty string.
+    std::string Thread::nativeName()
+    {
+        const GetThreadDescriptionFn getter = threadDescriptionApi().mGet;
+        if( getter == nullptr )
+        {
+            return std::string();
+        }
+
+        PWSTR description = nullptr;
+        if( FAILED( getter( GetCurrentThread(), &description ) ) || description == nullptr )
+        {
+            return std::string();
+        }
+
+        const std::string name = toUtf8( description );
+
+        // LocalFree and not delete: the buffer comes from the system's local heap, which is what
+        // GetThreadDescription documents and the only thing that may release it.
+        LocalFree( description );
+        return name;
+    }
+
+    //! Labels the OS thread this object created. Called from start(), on the calling thread.
+    void Thread::applyNativeName
+        (
+        const std::string& aName  //!< The name to give the OS thread, UTF-8.
+        )
+    {
+        if( aName.empty() || mHandle == nullptr )
+        {
+            return;
+        }
+
+        const SetThreadDescriptionFn setter = threadDescriptionApi().mSet;
+        if( setter == nullptr )
+        {
+            return;
+        }
+
+        // SetThreadDescription names any thread by handle, not only the caller, which is what lets
+        // this run on the owning thread rather than inside the new one. See the declaration.
+        const std::wstring wide = toWide( aName );
+        if( !wide.empty() )
+        {
+            setter( static_cast<HANDLE>( mHandle ), wide.c_str() );
+        }
+    }
+
     //! Creates the OS thread, already at mPriority when it executes its first instruction.
     //!
     //! Created suspended, given its priority, then resumed. A new thread otherwise starts at
@@ -32,7 +206,7 @@ namespace QtLikeSignal
         const auto handle = _beginthreadex( nullptr, 0, &threadEntry, this, flags, nullptr );
         if( handle == 0 )
         {
-            std::fprintf( stderr, "Thread::start: failed to create thread\n" );
+            qCCritical( gLogThread ) << "Thread::start: failed to create thread";
             mData->setThreadRunning( false );
             return;
         }
@@ -46,7 +220,8 @@ namespace QtLikeSignal
 
         if( ResumeThread( static_cast<HANDLE>( mHandle ) ) == static_cast<DWORD>( -1 ) )
         {
-            std::fprintf( stderr, "Thread::start: failed to resume new thread\n" );
+            qCCritical( gLogThread )
+                << "Thread::start: failed to resume new thread";
         }
     }
 
@@ -114,7 +289,7 @@ namespace QtLikeSignal
 
         if( !SetThreadPriority( static_cast<HANDLE>( mHandle ), prio ) )
         {
-            std::fprintf( stderr, "Thread: failed to set thread priority\n" );
+            qCWarning( gLogThread ) << "Thread: failed to set thread priority";
         }
     }
 
@@ -156,7 +331,7 @@ namespace QtLikeSignal
         const DWORD result = WaitForSingleObject( handle, timeout );
         if( result == WAIT_FAILED )
         {
-            std::fprintf( stderr, "Thread::wait: thread wait failure\n" );
+            qCCritical( gLogThread ) << "Thread::wait: thread wait failure";
         }
         const bool completed = ( result == WAIT_OBJECT_0 );
 

@@ -8,6 +8,7 @@
 #include "QtLikeSignalGui/WindowSystemInterface.hpp"
 
 #include "QtLikeSignalGui/GuiApplication.hpp"
+#include "QtLikeSignalGui/PlatformIntegration.hpp"
 #include "QtLikeSignalGui/Window.hpp"
 
 namespace QtLikeSignalGui
@@ -214,6 +215,50 @@ namespace QtLikeSignalGui
         aWindow->mResized.emit( aWidth, aHeight );
     }
 
+    //! Reports a new device-pixel ratio for the window.
+    void WindowSystemInterface::handleDevicePixelRatioChanged
+        (
+        Window* aWindow,   //!< Window whose scale changed.
+        double aRatio      //!< Device pixels for each window-system unit; must be positive.
+        )
+    {
+        if( aWindow == nullptr || !( aRatio > 0.0 ) )
+        {
+            return;
+        }
+
+        // Compared rather than assigned unconditionally, so a backend may call this every time it
+        // re-reads the scale without producing a signal that says nothing changed. Written as an
+        // exact comparison on purpose: these values come from the window system as small integers
+        // or simple fractions, and a tolerance here would silently swallow a real change from
+        // 1.0 to 1.0000001 that a compositor had every right to send.
+        if( aWindow->mDevicePixelRatio == aRatio )
+        {
+            return;
+        }
+
+        // Recorded before the signal, for the reason handleResize() records the size first: a slot
+        // that asks the window during the emission gets the new value, not the one it is being
+        // told about.
+        aWindow->mDevicePixelRatio = aRatio;
+        aWindow->mDevicePixelRatioChanged.emit( aRatio );
+    }
+
+    //! Records a starting device-pixel ratio without reporting it. See the declaration.
+    void WindowSystemInterface::setInitialDevicePixelRatio
+        (
+        Window* aWindow,   //!< Window being created.
+        double aRatio      //!< Device pixels for each window-system unit; must be positive.
+        )
+    {
+        if( aWindow == nullptr || !( aRatio > 0.0 ) )
+        {
+            return;
+        }
+
+        aWindow->mDevicePixelRatio = aRatio;
+    }
+
     //! Reports that the window needs redrawing.
     void WindowSystemInterface::handleExpose
         (
@@ -226,6 +271,20 @@ namespace QtLikeSignalGui
         }
 
         aWindow->mExposed.emit();
+    }
+
+    //! Reports that the display will take another frame. See the declaration.
+    void WindowSystemInterface::handleFrameReady
+        (
+        Window* aWindow   //!< Window whose display is ready; null is ignored.
+        )
+    {
+        if( aWindow == nullptr )
+        {
+            return;
+        }
+
+        aWindow->mIntegration->deliverPacedUpdate( aWindow );
     }
 
     //! Reports that a menu item was chosen. See Window::getMenuCommand().
@@ -248,10 +307,11 @@ namespace QtLikeSignalGui
     //! Emits the signal first, so a slot sees the request before any automatic reaction to it, then
     //! lets the application apply its quit-on-last-window-closed policy.
     //!
-    //! The lifetime token is not belt-and-braces. Deleting the window from the slot that hears about
-    //! its close is an entirely reasonable thing for an application to do, and the policy step below
-    //! would then be handed a freed Window. Asking the token afterwards is the library's own way of
-    //! surviving that, and it costs a shared-pointer read on a path that runs once per close.
+    //! The lifetime token is not belt-and-braces. Deleting the window from the slot that hears
+    //! about its close is an entirely reasonable thing for an application to do, and the policy
+    //! step below would then be handed a freed Window. Asking the token afterwards is the library's
+    //! own way of surviving that, and it costs a shared-pointer read on a path that runs once per
+    //! close.
     void WindowSystemInterface::handleCloseRequest
         (
         Window* aWindow   //!< Window whose close was requested.
@@ -304,8 +364,8 @@ namespace QtLikeSignalGui
 
     //! Drops every reference to a window that is being destroyed.
     //!
-    //! Called from ~Window(). Without it, focusWindow() and the touch focus would keep handing out a
-    //! pointer to freed memory -- and the touch focus in particular is dereferenced by a later
+    //! Called from ~Window(). Without it, focusWindow() and the touch focus would keep handing out
+    //! a pointer to freed memory -- and the touch focus in particular is dereferenced by a later
     //! frame or cancel that names no window of its own.
     void WindowSystemInterface::handleWindowDestroyed
         (

@@ -7,8 +7,11 @@
 
 #include "QtLikeSignal/Thread.hpp"
 
+#include "QtLikeSignal/Log.hpp"
+#include "QtLikeSignal/LogCategories.hpp"
+
 #include <cerrno>
-#include <cstdio>
+#include <cstring>
 #include <pthread.h>
 #include <sched.h>
 #include <unistd.h>
@@ -31,11 +34,11 @@ namespace QtLikeSignal
 
         //! Maps a Thread priority onto a scheduler policy and priority number.
         //!
-        //! This is Qt's mapping from qthread_unix.cpp, including its deliberately coarse scaling: the
-        //! divisor is TimeCriticalPriority rather than the span between the lowest and highest values, so
-        //! the enum lands on the low end of the platform's range rather than spreading across it. Kept as
-        //! Qt has it so behaviour matches. Returns true if a priority could be calculated; false if the
-        //! platform would not report a range.
+        //! This is Qt's mapping from qthread_unix.cpp, including its deliberately coarse scaling:
+        //! the divisor is TimeCriticalPriority rather than the span between the lowest and highest
+        //! values, so the enum lands on the low end of the platform's range rather than spreading
+        //! across it. Kept as Qt has it so behaviour matches. Returns true if a priority could be
+        //! calculated; false if the platform would not report a range.
         bool calculateUnixPriority
             (
             int aPriority,          //!< The Thread priority to convert.
@@ -103,13 +106,13 @@ namespace QtLikeSignal
                 int prio = 0;
                 if( pthread_attr_getschedpolicy( &attr, &schedPolicy ) != 0 )
                 {
-                    std::fprintf( stderr,
-                        "Thread::start: cannot determine default scheduler policy\n" );
+                    qCWarning( gLogThread )
+                        << "Thread::start: cannot determine default scheduler policy";
                 }
                 else if( !calculateUnixPriority( mPriority, &schedPolicy, &prio ) )
                 {
-                    std::fprintf( stderr,
-                        "Thread::start: cannot determine scheduler priority range\n" );
+                    qCWarning( gLogThread )
+                        << "Thread::start: cannot determine scheduler priority range";
                 }
                 else
                 {
@@ -151,13 +154,74 @@ namespace QtLikeSignal
 
         if( code != 0 )
         {
-            std::fprintf( stderr, "Thread::start: thread creation error\n" );
+            qCCritical( gLogThread ) << "Thread::start: thread creation error";
             mData->setThreadRunning( false );
             return;
         }
 
         mJoinable = true;
     }  // end Thread::startPlatformSpecific()
+
+    //! The longest thread name Linux keeps, not counting the terminator.
+    //!
+    //! The kernel stores a thread's name in a fixed 16-byte field, so 15 characters is the whole of
+    //! it. pthread_setname_np() **fails with ERANGE** rather than truncating, which is why the
+    //! callers below cut the string themselves instead of handing it over and hoping.
+    static const std::size_t kMaxNativeNameLength = 15;
+
+    //! Sets the calling thread's name, as `ps -L` and a debugger report it.
+    void Thread::setNativeName
+        (
+        const std::string& aName  //!< New name, UTF-8. Empty does nothing.
+        )
+    {
+        if( aName.empty() )
+        {
+            return;
+        }
+
+        const std::string trimmed = aName.substr( 0, kMaxNativeNameLength );
+
+        // The failure is deliberately not reported. A refused name costs a label in `ps` and
+        // nothing else, and a warning here would fire on every thread of a program that happened
+        // to like long names -- noise about a diagnostic, in the diagnostics.
+        pthread_setname_np( pthread_self(), trimmed.c_str() );
+    }
+
+    //! Gets the calling thread's name from the OS, or an empty string.
+    std::string Thread::nativeName()
+    {
+        // One byte more than the kernel keeps, so a full-length name still comes back terminated.
+        char buffer[kMaxNativeNameLength + 1] = { 0 };
+
+        if( pthread_getname_np( pthread_self(), buffer, sizeof( buffer ) ) != 0 )
+        {
+            return std::string();
+        }
+
+        // Terminated by hand as well. pthread_getname_np() does terminate, but this is read into a
+        // std::string on the next line and a missing terminator there is a buffer overrun rather
+        // than a wrong answer.
+        buffer[sizeof( buffer ) - 1] = '\0';
+        return std::string( buffer );
+    }
+
+    //! Labels the OS thread this object created. Called from start(), on the calling thread.
+    void Thread::applyNativeName
+        (
+        const std::string& aName  //!< The name to give the OS thread, UTF-8.
+        )
+    {
+        if( aName.empty() || !mJoinable )
+        {
+            return;
+        }
+
+        // pthread_setname_np() names any thread, not only the caller, which is what lets this run
+        // on the owning thread rather than inside the new one. See the declaration.
+        const std::string trimmed = aName.substr( 0, kMaxNativeNameLength );
+        pthread_setname_np( mThreadId, trimmed.c_str() );
+    }
 
     //! Entry point handed to pthread_create(). Returns nullptr always; nothing is passed back
     //! through pthread_join().
@@ -187,16 +251,16 @@ namespace QtLikeSignal
             sched_param param {};
             if( pthread_getschedparam( mThreadId, &schedPolicy, &param ) != 0 )
             {
-                std::fprintf( stderr,
-                    "Thread::setPriority: cannot get scheduler parameters\n" );
+                qCWarning( gLogThread )
+                    << "Thread::setPriority: cannot get scheduler parameters";
                 return;
             }
 
             int prio = 0;
             if( !calculateUnixPriority( aPriority, &schedPolicy, &prio ) )
             {
-                std::fprintf( stderr,
-                    "Thread::setPriority: cannot determine scheduler priority range\n" );
+                qCWarning( gLogThread )
+                    << "Thread::setPriority: cannot determine scheduler priority range";
                 return;
             }
 

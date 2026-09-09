@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! A real X11 program on QtLikeSignalGui, in both of the shapes the library supports on Linux.
@@ -8,12 +11,12 @@
 //! By default QtLikeSignalGui creates the window and the program draws on it. With **--adopt** an
 //! external library creates it instead -- that is the block marked "stand-in for the external
 //! library", which opens a Display and a window and would in a real program also set up GLX or EGL
-//! -- and QtLikeSignalGui takes over the listening. Everything after that point is identical in both
-//! shapes: connect signals, draw on expose. **Neither half knows about the other**, which is the
-//! seam this demo exists to show.
+//! -- and QtLikeSignalGui takes over the listening. Everything after that point is identical in
+//! both shapes: connect signals, draw on expose. **Neither half knows about the other**, which is
+//! the seam this demo exists to show.
 //!
-//! The only visible difference is cleanup. A created window is destroyed with its Window; an adopted
-//! one is left standing for whoever made it.
+//! The only visible difference is cleanup. A created window is destroyed with its Window; an
+//! adopted one is left standing for whoever made it.
 //!
 //! There is no event loop in this program and no XNextEvent call. exec() is the only loop, and
 //! PlatformIntegrationX11 registers the display's socket with EventDispatcherLinux so that one
@@ -21,13 +24,18 @@
 //! When nothing is happening the process uses no CPU at all -- check it in top while the window
 //! sits idle, then move the mouse.
 //!
-//! Controls: move, click and scroll anywhere in the window; the close box quits.
+//! Controls: move, click and scroll anywhere in the window; the close box quits, and so does
+//! Ctrl+C -- a SignalWatcher turns it into a signal on the loop, so the teardown runs.
 
 #include "QtLikeSignalGui/GuiApplication.hpp"
 #include "QtLikeSignalGui/Window.hpp"
 
+#include "QtLikeSignal/CoreApplication.hpp"
 #include "QtLikeSignal/Object.hpp"
+#include "QtLikeSignal/SignalWatcher.hpp"
 #include "QtLikeSignal/Timer.hpp"
+
+#include "QtLikeSignal/Log.hpp"
 
 #include <cstdio>
 #include <deque>
@@ -37,9 +45,12 @@
 
 #include <X11/Xlib.h>
 
+//! This demo's category.
+QTLIKESIGNAL_DEFINE_LOG_CATEGORY( gLogDemo, "demo.gui.x11", "DGX1" )
+
 // Xlib's None macro collides with MouseButton::None, and its Window typedef collides with
-// QtLikeSignalGui::Window. The QtLikeSignalGui headers are included above, before either exists, so the
-// declarations are safe; undefining the macro makes the enumerator usable again below, and the
+// QtLikeSignalGui::Window. The QtLikeSignalGui headers are included above, before either exists, so
+// the declarations are safe; undefining the macro makes the enumerator usable again below, and the
 // namespace alias is what keeps the two Windows apart without a using-directive that would make
 // every mention of the name ambiguous.
 #undef None
@@ -180,8 +191,8 @@ namespace
 
         //! Counts one second of uptime and repaints.
         //!
-        //! Driven by a QtLikeSignal::Timer sharing the loop with the X connection. It keeps ticking while
-        //! the mouse floods the socket, which is the point: one poll() is servicing both.
+        //! Driven by a QtLikeSignal::Timer sharing the loop with the X connection. It keeps ticking
+        //! while the mouse floods the socket, which is the point: one poll() is servicing both.
         void onSecond()
         {
             ++mSeconds;
@@ -423,8 +434,9 @@ int main
 
     if( !app.hasPlatform() || app.platformType() != Gui::PlatformType::X11 )
     {
-        std::fprintf( stderr, "this demo needs the x11 backend; pass -p x11 (platform is \"%s\")\n",
-            app.platformName() );
+        qCCritical( gLogDemo )
+            << "this demo needs the x11 backend; pass -p x11. The platform is"
+            << app.platformName();
         return 1;
     }
 
@@ -454,13 +466,13 @@ int main
         display = XOpenDisplay( nullptr );
         if( display == nullptr )
         {
-            std::fprintf( stderr, "XOpenDisplay() failed; is DISPLAY set?\n" );
+            qCWarning( gLogDemo ) << "XOpenDisplay() failed; is DISPLAY set?";
             return 1;
         }
 
         const int screen = DefaultScreen( display );
         drawable = XCreateSimpleWindow( display, RootWindow( display, screen ),
-            0, 0, 1000, 640, 0, BlackPixel( display, screen ), BlackPixel( display, screen ) );
+            0, 0, 1280, 720, 0, BlackPixel( display, screen ), BlackPixel( display, screen ) );
         // ---------------------------- end of the stand-in --------------------------------
 
         Gui::NativeWindow native;
@@ -478,13 +490,13 @@ int main
         display = static_cast<Display*>( app.nativeDisplay() );
         if( display == nullptr )
         {
-            std::fprintf( stderr, "no X11 connection\n" );
+            qCWarning( gLogDemo ) << "no X11 connection";
             return 1;
         }
 
         Gui::WindowSettings settings;
-        settings.mWidth  = 1000;
-        settings.mHeight = 640;
+        settings.mWidth  = 1280;
+        settings.mHeight = 720;
         settings.mTitle  = "QtLikeSignalGui demo -- X11 created window";
 
         window = app.createWindow( settings );
@@ -496,7 +508,8 @@ int main
 
     if( window == nullptr )
     {
-        std::fprintf( stderr, "failed to %s the window\n", adopting ? "adopt" : "create" );
+        qCCritical( gLogDemo )
+            << "failed to" << ( adopting ? "adopt" : "create" ) << "the window";
         return 1;
     }
 
@@ -535,13 +548,35 @@ int main
 
     window->show();
 
+    // Ctrl+C, and the SIGTERM a service manager sends, come back here as an ordinary signal on this
+    // thread instead of stopping the process where it stands. That is what lets the teardown below
+    // run at all, so this demo shows the whole shutdown path and not only the close button. Press
+    // Ctrl+C two times and the second one stops the process, whatever the first one is still doing.
+    QtLikeSignal::SignalWatcher shutdown;
+    QtLikeSignal::Object::connect( shutdown.getTriggered(), &renderer, []( int aSignal )
+        {
+            std::printf( "signal %d received; leaving the loop\n", aSignal );
+            QtLikeSignal::CoreApplication::quit();
+        }, QtLikeSignal::ConnectionType::Direct );
+
     std::printf( "QtLikeSignalGui X11 demo running.\n" );
     std::printf( "  platform        : %s\n", app.platformName() );
     std::printf( "  window          : 0x%lx on fd %d\n", window->nativeWindowId(),
         XConnectionNumber( display ) );
     std::printf( "  event loop      : GuiApplication::exec()\n" );
     std::printf( "  X socket        : in the dispatcher's poll() set\n" );
+    std::printf( "  device pixels   : %.2f per unit, so %d x %d real pixels\n",
+        window->devicePixelRatio(),
+        static_cast<int>( window->width() * window->devicePixelRatio() ),
+        static_cast<int>( window->height() * window->devicePixelRatio() ) );
+    std::printf( "  shutdown        : %s\n",
+        shutdown.isWatching() ? "SIGINT and SIGTERM watched" : "not watched" );
     std::printf( "  no XNextEvent loop in this program\n" );
+
+    // Flushed, because the loop below can run for hours and stdout is block-buffered the
+    // moment it is redirected to a file -- so without this the status above appears only
+    // when the program exits, which is exactly when it stops being useful.
+    std::fflush( stdout );
 
     const int result = app.exec();
 

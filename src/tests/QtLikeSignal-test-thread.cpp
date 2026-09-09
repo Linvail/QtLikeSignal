@@ -20,6 +20,13 @@
 #include <condition_variable>
 #include <mutex>
 
+#if defined( __linux__ )
+    // For pthread_setname_np() only, which one test below uses to clear a thread's name. There is
+    // no portable way to do that -- Thread::setNativeName() deliberately ignores an empty name --
+    // and the test that needs it says why.
+    #include <pthread.h>
+#endif
+
 using namespace QtLikeSignal;
 
 //! Custom Thread subclass for testing thread execution.
@@ -187,7 +194,7 @@ TEST( ThreadTest, ThreadWithoutAParentIsUnowned )
     Thread thread( "unparented" );
 
     EXPECT_EQ( nullptr, thread.parent() );
-    EXPECT_EQ( "unparented", thread.name() );
+    EXPECT_EQ( "unparented", thread.objectName() );
 }
 
 TEST( ThreadTest, LifecycleAndSignals )
@@ -288,27 +295,246 @@ TEST( ThreadTest, CreateReturnsAnUnstartedThread )
     delete threadObj;
 }
 
-//! Tests that name() reports what the constructor was given, including the empty default.
+//! Tests that the constructor name is the object name, including the empty default.
 //!
-//! A trivial accessor over a member fixed at construction, and until this test one of only three
-//! functions in the library the suite never called at all. Cheap to pin down, and the constructor
-//! is the only writer, so this is the whole contract.
+//! A Thread has one name and it is Object::objectName(). The constructor argument is a shorthand
+//! for setObjectName() and not a second field beside it, which is what this pins down: before the
+//! change that removed Thread::mName, a thread could answer two different questions with two
+//! different answers depending on which getter was asked.
 TEST( ThreadTest, NameIsWhatTheConstructorWasGiven )
 {
     Thread named( "worker-with-a-name" );
-    EXPECT_EQ( named.name(), "worker-with-a-name" );
+    EXPECT_EQ( named.objectName(), "worker-with-a-name" );
 
     Thread unnamed;
-    EXPECT_TRUE( unnamed.name().empty() ) << "a thread constructed with no name reported one.";
+    EXPECT_TRUE( unnamed.objectName().empty() )
+        << "a thread constructed with no name reported one.";
 
-    // Starting and finishing does not disturb it: the name is fixed at construction and the run
-    // body never touches it.
+    // Starting and finishing does not disturb it: nothing in the run body touches the name.
     named.start();
     ASSERT_TRUE( waitUntilRunning( named ) );
-    EXPECT_EQ( named.name(), "worker-with-a-name" );
+    EXPECT_EQ( named.objectName(), "worker-with-a-name" );
     named.quit();
     named.wait();
-    EXPECT_EQ( named.name(), "worker-with-a-name" );
+    EXPECT_EQ( named.objectName(), "worker-with-a-name" );
+}
+
+//! Tests that setObjectName() is what renames a thread.
+//!
+//! There is no Thread::setName() and no Thread::name() to disagree with it. Renaming through the
+//! Object interface is the only way, and it has to work on a Thread exactly as on anything else.
+TEST( ThreadTest, SetObjectNameRenamesAThread )
+{
+    Thread thread( "from-the-constructor" );
+    ASSERT_EQ( thread.objectName(), "from-the-constructor" );
+
+    thread.setObjectName( "renamed" );
+    EXPECT_EQ( thread.objectName(), "renamed" );
+}
+
+//! Tests that an adopted thread takes the name the operating system already had for it.
+//!
+//! This is what makes a thread the library did not create identify itself. The thread exists
+//! before QtLikeSignal ever sees it, and whoever created it has usually named it, so adoption reads
+//! that name instead of labelling every adopted thread in the process "adopted".
+//!
+//! Skipped where the platform reports no thread name -- Windows before version 1607 -- rather than
+//! failed, because the absence is the system's and not this library's.
+TEST( ThreadTest, AnAdoptedThreadTakesItsNameFromTheOperatingSystem )
+{
+    std::atomic<bool> supported { false };
+    std::string seenName;
+
+    std::thread worker( [&supported, &seenName]()
+        {
+            Thread::setNativeName( "named-by-os" );
+            supported.store( !Thread::nativeName().empty() );
+
+            // Adoption happens inside currentThread(), and this is the first call that reaches it
+            // on this thread -- so the name above is already in place when it looks.
+            Thread* const adopted = Thread::currentThread();
+            if( adopted != nullptr )
+            {
+                seenName = adopted->objectName();
+            }
+        } );
+    worker.join();
+
+    if( !supported.load() )
+    {
+        GTEST_SKIP() << "this platform reports no thread name, so there is nothing to adopt.";
+    }
+
+    EXPECT_EQ( seenName, "named-by-os" );
+}
+
+//! Tests that every adopted thread ends up with some name, whatever the platform reports.
+//!
+//! The weaker of the two halves, and deliberately so: what it pins is that no adopted thread is
+//! ever nameless, which holds whether the name came from the operating system or from the
+//! fallback. The fallback's own value is the next test's job.
+TEST( ThreadTest, AnAdoptedThreadIsAlwaysNamed )
+{
+    std::string seenName;
+
+    std::thread worker( [&seenName]()
+        {
+            Thread* const adopted = Thread::currentThread();
+            if( adopted != nullptr )
+            {
+                seenName = adopted->objectName();
+            }
+        } );
+    worker.join();
+
+    EXPECT_FALSE( seenName.empty() )
+        << "an adopted thread reported no name at all, so nothing in a log can identify it.";
+}
+
+//! Tests that an adopted thread the OS never named is called "adopted".
+//!
+//! **The name has to be cleared first, or this test does not reach the branch it is written for.**
+//! Linux gives a new thread the creating thread's `comm`, which for a test binary is the
+//! executable's own name -- so an ordinary std::thread here is already called "QtLikeSignal-test"
+//! and the fallback never runs. Measured on 2026-09-08: without the clearing below this test saw
+//! "QtLikeSignal-test" on Linux and "adopted" on Windows, and asserting only that the name was
+//! non-empty passed in both cases and would have passed for any wrong value too.
+//!
+//! pthread_setname_np() is called directly rather than through Thread::setNativeName(), which
+//! ignores an empty name on purpose: clearing a thread's name is not something the library should
+//! offer, and it is only wanted here to force a state the platform will not otherwise produce.
+//! Windows needs no such setup, because a thread has no description until somebody sets one.
+//!
+//! Skips rather than fails where the name cannot be emptied, so a platform that refuses is
+//! reported as untested instead of broken.
+TEST( ThreadTest, AnAdoptedThreadWithNoNativeNameIsCalledAdopted )
+{
+    std::string seenName;
+    std::string nativeAfterClearing;
+
+    std::thread worker( [&seenName, &nativeAfterClearing]()
+        {
+            #if defined( __linux__ )
+                pthread_setname_np( pthread_self(), "" );
+            #endif
+
+            // Read before the adoption below, because that is the value the adoption will see.
+            nativeAfterClearing = Thread::nativeName();
+
+            Thread* const adopted = Thread::currentThread();
+            if( adopted != nullptr )
+            {
+                seenName = adopted->objectName();
+            }
+        } );
+    worker.join();
+
+    if( !nativeAfterClearing.empty() )
+    {
+        GTEST_SKIP() << "this thread could not be left unnamed -- the OS still calls it \""
+                     << nativeAfterClearing << "\" -- so the fallback was not reached.";
+    }
+
+    EXPECT_EQ( seenName, "adopted" )
+        << "a thread the OS does not name has to get the fallback, and that exact fallback: an "
+        "empty or unexpected name in a log reads as a fault in the log.";
+}
+
+//! Tests that a name given before start() reaches the operating system.
+//!
+//! The half of the contract `ps -L` reads. Checked from inside the thread rather than from
+//! outside, because nativeName() is deliberately about the caller: there is no portable way to ask
+//! another thread what it is called.
+//!
+//! **The name is deliberately under 16 characters.** Linux keeps a thread name in a fixed 16-byte
+//! field, so a longer one comes back cut and this test would be asserting the truncation rule
+//! rather than the delivery. That rule has a test of its own below.
+TEST( ThreadTest, AThreadNameReachesTheOperatingSystem )
+{
+    //! A thread that reports, from inside itself, what the OS calls it.
+    class NamingThread : public Thread
+    {
+    public:
+        //! Constructs the thread with the name to give it and somewhere to report back to.
+        NamingThread
+            (
+            const std::string& aName,       //!< Name to give the thread.
+            std::atomic<bool>& aSupported,  //!< Set true if the platform reports any name.
+            std::string& aSeen,             //!< Receives what the OS says this thread is called.
+            std::mutex& aMutex              //!< Guards aSeen across the join.
+            )
+            : Thread( aName )
+            , mSupported( aSupported )
+            , mSeen( aSeen )
+            , mMutex( aMutex )
+        {
+        }
+
+    protected:
+        //! Reads this thread's own name back from the operating system.
+        virtual void run() override
+        {
+            const std::string reported = Thread::nativeName();
+            std::lock_guard<std::mutex> lock( mMutex );
+            mSupported.store( !reported.empty() );
+            mSeen = reported;
+        }
+
+    private:
+        std::atomic<bool>& mSupported;   //!< True if the platform reports any name at all.
+        std::string& mSeen;              //!< What the OS says this thread is called.
+        std::mutex& mMutex;              //!< Guards mSeen.
+    };
+
+    std::atomic<bool> supported { false };
+    std::string seenName;
+    std::mutex seenMutex;
+
+    NamingThread thread( "os-visible", supported, seenName, seenMutex );
+    thread.start();
+    thread.wait();
+
+    if( !supported.load() )
+    {
+        GTEST_SKIP() << "this platform reports no thread name, so there is nothing to check.";
+    }
+
+    std::lock_guard<std::mutex> lock( seenMutex );
+    EXPECT_EQ( seenName, "os-visible" );
+}
+
+//! Tests that a name too long for the platform is cut rather than dropped.
+//!
+//! Linux keeps 15 characters and pthread_setname_np() fails with ERANGE on a longer one, so a
+//! caller that handed the string over untrimmed would end up with no name at all. Cutting it is
+//! the deliberate choice, and this pins it down: what comes back is a prefix of what went in, and
+//! it is not empty.
+//!
+//! Written as a prefix test rather than an exact one, so it holds on a platform with a different
+//! limit or with none.
+TEST( ThreadTest, AnOverlongThreadNameIsCutRatherThanRefused )
+{
+    const std::string longName = "a-name-far-longer-than-any-kernel-keeps";
+
+    std::atomic<bool> supported { false };
+    std::string seenName;
+
+    std::thread worker( [&supported, &seenName, &longName]()
+        {
+            Thread::setNativeName( longName );
+            seenName = Thread::nativeName();
+            supported.store( !seenName.empty() );
+        } );
+    worker.join();
+
+    if( !supported.load() )
+    {
+        GTEST_SKIP() << "this platform reports no thread name, so there is nothing to check.";
+    }
+
+    EXPECT_FALSE( seenName.empty() );
+    EXPECT_EQ( longName.compare( 0, seenName.size(), seenName ), 0 )
+        << "what the OS kept is not a prefix of the name given; it reported " << seenName;
 }
 
 //! Tests retrieval of current thread pointer. Verifies static function

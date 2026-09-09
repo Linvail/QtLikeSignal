@@ -66,11 +66,11 @@ TEST( ThreadAdoptionTest, ObjectsAlwaysHaveAThreadAffinity )
 // ---------------------------------------------------------------------------------------------
 // Defect (R19): an Object with no thread affinity received cross-thread *direct* calls.
 //
-// dispatchMetaCall() resolves ConnectionType::Auto by comparing the receiver's thread with the emitting
-// thread. When neither had been started through Thread, both sides were nullptr, compared equal,
-// and the slot ran synchronously **on the emitting thread** -- an unsynchronised cross-thread call.
-// Qt is explicit that this must not happen: "If a QObject has no thread affinity (that is, if
-// thread() returns zero) ... then it cannot receive queued signals or posted events."
+// dispatchMetaCall() resolves ConnectionType::Auto by comparing the receiver's thread with the
+// emitting thread. When neither had been started through Thread, both sides were nullptr, compared
+// equal, and the slot ran synchronously **on the emitting thread** -- an unsynchronised
+// cross-thread call. Qt is explicit that this must not happen: "If a QObject has no thread affinity
+// (that is, if thread() returns zero) ... then it cannot receive queued signals or posted events."
 //
 // Auto-adoption removes the premise rather than special-casing the symptom: there is no such thing
 // as an affinity-less Object any more, so the two nullptrs cannot collapse into "same thread".
@@ -180,8 +180,8 @@ TEST( ThreadAdoptionTest, ProcessEventsFromAnotherThreadIsRejected )
 //! first and drains second, so the queue is never empty and the wait is never reached. A real
 //! native loop is not that tidy: it wakes for its own reasons, drains ours on the way past, and
 //! finds nothing. If that call blocks, the loop that owns the thread is gone -- and it cannot get
-//! itself back, because only a QtLikeSignal call releases the wait and the loop has no reason to make
-//! one.
+//! itself back, because only a QtLikeSignal call releases the wait and the loop has no reason to
+//! make one.
 //!
 //! AllEvents is the default for exactly this reason, so the plain call is the one under test.
 TEST( ThreadAdoptionTest, IdleProcessEventsReturnsWithoutBlocking )

@@ -11,6 +11,9 @@
 #include "QtLikeSignalGui/Window.hpp"
 #include "QtLikeSignalGui/WindowSystemInterface.hpp"
 
+#include "QtLikeSignal/Log.hpp"
+#include "QtLikeSignalGui/LogCategories.hpp"
+
 #include <cstdio>
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -21,8 +24,8 @@
 
 // WM_MOUSEHWHEEL -- the horizontal wheel -- arrived in Windows Vista, and the two toolchains that
 // build this file disagree about whether that matters. The MSVC SDK declares it unconditionally;
-// mingw-w64, which the linux-2-win64-clang cross-compile uses, hides it behind _WIN32_WINNT >= 0x0600
-// and so failed to compile this where MSVC did not.
+// mingw-w64, which the linux-2-win64-clang cross-compile uses, hides it behind _WIN32_WINNT >=
+// 0x0600 and so failed to compile this where MSVC did not.
 //
 // Defined here rather than by raising _WIN32_WINNT for the whole project. That would change which
 // APIs every other translation unit can see, and silently allow calls that then fail to run on an
@@ -32,6 +35,17 @@
     #define WM_MOUSEHWHEEL 0x020E
 #endif
 
+// WM_DPICHANGED and USER_DEFAULT_SCREEN_DPI arrived in Windows 8.1, and mingw-w64 hides both behind
+// _WIN32_WINNT >= 0x0603 exactly as it hides WM_MOUSEHWHEEL. Defined here for the same reason as
+// that one: raising _WIN32_WINNT for the whole project to reach two constants would change which
+// APIs every translation unit can see. Both values are fixed by the ABI.
+#ifndef WM_DPICHANGED
+    #define WM_DPICHANGED 0x02E0
+#endif
+#ifndef USER_DEFAULT_SCREEN_DPI
+    #define USER_DEFAULT_SCREEN_DPI 96
+#endif
+
 namespace QtLikeSignalGui
 {
     namespace
@@ -39,11 +53,53 @@ namespace QtLikeSignalGui
         //! The string type the generic-text Win32 calls in this file take.
         using NativeString = std::basic_string<TCHAR>;
 
+        //! Signature of GetDpiForWindow, resolved at run time. See ratioForWindow().
+        using GetDpiForWindowFn = UINT ( WINAPI* )( HWND );
+
+        //! How many device pixels the window system puts in one of @p aWindow's units.
+        //!
+        //! **GetDpiForWindow is resolved with GetProcAddress rather than linked**, because it
+        //! arrived in Windows 10 version 1607. Linking it would put a load-time dependency on that
+        //! version into every program using this library, including the many that never ask a
+        //! window its scale. Looked up once; kernel32 and user32 are in every process already, so
+        //! no reference is taken and none is released.
+        //!
+        //! Returns 1.0 where the function does not exist, and 1.0 for a process that has not
+        //! declared itself DPI aware -- the second is not a failure but the truth, since such a
+        //! process is handed a virtual coordinate space that is 1:1 with what it draws.
+        double ratioForWindow
+            (
+            HWND aWindow   //!< The window to ask about.
+            )
+        {
+            static const GetDpiForWindowFn getDpi = []()
+                {
+                    const HMODULE user = GetModuleHandleW( L"user32.dll" );
+                    return user == nullptr
+                           ? nullptr
+                           : reinterpret_cast<GetDpiForWindowFn>(
+                           GetProcAddress( user, "GetDpiForWindow" ) );
+                }();
+
+            if( getDpi == nullptr || aWindow == nullptr )
+            {
+                return 1.0;
+            }
+
+            const UINT dpi = getDpi( aWindow );
+            if( dpi == 0 )
+            {
+                return 1.0;
+            }
+
+            return static_cast<double>( dpi ) / static_cast<double>( USER_DEFAULT_SCREEN_DPI );
+        }
+
         //! Class name of every window this backend creates.
         //!
         //! Distinct from EventDispatcherWin32's own message-only window class. Both live in this
-        //! process, and RegisterClass is process-wide, so sharing a name would mean sharing a window
-        //! procedure -- and neither of these two is DefWindowProc.
+        //! process, and RegisterClass is process-wide, so sharing a name would mean sharing a
+        //! window procedure -- and neither of these two is DefWindowProc.
         //!
         //! TEXT() rather than a bare literal, because every Win32 call in this file is the
         //! generic-text one. Those resolve to the W entry points, which want wchar_t, because every
@@ -385,8 +441,8 @@ namespace QtLikeSignalGui
                 aButton );
 
             // The released button is already absent from the key state on an up message, so an
-            // empty set here means this was the last one held. Released before the signal, so a slot
-            // that opens a dialog or a menu is not fighting a capture this window still owns.
+            // empty set here means this was the last one held. Released before the signal, so a
+            // slot that opens a dialog or a menu is not fighting a capture this window still owns.
             if( !event.mButtons.any() && GetCapture() == aWindowHandle )
             {
                 ReleaseCapture();
@@ -397,9 +453,10 @@ namespace QtLikeSignalGui
 
         //! The window procedure shared by every window this backend creates.
         //!
-        //! Reached from EventDispatcherWin32::processPlatformEvents(), by way of DispatchMessage, so
-        //! everything it emits is emitted inside a dispatch pass of this library's own loop. That is
-        //! what makes the synchronous delivery WindowSystemInterface documents correct here.
+        //! Reached from EventDispatcherWin32::processPlatformEvents(), by way of DispatchMessage,
+        //! so everything it emits is emitted inside a dispatch pass of this library's own loop.
+        //! That is what makes the synchronous delivery WindowSystemInterface documents correct
+        //! here.
         LRESULT CALLBACK windowProc
             (
             HWND aWindowHandle,   //!< The window the message is for.
@@ -567,6 +624,27 @@ namespace QtLikeSignalGui
                 return 0;
             }
 
+            // The window moved to a monitor with a different scale, or the scale of the one it
+            // is on changed. Windows sends this only to a process that declared itself
+            // per-monitor DPI aware; an unaware one is never told, because it is never affected --
+            // the desktop stretches its output instead. Handled anyway, so that declaring
+            // awareness is the only change needed and this file is not one of them.
+            //
+            // wParam carries the new dpi in both halves; lParam offers a suggested window
+            // rectangle, which is deliberately ignored. Resizing the window is a policy decision
+            // for the application, and taking it here would move a window the program had placed.
+            case WM_DPICHANGED:
+            {
+                const int dpi = static_cast<int>( LOWORD( aWParam ) );
+                if( dpi > 0 )
+                {
+                    WindowSystemInterface::handleDevicePixelRatioChanged( self,
+                        static_cast<double>( dpi ) /
+                        static_cast<double>( USER_DEFAULT_SCREEN_DPI ) );
+                }
+                return 0;
+            }
+
             case WM_SIZE:
             {
                 const int width  = static_cast<int>( LOWORD( aLParam ) );
@@ -575,8 +653,8 @@ namespace QtLikeSignalGui
                 // Minimising reports 0x0. Passing that on would have every renderer connected to
                 // the resize signal build a zero-sized viewport or framebuffer, which is invalid in
                 // OpenGL and is a real crash in more than one driver. The window still has its
-                // previous size as far as this library reports, and the restore reports the real one
-                // again, so nothing is missed by staying quiet here.
+                // previous size as far as this library reports, and the restore reports the real
+                // one again, so nothing is missed by staying quiet here.
                 if( width > 0 && height > 0 )
                 {
                     WindowSystemInterface::handleResize( self, width, height );
@@ -587,20 +665,20 @@ namespace QtLikeSignalGui
 
             case WM_ERASEBKGND:
             {
-                // Claimed, so Windows does not flood-fill the client area before the frame is drawn.
-                // Whatever renders into this window covers every pixel itself; without this there
-                // is a visible flash of the background brush on every resize.
+                // Claimed, so Windows does not flood-fill the client area before the frame is
+                // drawn. Whatever renders into this window covers every pixel itself; without this
+                // there is a visible flash of the background brush on every resize.
                 return 1;
             }
 
             case WM_PAINT:
             {
                 // Validated *before* the signal, not after. WM_PAINT is synthesised for as long as
-                // any part of the window is invalid, so leaving the region dirty here would spin the
-                // loop at full speed. Doing it first also means a slot calling requestUpdate() --
-                // which is how continuous rendering is driven -- re-invalidates the window and gets
-                // the next frame, instead of having its request wiped by a validation that came
-                // afterwards.
+                // any part of the window is invalid, so leaving the region dirty here would spin
+                // the loop at full speed. Doing it first also means a slot calling requestUpdate()
+                // -- which is how continuous rendering is driven -- re-invalidates the window and
+                // gets the next frame, instead of having its request wiped by a validation that
+                // came afterwards.
                 ValidateRect( aWindowHandle, nullptr );
                 WindowSystemInterface::handleExpose( self );
                 return 0;
@@ -657,8 +735,8 @@ namespace QtLikeSignalGui
     //! Destroys the backend, unregistering the window class it registered.
     //!
     //! Every window is gone by now: GuiApplication destroys its windows before releasing the
-    //! backend, precisely so that this order holds. UnregisterClass would fail if one were left, and
-    //! its result is ignored rather than reported -- a class that outlives the process by a few
+    //! backend, precisely so that this order holds. UnregisterClass would fail if one were left,
+    //! and its result is ignored rather than reported -- a class that outlives the process by a few
     //! microseconds harms nothing, and there is no caller left to tell.
     PlatformIntegrationWin32::~PlatformIntegrationWin32()
     {
@@ -684,8 +762,8 @@ namespace QtLikeSignalGui
     //!
     //! Not an oversight and not hard to add -- a foreign HWND can be subclassed with
     //! SetWindowLongPtr( GWLP_WNDPROC ) -- but nothing needs it. The external library that creates
-    //! windows on X11 and Wayland does not create them here: QtLikeSignalGui does, which is what makes
-    //! the Win32 backend the one that owns its window procedure outright.
+    //! windows on X11 and Wayland does not create them here: QtLikeSignalGui does, which is what
+    //! makes the Win32 backend the one that owns its window procedure outright.
     bool PlatformIntegrationWin32::canAdoptWindows() const
     {
         return false;
@@ -711,8 +789,8 @@ namespace QtLikeSignalGui
         // valid for its lifetime, which is what the ordinary WGL sequence -- GetDC once,
         // SetPixelFormat, wglCreateContext, wglMakeCurrent -- assumes. Without it the DC is drawn
         // from a shared pool and released back on every use, and the pixel format set on one is not
-        // the format the next one has. CS_HREDRAW | CS_VREDRAW invalidate the whole client area on a
-        // resize, so a renderer is asked for a full frame at the new size rather than for the
+        // the format the next one has. CS_HREDRAW | CS_VREDRAW invalidate the whole client area on
+        // a resize, so a renderer is asked for a full frame at the new size rather than for the
         // uncovered strip.
         windowClass.style         = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
         windowClass.lpfnWndProc   = &windowProc;
@@ -735,8 +813,8 @@ namespace QtLikeSignalGui
 
         if( RegisterClass( &windowClass ) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS )
         {
-            std::fprintf( stderr, "QtLikeSignalGui: RegisterClass() failed (%lu)\n",
-                GetLastError() );
+            qCWarning( gLogGuiWin32 )
+                << "QtLikeSignalGui: RegisterClass() failed; error" << GetLastError();
             return false;
         }
 
@@ -759,7 +837,8 @@ namespace QtLikeSignalGui
 
         // WS_CLIPCHILDREN | WS_CLIPSIBLINGS are required, not preferred: SetPixelFormat is
         // documented to fail on a window without them, so leaving them off would break the WGL
-        // initialisation this window exists to enable, with an error raised somewhere else entirely.
+        // initialisation this window exists to enable, with an error raised somewhere else
+        // entirely.
         const DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 
         // The requested size is the client area -- what can be drawn on -- which is what a caller
@@ -767,9 +846,9 @@ namespace QtLikeSignalGui
         // need to arrive at the outer size CreateWindowEx wants.
         //
         // FALSE for the menu argument, and correctly so: this window is created without one, and
-        // reserving space for a menu that is not there would leave the client area too large. A menu
-        // attached afterwards is setMenu()'s problem, and it solves it by measuring rather than by
-        // asking AdjustWindowRect a question it cannot answer for a bar that has wrapped.
+        // reserving space for a menu that is not there would leave the client area too large. A
+        // menu attached afterwards is setMenu()'s problem, and it solves it by measuring rather
+        // than by asking AdjustWindowRect a question it cannot answer for a bar that has wrapped.
         RECT frame { 0, 0, aSettings.mWidth, aSettings.mHeight };
         AdjustWindowRect( &frame, style, FALSE );
 
@@ -791,15 +870,15 @@ namespace QtLikeSignalGui
 
         if( handle == nullptr )
         {
-            std::fprintf( stderr, "QtLikeSignalGui: CreateWindowEx() failed (%lu)\n",
-                GetLastError() );
+            qCWarning( gLogGuiWin32 )
+                << "QtLikeSignalGui: CreateWindowEx() failed; error" << GetLastError();
             return nullptr;
         }
 
         // Asked rather than assumed. AdjustWindowRect works from the style alone and knows nothing
         // about a DPI-scaled frame or a window the shell clamped to fit the screen, so the client
-        // area that actually exists is not always the one that was requested -- and a renderer sized
-        // from the request rather than from the window would be wrong from its first frame.
+        // area that actually exists is not always the one that was requested -- and a renderer
+        // sized from the request rather than from the window would be wrong from its first frame.
         RECT client {};
         GetClientRect( handle, &client );
 
@@ -810,6 +889,21 @@ namespace QtLikeSignalGui
             static_cast<int>( client.right - client.left ),
             static_cast<int>( client.bottom - client.top ) );
 
+        // Asked once, here, for the same reason the client size is: it is what the window
+        // actually has rather than what the monitor it landed on is set to. GetDpiForWindow is
+        // resolved at run time -- it arrived in Windows 10 version 1607 -- so a program that never
+        // asks for a scale still starts on an older system.
+        //
+        // **This reports 1.0 until the process declares itself DPI aware, and that is correct.**
+        // An unaware process is handed a virtual coordinate space that really is 1:1 with what it
+        // draws; the desktop stretches the result afterwards, and nothing the program computes
+        // should account for it. Declaring per-monitor awareness makes the same call report 1.5 on
+        // a 150 % screen with no change here.
+        // Recorded rather than reported. The window has not been returned to the caller, so
+        // nothing can be connected to it, and getDevicePixelRatioChanged() is documented as
+        // carrying changes rather than the starting value.
+        WindowSystemInterface::setInitialDevicePixelRatio( window, ratioForWindow( handle ) );
+
         // Attached last, so the window procedure sees nothing until there is a Window to report to.
         SetWindowLongPtr( handle, GWLP_USERDATA, reinterpret_cast<LONG_PTR>( window ) );
 
@@ -818,10 +912,10 @@ namespace QtLikeSignalGui
 
     //! Destroys the native window behind @p aWindow. This backend created it, so it destroys it.
     //!
-    //! The procedure is detached first, and the Window's native fields cleared, before DestroyWindow
-    //! is called. DestroyWindow sends WM_DESTROY and WM_NCDESTROY synchronously, and this runs from
-    //! ~Window() -- so without the detach those messages would reach a window procedure holding a
-    //! pointer to an object already being destroyed, and emit signals from it.
+    //! The procedure is detached first, and the Window's native fields cleared, before
+    //! DestroyWindow is called. DestroyWindow sends WM_DESTROY and WM_NCDESTROY synchronously, and
+    //! this runs from ~Window() -- so without the detach those messages would reach a window
+    //! procedure holding a pointer to an object already being destroyed, and emit signals from it.
     void PlatformIntegrationWin32::releaseNativeWindow
         (
         Window* aWindow   //!< The window being destroyed.
@@ -901,10 +995,10 @@ namespace QtLikeSignalGui
             return;
         }
 
-        // Three is enough for any real window: the first pass sets the size, the second corrects for
-        // a menu that re-wrapped because of it, and a third would only be needed if that correction
-        // re-wrapped it again, which would mean the menu is oscillating and no size satisfies it.
-        // Bounded rather than "until it converges" for exactly that reason.
+        // Three is enough for any real window: the first pass sets the size, the second corrects
+        // for a menu that re-wrapped because of it, and a third would only be needed if that
+        // correction re-wrapped it again, which would mean the menu is oscillating and no size
+        // satisfies it. Bounded rather than "until it converges" for exactly that reason.
         for( int pass = 0; pass < 3; ++pass )
         {
             RECT client {};
@@ -924,8 +1018,8 @@ namespace QtLikeSignalGui
             const int chromeHeight = static_cast<int>( frame.bottom - frame.top ) - clientHeight;
 
             // SWP_NOMOVE so the window stays where it is; a resize should not also relocate it.
-            // SWP_NOACTIVATE so setting a size does not steal focus, which matters because this runs
-            // during setMenu() and during setup, before the window is even shown.
+            // SWP_NOACTIVATE so setting a size does not steal focus, which matters because this
+            // runs during setMenu() and during setup, before the window is even shown.
             SetWindowPos( handle, nullptr, 0, 0, aWidth + chromeWidth, aHeight + chromeHeight,
                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE );
         }
@@ -934,13 +1028,13 @@ namespace QtLikeSignalGui
     //! Attaches or removes a menu bar, and puts the client area back to the size it was.
     //!
     //! A menu bar is not part of the client area, so SetMenu() on its own silently takes its height
-    //! out of whatever the renderer had been given -- roughly twenty pixels, at the bottom, on every
-    //! frame from then on. Measuring the client area first and restoring it afterwards is what keeps
-    //! the drawable the size the caller asked for and grows the window instead.
+    //! out of whatever the renderer had been given -- roughly twenty pixels, at the bottom, on
+    //! every frame from then on. Measuring the client area first and restoring it afterwards is
+    //! what keeps the drawable the size the caller asked for and grows the window instead.
     //!
     //! DrawMenuBar() because the window already exists: Windows does not repaint the menu bar of a
-    //! live window on its own, and without it the bar is there but blank until something else forces
-    //! a non-client repaint.
+    //! live window on its own, and without it the bar is there but blank until something else
+    //! forces a non-client repaint.
     void PlatformIntegrationWin32::setMenu
         (
         Window* aWindow,    //!< Window to attach the menu to.
@@ -959,7 +1053,8 @@ namespace QtLikeSignalGui
 
         if( SetMenu( handle, static_cast<HMENU>( aMenuHandle ) ) == FALSE )
         {
-            std::fprintf( stderr, "QtLikeSignalGui: SetMenu() failed (%lu)\n", GetLastError() );
+            qCWarning( gLogGuiWin32 )
+                << "QtLikeSignalGui: SetMenu() failed; error" << GetLastError();
             return;
         }
 

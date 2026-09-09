@@ -3,8 +3,8 @@
 
 //! @file
 //!
-//! GoogleTest suite for QtLikeSignal::Thread's scheduling-priority setter/getter, start(Priority), and
-//! the native-OS-thread creation that backs them.
+//! GoogleTest suite for QtLikeSignal::Thread's scheduling-priority setter/getter, start(Priority),
+//! and the native-OS-thread creation that backs them.
 
 #include "QtLikeSignal-test-types.hpp"
 
@@ -409,8 +409,8 @@ namespace
         }
 
         //! The priority is already in force by the time the loop's started signal fires, on the
-        //! real OS thread -- not merely by our own bookkeeping (PriorityIsInEffectBeforeStartedSignal
-        //! above already covers that half).
+        //! real OS thread -- not merely by our own bookkeeping
+        //! (PriorityIsInEffectBeforeStartedSignal above already covers that half).
         //!
         //! This is what creating the thread suspended buys, and it is the reason start() uses the
         //! OS thread API directly rather than std::thread: a thread born already running would be

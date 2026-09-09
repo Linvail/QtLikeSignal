@@ -15,14 +15,20 @@
 #include "QtLikeSignal/EventDispatcherLinux.hpp"
 #include "QtLikeSignal/Thread.hpp"
 
+#include "QtLikeSignal/Log.hpp"
+#include "QtLikeSignalGui/LogCategories.hpp"
+
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 
 #include <poll.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
+#include <X11/Xresource.h>
 
 // For XVisualInfo and XGetVisualInfo, which createWindow() needs to turn a VisualID from a GL
 // library's chosen config into the Visual* and depth XCreateWindow wants.
@@ -30,15 +36,16 @@
 #include <X11/keysym.h>
 
 // Xlib defines None as a bare `0L` macro, and MouseButton has a None enumerator; the two cannot
-// coexist. The QtLikeSignalGui headers are included above, before the macro exists, so the enumerator is
-// declared safely -- and undefining the macro here makes it usable again in the code below. Nothing
-// in this file passes None to Xlib: where a null resource id is wanted, a literal 0 says exactly the
-// same thing to the server without the macro.
+// coexist. The QtLikeSignalGui headers are included above, before the macro exists, so the
+// enumerator is declared safely -- and undefining the macro here makes it usable again in the code
+// below. Nothing in this file passes None to Xlib: where a null resource id is wanted, a literal 0
+// says exactly the same thing to the server without the macro.
 #undef None
 
-// Xlib also typedefs Window as an XID. Inside namespace QtLikeSignalGui the class wins every lookup, and
-// the few places that need the server's meaning say ::Window explicitly. Undefining is not an option
-// here -- it is a typedef, not a macro -- so the qualification is the whole of the answer.
+// Xlib also typedefs Window as an XID. Inside namespace QtLikeSignalGui the class wins every
+// lookup, and the few places that need the server's meaning say ::Window explicitly. Undefining is
+// not an option here -- it is a typedef, not a macro -- so the qualification is the whole of the
+// answer.
 
 namespace QtLikeSignalGui
 {
@@ -275,10 +282,11 @@ namespace QtLikeSignalGui
             return event;
         }
 
-        //! Gets the running thread's dispatcher as an EventDispatcherLinux, or null if it is not one.
+        //! Gets the running thread's dispatcher as an EventDispatcherLinux, or null if it is not
+        //! one.
         //!
-        //! It will not be one if no CoreApplication has adopted this thread yet, which is the mistake
-        //! worth catching by name rather than by a crash later.
+        //! It will not be one if no CoreApplication has adopted this thread yet, which is the
+        //! mistake worth catching by name rather than by a crash later.
         std::shared_ptr<QtLikeSignal::EventDispatcherLinux> currentLinuxDispatcher()
         {
             QtLikeSignal::Thread* const current = QtLikeSignal::Thread::currentThread();
@@ -326,9 +334,9 @@ namespace QtLikeSignalGui
         //! Translates the modifier-state mask carried by a pointer event into a button set.
         //!
         //! Only three bits exist to read. Button4Mask and Button5Mask are the wheel, which is not a
-        //! held button, and the side buttons have no mask bit at all -- so a drag with button 8 down
-        //! reports an empty set here. That is X11's limit rather than a shortcut, and it is why the
-        //! press and release paths adjust the result rather than trusting it whole.
+        //! held button, and the side buttons have no mask bit at all -- so a drag with button 8
+        //! down reports an empty set here. That is X11's limit rather than a shortcut, and it is
+        //! why the press and release paths adjust the result rather than trusting it whole.
         MouseButtons buttonsFromState
             (
             unsigned int aState   //!< XButtonEvent::state or XMotionEvent::state.
@@ -352,7 +360,8 @@ namespace QtLikeSignalGui
             return buttons;
         }
 
-        //! Returns the wheel rotation an X11 button number stands for, or 0,0 if it is not the wheel.
+        //! Returns the wheel rotation an X11 button number stands for, or 0,0 if it is not the
+        //! wheel.
         //!
         //! X11 has no wheel event: the server reports a press and a release of buttons 4 to 7. The
         //! 120 is Windows' WHEEL_DELTA, which WheelEvent adopts as its unit so that one notch reads
@@ -399,9 +408,9 @@ namespace QtLikeSignalGui
     //! Stops listening, and closes the connection if this backend was the one that opened it.
     //!
     //! Every window is gone by now: GuiApplication destroys its windows before releasing the
-    //! backend, precisely so that a created window's XDestroyWindow still has a connection to travel
-    //! on. An adopted connection is left open, because closing somebody else's Display would take
-    //! down every window on it including the ones this library never touched.
+    //! backend, precisely so that a created window's XDestroyWindow still has a connection to
+    //! travel on. An adopted connection is left open, because closing somebody else's Display would
+    //! take down every window on it including the ones this library never touched.
     PlatformIntegrationX11::~PlatformIntegrationX11()
     {
         Display* const owned = mOwnsDisplay ? static_cast<Display*>( mDisplay ) : nullptr;
@@ -453,9 +462,9 @@ namespace QtLikeSignalGui
     //!
     //! Created with WindowSettings::mVisualId when one is given, and with the screen's default
     //! visual otherwise. A non-default visual brings two obligations with it, and XCreateWindow
-    //! answers BadMatch if either is missed: a colormap made for that visual, and an explicit border
-    //! pixel. Both are supplied below, and the colormap is remembered so it can be freed with the
-    //! window -- it is not freed by XDestroyWindow.
+    //! answers BadMatch if either is missed: a colormap made for that visual, and an explicit
+    //! border pixel. Both are supplied below, and the colormap is remembered so it can be freed
+    //! with the window -- it is not freed by XDestroyWindow.
     //!
     //! Nothing here touches GLX or EGL. The window is merely made *compatible* with whatever the
     //! caller's library will do to it, which is the same division the Win32 backend keeps by never
@@ -490,8 +499,9 @@ namespace QtLikeSignalGui
 
             if( chosen == nullptr || count == 0 )
             {
-                std::fprintf( stderr, "QtLikeSignalGui: no visual with id 0x%lx on this screen\n",
-                    aSettings.mVisualId );
+                qCWarning( gLogGuiX11 )
+                    << "QtLikeSignalGui: no visual with this id on this screen; visual"
+                    << QtLikeSignal::logHex( aSettings.mVisualId );
                 if( chosen != nullptr )
                 {
                     XFree( chosen );
@@ -513,8 +523,8 @@ namespace QtLikeSignalGui
         attributes.border_pixel = 0;
 
         // 0 is None: no background, so the server never paints the window before a frame is drawn.
-        // The same decision as the Win32 backend's null background brush, and for the same reason --
-        // anything else is a visible flash on every resize.
+        // The same decision as the Win32 backend's null background brush, and for the same reason
+        // -- anything else is a visible flash on every resize.
         attributes.background_pixmap = 0;
         attributes.event_mask        = kEventMask;
 
@@ -531,7 +541,7 @@ namespace QtLikeSignalGui
 
         if( windowId == 0 )
         {
-            std::fprintf( stderr, "QtLikeSignalGui: XCreateWindow() failed\n" );
+            qCWarning( gLogGuiX11 ) << "QtLikeSignalGui: XCreateWindow() failed";
             XFreeColormap( display, colormap );
             return nullptr;
         }
@@ -554,6 +564,7 @@ namespace QtLikeSignalGui
         native.mWindowId = windowId;
 
         Window* const window = newWindow( this, native, aSettings.mWidth, aSettings.mHeight );
+        reportDevicePixelRatio( window );
 
         Tracked tracked;
         tracked.mWindow        = window;
@@ -585,8 +596,8 @@ namespace QtLikeSignalGui
     {
         if( aNative.mDisplay == nullptr || aNative.mWindowId == 0 )
         {
-            std::fprintf( stderr,
-                "QtLikeSignalGui: adoptWindow on X11 needs both a Display* and a Window id\n" );
+            qCWarning( gLogGuiX11 )
+                << "QtLikeSignalGui: adoptWindow on X11 needs both a Display* and a Window id";
             return nullptr;
         }
 
@@ -597,9 +608,9 @@ namespace QtLikeSignalGui
             // that is simply not being used. This also catches mixing the two entry points: a
             // createWindow() opened a connection of our own, and a window from a different one
             // cannot join it.
-            std::fprintf( stderr,
-                "QtLikeSignalGui: every X11 window must be on the same Display*; this one is not, and "
-                "would never receive events\n" );
+            qCWarning( gLogGuiX11 )
+                << "QtLikeSignalGui: every X11 window must be on the same Display*; this one is"
+                << "not, and would never receive events";
             return nullptr;
         }
 
@@ -609,9 +620,9 @@ namespace QtLikeSignalGui
         XWindowAttributes attributes {};
         if( XGetWindowAttributes( display, windowId, &attributes ) == 0 )
         {
-            std::fprintf( stderr,
-                "QtLikeSignalGui: XGetWindowAttributes() failed; window 0x%lx is not usable\n",
-                aNative.mWindowId );
+            qCWarning( gLogGuiX11 )
+                << "QtLikeSignalGui: XGetWindowAttributes() failed, so this window is not"
+                << "usable; window" << QtLikeSignal::logHex( aNative.mWindowId );
             return nullptr;
         }
 
@@ -652,6 +663,7 @@ namespace QtLikeSignalGui
         }
 
         Window* const window = newWindow( this, aNative, attributes.width, attributes.height );
+        reportDevicePixelRatio( window );
 
         Tracked tracked;
         tracked.mWindow        = window;
@@ -672,12 +684,14 @@ namespace QtLikeSignalGui
         return window;
     }
 
-    //! Lets go of a window: destroys it if this backend created it, otherwise merely stops listening.
+    //! Lets go of a window: destroys it if this backend created it, otherwise merely stops
+    //! listening.
     //!
     //! An adopted window belongs to the library that created it, which is very likely still holding
-    //! a GLX context bound to it -- so undoing the event selection is the whole of what this backend
-    //! put there, and the whole of what it takes away. A created one is ours and goes away entirely,
-    //! colormap included: XDestroyWindow does not free the colormap the window was made with.
+    //! a GLX context bound to it -- so undoing the event selection is the whole of what this
+    //! backend put there, and the whole of what it takes away. A created one is ours and goes away
+    //! entirely, colormap included: XDestroyWindow does not free the colormap the window was made
+    //! with.
     void PlatformIntegrationX11::releaseNativeWindow
         (
         Window* aWindow   //!< The window being destroyed.
@@ -801,8 +815,8 @@ namespace QtLikeSignalGui
     //! around it, outside this one's coordinate space, so there is no chrome to measure and add.
     //!
     //! The window manager is free to refuse or amend the request. Nothing is recorded here for that
-    //! reason -- the size this library reports comes from the ConfigureNotify that follows, which is
-    //! what actually happened rather than what was asked for.
+    //! reason -- the size this library reports comes from the ConfigureNotify that follows, which
+    //! is what actually happened rather than what was asked for.
     void PlatformIntegrationX11::setClientSize
         (
         Window* aWindow,   //!< Window to resize.
@@ -900,8 +914,9 @@ namespace QtLikeSignalGui
         Display* const display = XOpenDisplay( nullptr );
         if( display == nullptr )
         {
-            std::fprintf( stderr,
-                "QtLikeSignalGui: XOpenDisplay() failed; is DISPLAY set and the server reachable?\n" );
+            qCWarning( gLogGuiX11 )
+                <<
+                "QtLikeSignalGui: XOpenDisplay() failed; is DISPLAY set and the server reachable?";
             return false;
         }
 
@@ -912,8 +927,8 @@ namespace QtLikeSignalGui
 
     //! Interns the atoms and puts the connection in the loop's poll set, once.
     //!
-    //! Idempotent, because both entry points call it and either may be the first: createWindow() and
-    //! adoptWindow() each need the connection ready before they can finish, and neither knows
+    //! Idempotent, because both entry points call it and either may be the first: createWindow()
+    //! and adoptWindow() each need the connection ready before they can finish, and neither knows
     //! whether the other has run.
     //!
     //! @return true if the descriptor is in the poll set.
@@ -939,10 +954,11 @@ namespace QtLikeSignalGui
             currentLinuxDispatcher();
         if( !dispatcher )
         {
-            std::fprintf( stderr,
-                "QtLikeSignalGui: this thread is not running EventDispatcherLinux, so the display "
-                "connection cannot join the event loop; construct the GuiApplication on the thread "
-                "that will call exec()\n" );
+            qCWarning( gLogGuiX11 )
+                <<
+                "QtLikeSignalGui: this thread is not running EventDispatcherLinux, so the display"
+                << "connection cannot join the event loop; construct the GuiApplication on the"
+                << "thread that will call exec()";
             return false;
         }
 
@@ -955,18 +971,66 @@ namespace QtLikeSignalGui
                 pumpDisplay( aEvents );
             } ) )
         {
-            std::fprintf( stderr, "QtLikeSignalGui: registerEventSource( %d ) was refused\n",
-                mConnectionFd );
+            qCWarning( gLogGuiX11 )
+                << "QtLikeSignalGui: registerEventSource() was refused for the display connection"
+                << mConnectionFd;
             mConnectionFd = -1;
             return false;
         }
 
-        // One drain before the loop ever blocks. Interning the atoms above talked to the server, and
-        // a reply read off the socket can bring events along with it -- they are in Xlib's queue
-        // now, with an empty socket behind them. poll() would have nothing to report and that first
-        // batch would wait for whatever unrelated thing happened next.
+        // One drain before the loop ever blocks. Interning the atoms above talked to the server,
+        // and a reply read off the socket can bring events along with it -- they are in Xlib's
+        // queue now, with an empty socket behind them. poll() would have nothing to report and that
+        // first batch would wait for whatever unrelated thing happened next.
         pumpDisplay( POLLIN );
         return true;
+    }
+
+    //! Records the desktop's scale on @p aWindow, as X11 makes it available.
+    //!
+    //! **X11 has no per-window scale and no event when one changes**, so this is read once, at
+    //! creation, and never revised. That is also why it records rather than reports: with no second
+    //! reading there is never a change to announce. The number lives in the X resource database
+    //! under `Xft.dpi`, which is what a desktop environment writes when the user picks a scaling
+    //! percentage and what every toolkit reads: GTK and Qt both start here.
+    //!
+    //! Absent, unparseable or not positive means the desktop said nothing, and 1.0 is then the
+    //! honest answer rather than a guess from the physical screen size -- `DisplayWidthMM` is
+    //! notoriously wrong on real monitors, and a scale derived from it would be worse than none.
+    void PlatformIntegrationX11::reportDevicePixelRatio
+        (
+        Window* aWindow   //!< The window to report for.
+        )
+    {
+        Display* const display = static_cast<Display*>( mDisplay );
+        if( display == nullptr || aWindow == nullptr )
+        {
+            return;
+        }
+
+        const char* const resources = XResourceManagerString( display );
+        if( resources == nullptr )
+        {
+            return;
+        }
+
+        // Parsed by hand rather than through XrmGetResource, which would mean building a database,
+        // looking one value up and destroying it again for a single number available as text.
+        const char* const key = std::strstr( resources, "Xft.dpi:" );
+        if( key == nullptr )
+        {
+            return;
+        }
+
+        const double dpi = std::atof( key + std::strlen( "Xft.dpi:" ) );
+        if( dpi <= 0.0 )
+        {
+            return;
+        }
+
+        // Recorded rather than reported: both callers are still building the window, so there is
+        // nobody connected to tell.
+        WindowSystemInterface::setInitialDevicePixelRatio( aWindow, dpi / 96.0 );
     }
 
     //! Takes the connection back out of the poll set. Safe to call when it was never in it.
@@ -977,10 +1041,10 @@ namespace QtLikeSignalGui
             return;
         }
 
-        // Unregistered from the loop's own thread, so EventDispatcherLinux's contract makes the call
-        // synchronous: the callback will not run again, not even for a readiness the current poll()
-        // round has already observed. That is what makes it safe to free everything the callback
-        // touches immediately afterwards.
+        // Unregistered from the loop's own thread, so EventDispatcherLinux's contract makes the
+        // call synchronous: the callback will not run again, not even for a readiness the current
+        // poll() round has already observed. That is what makes it safe to free everything the
+        // callback touches immediately afterwards.
         const std::shared_ptr<QtLikeSignal::EventDispatcherLinux> dispatcher =
             currentLinuxDispatcher();
         if( dispatcher )
@@ -1002,10 +1066,10 @@ namespace QtLikeSignalGui
     //! ready -- and once from registerConnection() before the loop starts.
     //!
     //! **The loop is not decoration.** poll() reports that the socket has bytes; Xlib turns those
-    //! bytes into events and holds them in a queue inside this process. Handle one per readiness and
-    //! the rest stay in that queue behind an empty socket, so the loop blocks with events already in
-    //! hand. XPending() flushes the output buffer, then hands back whatever is queued or reads more,
-    //! so looping on it is what empties both the queue and the socket.
+    //! bytes into events and holds them in a queue inside this process. Handle one per readiness
+    //! and the rest stay in that queue behind an empty socket, so the loop blocks with events
+    //! already in hand. XPending() flushes the output buffer, then hands back whatever is queued or
+    //! reads more, so looping on it is what empties both the queue and the socket.
     void PlatformIntegrationX11::pumpDisplay
         (
         short aEvents   //!< poll(2) revents for the connection.
@@ -1024,9 +1088,10 @@ namespace QtLikeSignalGui
             // releases the external library's GLX context. Stop listening, then end the loop: there
             // is no window system left, so every alternative leaves a live loop with nothing to
             // service and no way for the program to learn why.
-            std::fprintf( stderr,
-                "QtLikeSignalGui: the X11 display connection dropped (revents 0x%x); quitting\n",
-                static_cast<unsigned int>( aEvents ) );
+            qCCritical( gLogGuiX11 )
+                <<
+                "QtLikeSignalGui: the X11 display connection dropped, so this is quitting; revents"
+                << QtLikeSignal::logHex( static_cast<unsigned int>( aEvents ) );
             unregisterConnection();
             QtLikeSignal::CoreApplication::quit();
             return;
@@ -1080,9 +1145,9 @@ namespace QtLikeSignalGui
 
     //! Translates one native event and reports it through WindowSystemInterface.
     //!
-    //! The whole X11 vocabulary stops here: everything downstream sees a MouseEvent, a WheelEvent or
-    //! a size. That is the split the Win32 backend makes in its window procedure, and the split Qt
-    //! makes at QWindowSystemInterface.
+    //! The whole X11 vocabulary stops here: everything downstream sees a MouseEvent, a WheelEvent
+    //! or a size. That is the split the Win32 backend makes in its window procedure, and the split
+    //! Qt makes at QWindowSystemInterface.
     void PlatformIntegrationX11::dispatchNativeEvent
         (
         const void* aEvent   //!< The XEvent just taken off the queue.
@@ -1090,8 +1155,8 @@ namespace QtLikeSignalGui
     {
         const XEvent& event = *static_cast<const XEvent*>( aEvent );
 
-        // Every event this backend handles names its window in the same place, so the routing is one
-        // lookup rather than one per case.
+        // Every event this backend handles names its window in the same place, so the routing is
+        // one lookup rather than one per case.
         const Tracked* const adopted = windowFor( event.xany.window );
         if( adopted == nullptr )
         {
@@ -1235,9 +1300,9 @@ namespace QtLikeSignalGui
 
         case Expose:
         {
-            // X sends one Expose per exposed rectangle, counting down; only the last carries a zero.
-            // Acting on that one alone is the compression the protocol hands us for free, and it is
-            // what makes a window uncovered in four pieces render one frame rather than four.
+            // X sends one Expose per exposed rectangle, counting down; only the last carries a
+            // zero. Acting on that one alone is the compression the protocol hands us for free, and
+            // it is what makes a window uncovered in four pieces render one frame rather than four.
             if( event.xexpose.count != 0 )
             {
                 return;

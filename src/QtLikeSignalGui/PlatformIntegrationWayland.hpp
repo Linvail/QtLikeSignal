@@ -28,9 +28,9 @@ namespace QtLikeSignalGui
     //! is every desktop compositor, with libdecor drawing the title bar and close button since
     //! Wayland has no server-side decoration to fall back on.
     //!
-    //! **The loop is this library's, not the connection's.** GGL's HandleEvents() blocks in a poll()
-    //! of its own until something arrives, which is exactly what a program with one event loop
-    //! cannot afford: the timers and the queued signals would stop while it waited. Here the
+    //! **The loop is this library's, not the connection's.** GGL's HandleEvents() blocks in a
+    //! poll() of its own until something arrives, which is exactly what a program with one event
+    //! loop cannot afford: the timers and the queued signals would stop while it waited. Here the
     //! compositor socket is registered with EventDispatcherLinux and the read is driven from the
     //! outside, so one poll() waits on the socket, the dispatcher's eventfd and the timer deadline
     //! together:
@@ -129,6 +129,18 @@ namespace QtLikeSignalGui
             Window* aWindow
             ) override;
 
+        virtual bool hasFrameClock() const override;
+
+        virtual void deliverPacedUpdate
+            (
+            Window* aWindow
+            ) override;
+
+        virtual void releasePacedUpdate
+            (
+            Window* aWindow
+            ) override;
+
     private:
         //! Grants the Wayland listener callbacks access to everything they report against.
         //!
@@ -204,11 +216,46 @@ namespace QtLikeSignalGui
         //! True while a repaint has been posted to the loop and not yet run. See requestUpdate().
         bool mUpdatePending { false };
 
-        //! Kept alive exactly as long as this backend is, so a posted repaint can ask whether it is.
+        //! True while a wl_surface frame callback has been queued and has not fired.
         //!
-        //! The same guard the DRM backend uses, and for the same reason: requestUpdate() puts a task
-        //! on the loop that touches this object when it runs, and the task outlives the backend if
-        //! the application is torn down in between.
+        //! Distinct from mUpdatePending, which means "an update is on its way to the renderer".
+        //! This means "the compositor owes us a signal". A paced window sets both: the request is
+        //! armed here, the expose is delivered when the callback arrives, and until then a second
+        //! requestUpdate() has nothing to do.
+        bool mFrameCallbackPending { false };
+
+        //! True once at least one update has been delivered to the renderer.
+        //!
+        //! The bootstrap condition. A frame request queued by wl_surface_frame() only reaches the
+        //! compositor on the next commit, and this backend never commits -- the renderer does,
+        //! inside eglSwapBuffers. So before the renderer has been given anything to draw there is
+        //! no commit for a request to ride on, and arming one would wait forever.
+        //!
+        //! The first update therefore goes the posted route whatever the pacing says, and every one
+        //! after it rides a frame callback. "Delivered an expose" is the closest thing this backend
+        //! can observe to "the renderer has presented", since the commit happens inside EGL where
+        //! nothing here can see it.
+        bool mHasDeliveredUpdate { false };
+
+        //! True once a paced update has been asked for and not yet delivered.
+        //!
+        //! Kept apart from mFrameCallbackPending because the two end at different moments: the
+        //! callback fires (clearing that one) and the expose is delivered (clearing this one), and
+        //! between them the window is neither waiting nor drawing.
+        bool mPacedUpdateRequested { false };
+
+        //! True once the "asked again without drawing" warning has been reported.
+        //!
+        //! Reported once rather than per request: a renderer stuck in that state asks on every
+        //! pass, and a log line per pass would bury the one that mattered.
+        bool mStalledPacingReported { false };
+
+        //! Kept alive exactly as long as this backend is, so a posted repaint can ask whether it
+        //! is.
+        //!
+        //! The same guard the DRM backend uses, and for the same reason: requestUpdate() puts a
+        //! task on the loop that touches this object when it runs, and the task outlives the
+        //! backend if the application is torn down in between.
         std::shared_ptr<int> mLifeToken { std::make_shared<int>( 0 ) };
     };
 }

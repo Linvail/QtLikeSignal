@@ -17,8 +17,8 @@ namespace QtLikeSignal
     //!
     //! Windows delivers messages to the thread that created the window, and there is no way to wait
     //! on a message queue and a condition variable at the same time. Qt's answer, reproduced here,
-    //! is to stop needing two primitives: the dispatcher creates a hidden **message-only window** on
-    //! its own thread, wakeWaiter() posts a private message to it, and the loop blocks in
+    //! is to stop needing two primitives: the dispatcher creates a hidden **message-only window**
+    //! on its own thread, wakeWaiter() posts a private message to it, and the loop blocks in
     //! MsgWaitForMultipleObjectsEx(), which returns for *any* message. A posted event and a mouse
     //! move then wake the loop by exactly the same mechanism.
     //!
@@ -26,9 +26,9 @@ namespace QtLikeSignal
     //! thread-affine -- the affinity is satisfied by creating the window on the loop's own thread.
     //!
     //! Timers are **not** handed to SetTimer(). The inherited timer list already computes the next
-    //! deadline, and it is passed to MsgWaitForMultipleObjectsEx() as its timeout, so both platforms
-    //! keep identical timer behaviour instead of inheriting Windows' own timer granularity and
-    //! WM_TIMER coalescing rules.
+    //! deadline, and it is passed to MsgWaitForMultipleObjectsEx() as its timeout, so both
+    //! platforms keep identical timer behaviour instead of inheriting Windows' own timer
+    //! granularity and WM_TIMER coalescing rules.
     //!
     //! Must be constructed on the thread that will run the loop; the message-only window belongs to
     //! whichever thread creates it. Both construction sites satisfy this: Thread::threadBody() runs
@@ -56,10 +56,21 @@ namespace QtLikeSignal
     private:
         //! The hidden message-only window, or nullptr if it could not be created.
         //!
-        //! Typed void* rather than HWND so this header does not pull <windows.h> -- and its macros --
-        //! into every translation unit that includes it. Thread.hpp keeps its native handle the same
-        //! way for the same reason.
+        //! Typed void* rather than HWND so this header does not pull <windows.h> -- and its macros
+        //! -- into every translation unit that includes it. Thread.hpp keeps its native handle the
+        //! same way for the same reason.
         void* mMessageWindow { nullptr };
+
+        //! Auto-reset event this loop is woken with, or nullptr if it could not be created.
+        //!
+        //! A wakeup used to be a posted message, and that made every one of them a round trip
+        //! through the window message queue -- the dearest way Windows offers to nudge a thread.
+        //! An event in the wait set costs a SetEvent instead, and the queue is still waited on
+        //! through QS_ALLINPUT, so window messages are served exactly as before.
+        //!
+        //! Typed void* rather than HANDLE for the same reason mMessageWindow is: to keep
+        //! <windows.h> and its macros out of every translation unit that includes this.
+        void* mWakeEvent { nullptr };
 
         //! True once wakeWaiter() has posted a wakeup that the loop has not yet consumed.
         //!

@@ -1,14 +1,19 @@
 # SPDX-FileCopyrightText: 2026 Evan
 # SPDX-License-Identifier: MIT
 
+# Applications build this library from source with exceptions disabled, so it has to compile that
+# way. --no-exceptions is how that is checked, with the real include paths.
+from toolchains import apply_library_exception_policy
+
+
 def build(bld):
     """
     Build QtLikeSignalGui, the window and input layer over QtLikeSignal.
 
-    A separate target rather than more files in QtLikeSignal, because it is the half that has to link a
-    window system: user32 on Windows, Xlib, libinput and libwayland on Linux. QtLikeSignal itself depends
-    on nothing but the C++ runtime and the platform's threading, and that is worth keeping true for
-    the programs that use the loop without ever opening a window.
+    A separate target rather than more files in QtLikeSignal, because it is the half that has to
+    link a window system: user32 on Windows, Xlib, libinput and libwayland on Linux. QtLikeSignal
+    itself depends on nothing but the C++ runtime and the platform's threading, and that is worth
+    keeping true for the programs that use the loop without ever opening a window.
 
     The portable sources build everywhere; only the backends are per platform, and a target may have
     several. Each one is guarded on the development package it needs, so a machine missing
@@ -16,13 +21,12 @@ def build(bld):
     did not get -- the same treatment the X11 demo gets, and the reason a build of this stays green
     on a bare container.
     """
-    #: Every backend that is one source file and some libraries. Listed here so the glob below can
-    #: exclude all of them and add back only the ones this target can actually build.
-    #:
-    #: Wayland is not in this table and is handled after it: it is the only backend that also
-    #: contributes generated C, an include directory for the headers generated beside it, and the
-    #: "c" feature to compile them. Bending the table into a shape that could carry those would make
-    #: five rows harder to read for the sake of one.
+    # : Every backend that is one source file and some libraries. Listed here so the glob below can
+    # : exclude all of them and add back only the ones this target can actually build. : : Wayland
+    # is not in this table and is handled after it: it is the only backend that also : contributes
+    # generated C, an include directory for the headers generated beside it, and the : "c" feature
+    # to compile them. Bending the table into a shape that could carry those would make : five rows
+    # harder to read for the sake of one.
     all_backends = [
         ("windows", "PlatformIntegrationWin32.cpp", "win32", ["USER32"], None),
         ("x11", "PlatformIntegrationX11.cpp", "linux", ["X11"], "install libx11-dev"),
@@ -53,7 +57,8 @@ def build(bld):
             continue
 
         if not available[name]:
-            bld.build_msg("QtLikeSignalGui backend", "%s skipped (%s)" % (name, hint), color="YELLOW")
+            bld.build_msg("QtLikeSignalGui backend", "%s skipped (%s)" % (name, hint),
+                          color="YELLOW")
             continue
 
         kw["source"].append(bld.path.find_node(source))
@@ -66,7 +71,8 @@ def build(bld):
         # The uselibs are what check_cfg() filled in at configure time, or the system ones the
         # Windows toolchains declare. Naming them here rather than in each consumer is what makes
         # them travel: waf carries a used target's uselibs down the use chain, so a program that
-        # links QtLikeSignalGui gets Xlib and libinput without having to know which backends went in.
+        # links QtLikeSignalGui gets Xlib and libinput without having to know which backends went
+        # in.
         kw["use"] += uselibs
         built.append(name)
 
@@ -117,5 +123,7 @@ def build(bld):
     # ".." is src/, the same include root QtLikeSignal exports, which is what lets an include read
     # "QtLikeSignalGui/Window.hpp" and sit next to the "QtLikeSignal/Object.hpp" ones.
     kw["export_includes"] = ".."
+
+    apply_library_exception_policy(bld, kw)
 
     bld(target="QtLikeSignalGui", **kw)

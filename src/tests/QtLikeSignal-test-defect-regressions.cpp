@@ -26,11 +26,11 @@
 //! Clang exposes it through __has_feature, GCC through a predefined macro; check both.
 #if defined( __has_feature )
     #if __has_feature( address_sanitizer )
-        #define QLS_ADDRESS_SANITIZER_ACTIVE 1
+        #define QT_LIKE_SIGNAL_ADDRESS_SANITIZER_ACTIVE 1
     #endif
 #endif
-#if defined( __SANITIZE_ADDRESS__ ) && !defined( QLS_ADDRESS_SANITIZER_ACTIVE )
-    #define QLS_ADDRESS_SANITIZER_ACTIVE 1
+#if defined( __SANITIZE_ADDRESS__ ) && !defined( QT_LIKE_SIGNAL_ADDRESS_SANITIZER_ACTIVE )
+    #define QT_LIKE_SIGNAL_ADDRESS_SANITIZER_ACTIVE 1
 #endif
 
 using namespace QtLikeSignal;
@@ -127,7 +127,8 @@ namespace
         std::shared_ptr<std::atomic<int> > mCount;
     };
 
-    //! Creates an Object on a short-lived native thread and returns it after that thread has exited.
+    //! Creates an Object on a short-lived native thread and returns it after that thread has
+    //! exited.
     //!
     //! The returned object is "orphaned": auto-adoption gave its creating thread a Thread, and that
     //! Thread was destroyed when the native thread exited, so the object's affinity now reports
@@ -203,8 +204,9 @@ TEST( ThreadDefectTest, RestartAfterFinishWithoutWaitDoesNotTerminate )
 // DeferredDeleteEvent and another event for the same receiver land in the same drained batch.
 // ---------------------------------------------------------------------------------------------
 
-//! Minimal receiver used only to give processEvents() a second event type to dispatch to
-//! the same receiver that a DeferredDeleteEvent targets, in DeferredDeleteFollowedByQueuedEventInSameBatchDoesNotCrash.
+//! Minimal receiver used only to give processEvents() a second event type to dispatch to the same
+//! receiver that a DeferredDeleteEvent targets, in
+//! DeferredDeleteFollowedByQueuedEventInSameBatchDoesNotCrash.
 class DefectUafTestReceiver : public Object
 {
 public:
@@ -397,34 +399,43 @@ TEST( EventDispatcherDefaultDefectTest, NewShorterTimerWakesPromptly )
 }
 
 // ---------------------------------------------------------------------------------------------
-// Defect: leaked TimerEvent allocations if interrupt() lands between
-// EventDispatcherDefault::processEvents() collecting already-expired timers and its subsequent
-// mInterrupt check.
+// ---------------------------------------------------------------------------------------------
+// Defect: leaked TimerEvent allocations if interrupt() landed between collecting expired timers
+// and dispatching them. The dispatcher frees the collected batch on that path; the window itself
+// has since been closed by a lock, which is the subject of the note below.
 // ---------------------------------------------------------------------------------------------
 
-//! Best-effort stress test targeting the narrow window in processEvents() between
-//! collecting already-expired timers into a local batch and checking mInterrupt right after.
-//!
-//! Before the fix, any TimerEvent objects already allocated during collection were leaked if
-//! interrupt() landed in that window, since processEvents() returned early without ever handing
-//! them to the dispatch loop that would otherwise delete them.
-//!
-//! There is no portable, non-racy way to deterministically land inside that exact window from
-//! outside the class, so this runs many trials with a large number of already-expired timers (to
-//! widen the collection loop's duration) racing against a concurrent interrupt() caller. The real
-//! assertion this test is written to support is "no leak reported at process exit" -- this
-//! project's default debug build already enables AddressSanitizer, which includes
-//! LeakSanitizer on Linux (see tools/toolchain-linux.py) -- so run this as part of a normal debug
-//! build/test invocation to get that signal. The check below only confirms the scenario runs to
-//! completion without crashing or hanging; it cannot by itself prove the leak window was hit.
-//!
-//! Exposes EventDispatcherDefault::registerTimer() for this whitebox stress test.
+//! Counts the timer events delivered to it, so a pass can be shown to be all-or-nothing.
+class DefectTimerCounter : public Object
+{
+public:
+    //! @return how many timer events have arrived.
+    int count() const
+    {
+        return mCount;
+    }
+
+protected:
+    //! Counts the delivery.
+    virtual void timerEvent
+        (
+        TimerEvent* aEvent  //!< Unused.
+        ) override
+    {
+        ( void )aEvent;
+        ++mCount;
+    }
+
+private:
+    int mCount { 0 };   //!< How many timer events have arrived.
+};
+
+//! Exposes EventDispatcherDefault::registerTimer() for the whitebox test below.
 //!
 //! registerTimer() is protected and friended to Object alone, so that only Object's internals
-//! (startTimer()/killTimer()) can register a timer on another object's behalf. This test needs to
-//! drive it directly -- it registers thousands of raw timer IDs on a standalone dispatcher that is
-//! deliberately not attached to any thread, to widen the collection loop that the race targets.
-//! A using-declaration re-widens access in this subclass without loosening the shipping class.
+//! (startTimer()/killTimer()) can register a timer on another object's behalf. This test drives it
+//! directly, on a standalone dispatcher attached to no thread. A using-declaration re-widens access
+//! in this subclass without loosening the shipping class.
 class DefectTestableDispatcher : public EventDispatcherDefault
 {
 public:
@@ -433,20 +444,46 @@ public:
     using EventDispatcherDefault::unregisterTimer;
 };
 
-TEST( EventDispatcherDefaultDefectTest, InterruptDuringTimerCollectionStress )
+//! Verifies an interrupt cannot split a timer pass in half, and so cannot strand collected events.
+//!
+//! **This test used to be a 30-trial, 8000-timer stress, and it could not fail.** It was written
+//! to race interrupt() into the window between collecting expired timers and dispatching them,
+//! because a leak once lived there. Measured on 2026-09-08, at 30x8000 and with the fix
+//! deliberately removed, it reported no leak -- and a counter placed on the branch it targets
+//! showed that branch reached **zero times with anything in the batch**, across the whole suite of
+//! 417 tests, not merely in this one. It cost about 50 seconds of every debug run and five and a
+//! half minutes of every AddressSanitizer run to prove nothing.
+//!
+//! **The window is closed by a lock, and that is why.** Collection and the interrupt check that
+//! follows it are one hold of the dispatcher's mutex: the wait between them is skipped whenever
+//! anything was collected, precisely because there is already work to do. interrupt() takes that
+//! same mutex. So another thread cannot set the flag inside the span -- it blocks until the pass
+//! has released the lock, which is after the check. The only path that reaches the check with the
+//! flag set from elsewhere runs through the wait, and the wait runs only when the batch is empty.
+//!
+//! So the defensive free of the batch stays -- it is two lines and a future change to the wait
+//! condition would make it live again -- but a test cannot reach it, and pretending otherwise is
+//! worse than not trying.
+//!
+//! **What is testable is the invariant that makes the leak impossible**, and this asserts it: a
+//! pass either delivers every expired timer or none of them. A partial delivery would mean the
+//! pass was split somewhere inside that lock hold, which is the state the leak needed. The numbers
+//! are small because the point is no longer to widen a window; it is to run the concurrent path
+//! often enough for AddressSanitizer and ThreadSanitizer to look at it.
+TEST( EventDispatcherDefaultDefectTest, AnInterruptCannotSplitATimerPass )
 {
-    constexpr int kTrials         = 30;
-    constexpr int kTimersPerTrial = 8000;
-
-    Object dummyReceiver;
+    constexpr int kTrials         = 20;
+    constexpr int kTimersPerTrial = 200;
 
     for( int trial = 0; trial < kTrials; ++trial )
     {
         DefectTestableDispatcher dispatcher;
+        DefectTimerCounter receiver;
+
         for( int i = 0; i < kTimersPerTrial; ++i )
         {
             // interval 0 => already due by the time processEvents() checks it.
-            dispatcher.registerTimer( trial * kTimersPerTrial + i, 0, &dummyReceiver );
+            dispatcher.registerTimer( i, 0, &receiver );
         }
 
         std::atomic<bool> go { false };
@@ -457,7 +494,7 @@ TEST( EventDispatcherDefaultDefectTest, InterruptDuringTimerCollectionStress )
                 {
                     std::this_thread::yield();
                 }
-                for( int i = 0; i < 500; ++i )
+                for( int i = 0; i < 200; ++i )
                 {
                     dispatcher.interrupt();
                 }
@@ -467,9 +504,17 @@ TEST( EventDispatcherDefaultDefectTest, InterruptDuringTimerCollectionStress )
         dispatcher.processEvents(
             AbstractEventDispatcher::ProcessEventsFlag::WaitForMoreEvents );
         racer.join();
-    }
 
-    SUCCEED();
+        const int delivered = receiver.count();
+        EXPECT_TRUE( delivered == 0 || delivered == kTimersPerTrial )
+            << "the pass delivered " << delivered << " of " << kTimersPerTrial
+            << " expired timers, so an interrupt split it in half -- which is the state the "
+            "leak this test guards used to need.";
+
+        // Whatever was not delivered is still registered, and the dispatcher frees it. Nothing to
+        // assert here: a leak is reported by AddressSanitizer at process exit, which is what makes
+        // running this under a sanitizer the point rather than an extra.
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1089,7 +1134,8 @@ TEST( EventDispatcherDefaultDefectTest, IdleWaitBlocksButStillWakesOnPostedEvent
         timeout )
         << "idle processEvents() returned on its own; it should block until there is work.";
 
-    dispatcher.postEvent( &receiver, new TimerEvent( 1 ) );
+    dispatcher.postEvent( &receiver, new TimerEvent( 1 ), OverflowPolicy::DropNewest,
+        EventPriority::kNormal );
 
     const bool woke
         = returnedFuture.wait_for( std::chrono::seconds( 5 ) ) == std::future_status::ready;
@@ -1219,19 +1265,19 @@ TEST( TimerDefectTest, SingleShotIsStoppedBeforeTimeoutIsEmitted )
 // when the target thread is gone, and ~Thread() drains deferred deletes and releases the dispatcher
 // before nulling the back-pointer, so the two can no longer disagree.
 //
-// QtLikeSignal forecloses this. ~Thread() closes the mailbox *before* nulling the back-pointer, stating
-// the invariant outright -- "Done BEFORE clearing the back-pointer, so the invariant 'thread() ==
-// nullptr implies not accepting' holds" -- and connectImpl() additionally drops when
-// ctxData->thread() == nullptr. Measured side by side over five rounds of 200k emits, QtLikeSignal grows
-// 276 kB then flattens; QtLikeSignal grows ~30 MB every round without bound.
+// QtLikeSignal forecloses this. ~Thread() closes the mailbox *before* nulling the back-pointer,
+// stating the invariant outright -- "Done BEFORE clearing the back-pointer, so the invariant
+// 'thread() == nullptr implies not accepting' holds" -- and connectImpl() additionally drops when
+// ctxData->thread() == nullptr. Measured side by side over five rounds of 200k emits, QtLikeSignal
+// grows 276 kB then flattens; QtLikeSignal grows ~30 MB every round without bound.
 // ---------------------------------------------------------------------------------------------
 
 //! Verifies deleteLater() on an orphaned object deletes it instead of leaking it.
 //!
 //! Deterministic -- no timing, no sampling. Before the fix this queued a DeferredDeleteEvent into
 //! the dead thread's still-live dispatcher, reported success, and the object was never destroyed.
-//! It now falls back to a synchronous delete, the same trade QtLikeSignal makes when its post() refuses
-//! the task: "Doing nothing here would leak self forever, which is strictly worse than the
+//! It now falls back to a synchronous delete, the same trade QtLikeSignal makes when its post()
+//! refuses the task: "Doing nothing here would leak self forever, which is strictly worse than the
 //! thread-affinity violation of deleting it synchronously."
 TEST( ObjectDefectTest, DeleteLaterOnAnOrphanedObjectDeletesItSynchronously )
 {
@@ -1277,12 +1323,12 @@ TEST( ObjectDefectTest, QueuedCallsToAnOrphanedObjectAreDropped )
     // platform-specific, and every Linux build type-checks it.
     #if !defined( __linux__ )
         GTEST_SKIP() << "resident-set sampling is implemented for Linux only";
-    #elif defined( QLS_ADDRESS_SANITIZER_ACTIVE )
+    #elif defined( QT_LIKE_SIGNAL_ADDRESS_SANITIZER_ACTIVE )
         // AddressSanitizer holds freed allocations in a quarantine so it can detect use-after-free,
         // so resident memory grows with the number of frees regardless of whether anything is
         // retained. Emitting allocates one std::function per call even when the resulting metacall
-        // is correctly dropped, so 800k emits fill the quarantine and this measurement reports ~37 MB
-        // for entirely healthy code. Confirmed: with ASAN_OPTIONS=quarantine_size_mb=1 the same
+        // is correctly dropped, so 800k emits fill the quarantine and this measurement reports ~37
+        // MB for entirely healthy code. Confirmed: with ASAN_OPTIONS=quarantine_size_mb=1 the same
         // binary passes. Run this under ThreadSanitizer or without a sanitizer, where the number
         // means what it claims to.
         GTEST_SKIP() << "resident-set growth is not a meaningful signal under AddressSanitizer "
@@ -1316,8 +1362,8 @@ TEST( ObjectDefectTest, QueuedCallsToAnOrphanedObjectAreDropped )
             growthPerRound.push_back( residentSetKb() - before );
         }
 
-        // Ignore the first round: that is where the allocator's arena grows, and it does so even when
-        // the events are correctly dropped. Steady-state growth is the signal.
+        // Ignore the first round: that is where the allocator's arena grows, and it does so even
+        // when the events are correctly dropped. Steady-state growth is the signal.
         long steadyStateGrowth = 0;
         for( size_t i = 1; i < growthPerRound.size(); ++i )
         {
@@ -1391,8 +1437,8 @@ protected:
 //! noticing does, so the threshold sits 40 ms clear of either.
 //!
 //! The intervals are deliberately large. An earlier version used 50 ms / 70 ms, which separated the
-//! two outcomes by only 20 ms -- fine on Linux, but it failed on Windows at 112.7 ms against a
-//! 110 ms threshold. That was not the defect resurfacing: Windows' default timer resolution is about
+//! two outcomes by only 20 ms -- fine on Linux, but it failed on Windows at 112.7 ms against a 110
+//! ms threshold. That was not the defect resurfacing: Windows' default timer resolution is about
 //! 15.6 ms and a wait only ever overshoots, so 112.7 ms was the *correct* 100 ms deadline plus
 //! granularity (the broken behaviour could not have produced less than 120 ms). Scaling everything
 //! up by 4x makes that fixed overshoot small next to the 80 ms that actually distinguishes the two.
@@ -1507,10 +1553,11 @@ TEST( EventDispatcherDefaultDefectTest, TimerKilledDuringDispatchDoesNotStillFir
 // pool, so the counter climbed until it wrapped and eventually handed out -1 -- the value
 // startTimer() returns to mean failure and Timer::stop() tests against.
 //
-// Qt releases ids (QAbstractEventDispatcherPrivate::releaseTimerId, backed by a lock-free QFreeList)
-// so a program that starts and stops timers forever reuses a small set. Object now does the same
-// through a process-wide pool, tracks the ids it owns so ~Object() can return them, and reuses them
-// FIFO rather than LIFO -- see TimerIdPool in Object.cpp for why that ordering is load-bearing.
+// Qt releases ids (QAbstractEventDispatcherPrivate::releaseTimerId, backed by a lock-free
+// QFreeList) so a program that starts and stops timers forever reuses a small set. Object now does
+// the same through a process-wide pool, tracks the ids it owns so ~Object() can return them, and
+// reuses them FIFO rather than LIFO -- see TimerIdPool in Object.cpp for why that ordering is
+// load-bearing.
 // ---------------------------------------------------------------------------------------------
 
 //! Verifies starting and stopping a timer repeatedly reuses ids instead of consuming fresh ones.
@@ -1788,7 +1835,9 @@ TEST( EventDispatcherDefaultDefectTest, WakeCallbackMayReEnterTheDispatcherFromE
             // drain our queue rather than signal a descriptor.
             if( callbackCount.fetch_add( 1 ) < 8 )
             {
-                dispatcher->postEvent( &receiver, new TimerEvent( 99 ) );
+                dispatcher->postEvent( &receiver, new TimerEvent( 99 ), OverflowPolicy::DropNewest,
+                EventPriority::kNormal )
+                ;
             }
         } );
 
@@ -1799,7 +1848,8 @@ TEST( EventDispatcherDefaultDefectTest, WakeCallbackMayReEnterTheDispatcherFromE
         {
             dispatcher->registerTimer( 1, 1000, &receiver );        // wakes with a timer change
             dispatcher->unregisterTimer( 1 );                        // and again on removal
-            dispatcher->postEvent( &receiver, new TimerEvent( 1 ) );  // the path that always worked
+            dispatcher->postEvent( &receiver, new TimerEvent( 1 ), OverflowPolicy::DropNewest,
+            EventPriority::kNormal );                                                                                     // the path that always worked
             donePromise.set_value();
         } );
 
@@ -1965,10 +2015,10 @@ TEST( ObjectDefectTest, MoveToThreadCarriesAPendingDeleteLaterToTheNewThread )
 
 //! Verifies the migration survives the canonical idiom: move first, start the thread afterwards.
 //!
-//! The destination has no dispatcher at all at that point -- a Thread creates one in its run body --
-//! so there is nowhere to post. The events are parked on the destination's ThreadData and handed to
-//! the dispatcher the moment it is installed. Qt has no equivalent problem because its queue lives
-//! in QThreadData rather than in the dispatcher.
+//! The destination has no dispatcher at all at that point -- a Thread creates one in its run body
+//! -- so there is nowhere to post. The events are parked on the destination's ThreadData and handed
+//! to the dispatcher the moment it is installed. Qt has no equivalent problem because its queue
+//! lives in QThreadData rather than in the dispatcher.
 TEST( ObjectDefectTest, EventsMovedToAnUnstartedThreadAreDeliveredWhenItStarts )
 {
     Thread worker( "r32-unstarted-worker" );      // deliberately not started yet
@@ -2350,16 +2400,17 @@ namespace
 
         thread.quit();
 
-        // Deliberately no thread.wait() here -- give the loop a moment to actually finish so mThread
-        // is in the "finished but unjoined" state start() must handle, without relying on start()'s
-        // own internal wait to also cover the "still mid-shutdown" case (that path is exercised by
-        // start() unconditionally regardless).
+        // Deliberately no thread.wait() here -- give the loop a moment to actually finish so
+        // mThread is in the "finished but unjoined" state start() must handle, without relying on
+        // start()'s own internal wait to also cover the "still mid-shutdown" case (that path is
+        // exercised by start() unconditionally regardless).
         std::this_thread::sleep_for( 50ms );
 
-        // Before the fix, this line would either be a no-op (mThread.joinable() was true, so the old
-        // guard clause returned immediately) or -- if that guard had been naively removed instead of
-        // properly fixed -- overwrite a joinable std::thread and call std::terminate(), aborting the
-        // whole test process rather than failing gracefully. That abort *is* the failure signal here.
+        // Before the fix, this line would either be a no-op (mThread.joinable() was true, so the
+        // old guard clause returned immediately) or -- if that guard had been naively removed
+        // instead of properly fixed -- overwrite a joinable std::thread and call std::terminate(),
+        // aborting the whole test process rather than failing gracefully. That abort *is* the
+        // failure signal here.
         thread.start();
         ASSERT_TRUE( waitUntilRunning( thread ) );
 
@@ -2502,15 +2553,16 @@ namespace
     //   1. an auto-adopted dummy Thread, destroyed at native thread exit (thread_local teardown);
     //   2. an explicit, user-owned Thread, destroyed whenever the user chooses.
     //
-    // Fixed by adopting Qt's model: affinity is now held as a shared_ptr<ThreadData> (which outlives
-    // its Thread) rather than a Thread*, and ~Thread() nulls the back-pointer -- so thread() reports
-    // nullptr instead of dangling. Mirrors QObjectPrivate::threadData (a refcounted QThreadData*,
-    // never a QThread*) plus ~QThread()'s `d->data->thread.storeRelease(nullptr)`.
+    // Fixed by adopting Qt's model: affinity is now held as a shared_ptr<ThreadData> (which
+    // outlives its Thread) rather than a Thread*, and ~Thread() nulls the back-pointer -- so
+    // thread() reports nullptr instead of dangling. Mirrors QObjectPrivate::threadData (a
+    // refcounted QThreadData*, never a QThread*) plus ~QThread()'s
+    // `d->data->thread.storeRelease(nullptr)`.
     //
     // Both tests below need AddressSanitizer to fail loudly if they regress: the defect is a
-    // use-after-free read of a few bytes inside a freed allocation, which is not guaranteed to crash
-    // or produce an observably wrong result without a sanitizer's poisoning (this project's debug
-    // builds enable it by default).
+    // use-after-free read of a few bytes inside a freed allocation, which is not guaranteed to
+    // crash or produce an observably wrong result without a sanitizer's poisoning (this project's
+    // debug builds enable it by default).
     // ---------------------------------------------------------------------------------------------
 
     /**
@@ -2591,8 +2643,8 @@ namespace
     }
 
     // ---------------------------------------------------------------------------------------------
-    // Defect (FIXED): the queued-connection path used to resolve the receiver's affinity Thread into
-    // a RAW Thread* and then, a few statements later, call ctxThread->post() on it:
+    // Defect (FIXED): the queued-connection path used to resolve the receiver's affinity Thread
+    // into a RAW Thread* and then, a few statements later, call ctxThread->post() on it:
     //
     //     Thread* ctxThread = ctxData->thread();      // (1) non-null here
     //     ... copy the emitted arguments ...
@@ -2601,9 +2653,9 @@ namespace
     // The captured shared_ptr<ThreadData> kept the ThreadData alive, but NOT the Thread: if another
     // thread destroyed that Thread between (1) and (2), ~Thread() only nulled the ThreadData
     // back-pointer -- the raw ctxThread already loaded at (1) then dangled, and post() at (2) was a
-    // heap-use-after-free. The existing ExplicitThreadDestroyedWhileObjectStillReferencesIt test does
-    // NOT catch this: it destroys the Thread and only THEN emits single-threaded, so thread() reads
-    // nullptr and takes the direct path -- it never holds a stale non-null Thread* across a
+    // heap-use-after-free. The existing ExplicitThreadDestroyedWhileObjectStillReferencesIt test
+    // does NOT catch this: it destroys the Thread and only THEN emits single-threaded, so thread()
+    // reads nullptr and takes the direct path -- it never holds a stale non-null Thread* across a
     // concurrent destruction.
     //
     // Fixed by adopting Qt6's model: the event mailbox (task queue + its mutex/condvar/accepting
@@ -2635,8 +2687,8 @@ namespace
     PostRaceControl* gPostRace = nullptr;
 
     //! Its copy constructor is invoked by connectImpl's queued path precisely between resolving the
-    //! receiver's affinity and posting to it. It reports that it is in the window, then blocks until
-    //! the test has destroyed the Thread -- turning the race into a deterministic sequence.
+    //! receiver's affinity and posting to it. It reports that it is in the window, then blocks
+    //! until the test has destroyed the Thread -- turning the race into a deterministic sequence.
     struct WindowProbe
     {
         WindowProbe() = default;

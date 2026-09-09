@@ -126,12 +126,12 @@ namespace QtLikeSignal
             }
         }
 
-        // Posted with mDispatcherMutex released: postEvent() ends in wakeWaiter(), which may run the
-        // thread's wake callback -- user code, free to call back in here. postEvent() deletes an event
-        // it refuses, so nothing leaks either way.
+        // Posted with mDispatcherMutex released: postEvent() ends in wakeWaiter(), which may run
+        // the thread's wake callback -- user code, free to call back in here. postEvent() deletes
+        // an event it refuses, so nothing leaks either way.
         for( const ParkedEvent& event : parked )
         {
-            installed->postEvent( event.mReceiver, event.mEvent );
+            installed->postEventUnconditionally( event.mReceiver, event.mEvent, event.mPriority );
         }
     }
 
@@ -139,7 +139,8 @@ namespace QtLikeSignal
     std::shared_ptr<AbstractEventDispatcher> ThreadData::dispatcherOrPark
         (
         Object* aReceiver,  //!< The event's receiver.
-        Event* aEvent       //!< The event; ownership passes here only when it is parked.
+        Event* aEvent,      //!< The event; ownership passes here only when it is parked.
+        int aPriority       //!< Rank to hold it at until a dispatcher exists.
         )
     {
         std::lock_guard<std::mutex> lock( mDispatcherMutex );
@@ -147,7 +148,7 @@ namespace QtLikeSignal
         {
             return mDispatcher;
         }
-        mParkedEvents.push_back( { aReceiver, aEvent } );
+        mParkedEvents.push_back( { aReceiver, aEvent, aPriority } );
         return nullptr;
     }
 

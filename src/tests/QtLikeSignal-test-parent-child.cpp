@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! GoogleTest suite for QtLikeSignal::Object's parent-child relationship.
@@ -14,6 +17,7 @@
 #include "QtLikeSignal/Object.hpp"
 #include "QtLikeSignal/Signal.hpp"
 #include "QtLikeSignal/Thread.hpp"
+#include "QtLikeSignal/Timer.hpp"
 #include <algorithm>
 #include <mutex>
 #include <condition_variable>
@@ -74,6 +78,34 @@ namespace
         }
 
         virtual ~CountedChild() override
+        {
+            --mAliveCount;
+        }
+
+    private:
+        int& mAliveCount;
+    };
+
+    //! Attaches through the base constructor's parent argument, and counts itself.
+    //!
+    //! Separate from CountedChild, which calls setParent() in its own body -- so a test written
+    //! against that one exercises the path every other case here already covers, and never touches
+    //! Object( Object* ) at all. This forwards, which is the whole point of it.
+    class ConstructedChild : public Object
+    {
+    public:
+        ConstructedChild
+            (
+            int& aAliveCount,   //!< Incremented on construction, decremented on destruction.
+            Object* aParent     //!< Parent, handed straight to the base constructor.
+            )
+            : Object( aParent )
+            , mAliveCount( aAliveCount )
+        {
+            ++mAliveCount;
+        }
+
+        virtual ~ConstructedChild() override
         {
             --mAliveCount;
         }
@@ -316,8 +348,8 @@ namespace
     //! A child whose constructor builds a subtree of its own and then throws.
     //!
     //! The Object base is fully constructed by the time the body runs, so ~Object() runs on the way
-    //! out even though ~ThrowingChild() does not -- and that is what has to destroy the grandchildren
-    //! already attached. Attach-as-you-build is only safe if that holds.
+    //! out even though ~ThrowingChild() does not -- and that is what has to destroy the
+    //! grandchildren already attached. Attach-as-you-build is only safe if that holds.
     class ThrowingChild : public Object
     {
     public:
@@ -535,6 +567,34 @@ TEST( ParentChildTest, AChildDestructorMayDeleteASibling )
     }
 
     EXPECT_EQ( aliveCount, 0 ) << "a sibling-deleting destructor left something behind.";
+}
+
+//! The same, with a sibling still to come after the one that was deleted out from under the walk.
+//!
+//! **The case above cannot reach this.** attachToParent() prepends, so attaching victim, killer,
+//! third leaves the list as [third, killer, victim] and the victim is its tail -- deleting it
+//! empties the list, the walk sees null and stops, and whether it could have *continued* past a
+//! mid-list deletion is never asked.
+//!
+//! Attaching in the other order puts the victim in the middle, so the walk has to carry on to a
+//! survivor whose link the victim was holding a moment earlier.
+TEST( ParentChildTest, TeardownContinuesPastASiblingDeletedMidWalk )
+{
+    int aliveCount = 0;
+    {
+        Object parent;
+
+        // Prepending means the list ends up [killer, victim, survivor].
+        ( void )new CountedChild( aliveCount, &parent );
+        Object* victim = new CountedChild( aliveCount, &parent );
+        ( void )new SiblingKiller( &parent, aliveCount, victim );
+
+        ASSERT_EQ( parent.childCount(), 3u );
+        ASSERT_EQ( aliveCount, 3 );
+    }
+
+    EXPECT_EQ( aliveCount, 0 )
+        << "teardown stopped at the hole left by a sibling deleted from the middle of the list.";
 }
 
 //! A child destructor cannot attach a new child to the parent that is destroying it.
@@ -822,8 +882,8 @@ TEST( ParentChildTest, MovingAParentMovesTheWholeSubtree )
 //! A child cannot be moved on its own; the parent has to be moved instead.
 //!
 //! Qt refuses this too (qobject.cpp:1715). Without it a parent and a child could end up in
-//! different threads, and the child's links -- which are deliberately unguarded, because the tree is
-//! thread-confined -- would be reachable from both.
+//! different threads, and the child's links -- which are deliberately unguarded, because the tree
+//! is thread-confined -- would be reachable from both.
 TEST( ParentChildTest, AChildCannotBeMovedOnItsOwn )
 {
     int aliveCount = 0;
@@ -876,8 +936,9 @@ TEST( ParentChildTest, ADetachedChildMayBeMoved )
 //! A parent in another thread is refused, and the existing parent is kept.
 //!
 //! The point of departure from Qt, which refuses the same link (qobject.cpp:2341) but leaves the
-//! object with **no** parent at all -- neither honouring the request nor keeping the previous state,
-//! so a caller that does not read stderr silently leaks whatever the old parent was going to free.
+//! object with **no** parent at all -- neither honouring the request nor keeping the previous
+//! state, so a caller that does not read stderr silently leaks whatever the old parent was going to
+//! free.
 TEST( ParentChildTest, ACrossThreadParentIsRefusedAndTheOldParentKept )
 {
     int aliveCount = 0;
@@ -899,10 +960,85 @@ TEST( ParentChildTest, ACrossThreadParentIsRefusedAndTheOldParentKept )
 
     EXPECT_EQ( child->parent(), &originalParent ) << "the refused re-parent orphaned the child.";
     EXPECT_EQ( originalParent.childCount(), 1u );
-    EXPECT_EQ( stranger.childCount(), 0u );
 
+    // stranger lives on the worker, and childCount() is documented as not thread-safe -- the caller
+    // must be on the object's own thread. The worker never touches stranger's child list, so asking
+    // from here would not race today; it would be a test teaching the wrong habit, and one the next
+    // change to the parent-child code could make real. Stop the worker first and the object is this
+    // thread's again.
     worker.quit();
     worker.wait();
+
+    EXPECT_EQ( stranger.childCount(), 0u );
+}
+
+//! The constructor's parent argument attaches, and the parent then owns the child.
+//!
+//! The constructors have taken a parent for as long as the parent-child feature has existed, and no
+//! test had ever passed one: every case reached the tree through setParent() or createChild(). The
+//! shortest path into the feature was the only untested one.
+TEST( ParentChildTest, TheConstructorAttachesToItsParent )
+{
+    int aliveCount = 0;
+
+    {
+        Object parent;
+
+        // On the heap and never deleted here: the parent owns it from this line, and not having to
+        // delete it is what the ownership is for.
+        ConstructedChild* child = new ConstructedChild( aliveCount, &parent );
+
+        EXPECT_EQ( child->parent(), &parent ) << "the constructor did not attach.";
+        EXPECT_EQ( parent.childCount(), 1u );
+        EXPECT_EQ( aliveCount, 1 );
+    }
+
+    EXPECT_EQ( aliveCount, 0 ) << "the parent did not destroy a child built with its address.";
+}
+
+//! A Timer built with a parent is owned by it, like any other object.
+TEST( ParentChildTest, ATimerConstructedWithAParentIsOwnedByIt )
+{
+    Object parent;
+
+    Timer* timer = new Timer( &parent );
+
+    EXPECT_EQ( timer->parent(), &parent ) << "Timer's constructor did not attach.";
+    EXPECT_EQ( parent.childCount(), 1u );
+
+    // Not deleted here. The parent takes it, and LeakSanitizer is what would say otherwise.
+}
+
+//! A parent in another thread is refused by the constructor, leaving the object parentless.
+//!
+//! A constructor cannot report a failure, so it does what setParent() does: warns, and leaves the
+//! object usable but unattached. That is Qt's behaviour in check_parent_thread() too.
+TEST( ParentChildTest, TheConstructorRefusesAParentInAnotherThread )
+{
+    int aliveCount = 0;
+    Thread worker;
+    worker.start();
+    ASSERT_TRUE( waitUntilRunning( worker ) );
+
+    Object stranger;
+    ASSERT_TRUE( stranger.moveToThread( &worker ) );
+
+    {
+        ConstructedChild orphan( aliveCount, &stranger );
+
+        EXPECT_EQ( orphan.parent(), nullptr )
+            << "a cross-thread parent was accepted by the constructor.";
+        EXPECT_EQ( aliveCount, 1 ) << "the object should still be alive and usable.";
+    }
+
+    EXPECT_EQ( aliveCount, 0 );
+
+    // Asked after the worker has stopped, for the reason given in
+    // ACrossThreadParentIsRefusedAndTheOldParentKept.
+    worker.quit();
+    worker.wait();
+
+    EXPECT_EQ( stranger.childCount(), 0u );
 }
 
 //! createChild() inherits the refusal, since it attaches through setParent().
@@ -918,10 +1054,13 @@ TEST( ParentChildTest, CreateChildRefusesAParentInAnotherThread )
 
     EXPECT_EQ( Object::createChild<CountedChild>( &stranger, aliveCount ), nullptr );
     EXPECT_EQ( aliveCount, 0 ) << "the refused child was leaked instead of freed.";
-    EXPECT_EQ( stranger.childCount(), 0u );
 
+    // Asked after the worker has stopped, for the reason given in
+    // ACrossThreadParentIsRefusedAndTheOldParentKept.
     worker.quit();
     worker.wait();
+
+    EXPECT_EQ( stranger.childCount(), 0u );
 }
 
 //! A queued call to a moved child is delivered on the thread the subtree moved to.
@@ -1022,6 +1161,23 @@ TEST( ParentChildTest, FindChildrenCollectsEveryMatch )
     EXPECT_EQ( root.findChildren<OtherKind>().size(), 1u );
     EXPECT_EQ( root.findChildren<Object>().size(), 3u );
     EXPECT_TRUE( root.findChildren<OtherKind>( "absent" ).empty() );
+
+    // A name that selects, which nothing checked before: every name assertion here was either the
+    // default empty one or a miss, so findChildren() could have ignored the argument entirely and
+    // this test would still have passed. Two of the three share a name, so the answer also shows
+    // the filter narrowing rather than merely matching.
+    branch->setObjectName( "tagged" );
+    Object* second = Object::createChild<CountedChild>( &root, aliveCount );
+    ASSERT_NE( second, nullptr );
+    second->setObjectName( "tagged" );
+    ( void )Object::createChild<CountedChild>( &root, aliveCount )->setObjectName( "untagged" );
+
+    const std::vector<CountedChild*> tagged = root.findChildren<CountedChild>( "tagged" );
+    EXPECT_EQ( tagged.size(), 2u ) << "findChildren() did not filter on the name it was given.";
+    for( const CountedChild* child : tagged )
+    {
+        EXPECT_EQ( child->objectName(), "tagged" );
+    }
 }
 
 //! Both are empty on an object with no children, and neither creates an extras box to find out.

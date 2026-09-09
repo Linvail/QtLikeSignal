@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! X11Application implementation: the display connection, its registration with the loop, and the
@@ -11,6 +14,8 @@
 #include "QtLikeSignal/EventDispatcherLinux.hpp"
 #include "QtLikeSignal/Thread.hpp"
 
+#include "QtLikeSignal/Log.hpp"
+
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -20,6 +25,9 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
+
+//! This demo's category, declared in X11Application.hpp so main.cpp can report on it too.
+QTLIKESIGNAL_DEFINE_LOG_CATEGORY( gLogDemo, "demo.x11", "DX11" )
 
 // Xlib defines None as a bare `0L` macro, and MouseEvent::Button has a None enumerator; the two
 // cannot coexist. X11Application.hpp is included above, before the macro exists, so the enumerator
@@ -163,9 +171,9 @@ namespace QtLikeSignalDemo
             = currentLinuxDispatcher();
         if( !dispatcher )
         {
-            std::fprintf( stderr,
-                "X11Application: this thread is not running EventDispatcherLinux, so the display "
-                "connection has no poll() set to join. Construct the application first.\n" );
+            qCWarning( gLogDemo )
+                << "X11Application: this thread is not running EventDispatcherLinux, so the display"
+                << "connection has no poll() set to join. Construct the application first.";
             return false;
         }
 
@@ -173,8 +181,9 @@ namespace QtLikeSignalDemo
         if( display == nullptr )
         {
             const char* const wanted = std::getenv( "DISPLAY" );
-            std::fprintf( stderr, "X11Application: XOpenDisplay() failed (DISPLAY=%s)\n",
-                wanted != nullptr ? wanted : "<unset>" );
+            qCCritical( gLogDemo )
+                << "X11Application: XOpenDisplay() failed; DISPLAY was"
+                << ( wanted != nullptr ? wanted : "<unset>" );
             return false;
         }
         mDisplay = display;
@@ -186,7 +195,7 @@ namespace QtLikeSignalDemo
             BlackPixel( display, screen ), BlackPixel( display, screen ) );
         if( mWindow == 0 )
         {
-            std::fprintf( stderr, "X11Application: XCreateSimpleWindow() failed\n" );
+            qCWarning( gLogDemo ) << "X11Application: XCreateSimpleWindow() failed";
             return false;
         }
         mWidth  = aWidth;
@@ -212,7 +221,7 @@ namespace QtLikeSignalDemo
         mGraphicsContext = XCreateGC( display, mWindow, 0, nullptr );
         if( mGraphicsContext == nullptr )
         {
-            std::fprintf( stderr, "X11Application: XCreateGC() failed\n" );
+            qCWarning( gLogDemo ) << "X11Application: XCreateGC() failed";
             return false;
         }
 
@@ -228,8 +237,9 @@ namespace QtLikeSignalDemo
                 pumpDisplay( aEvents );
             } ) )
         {
-            std::fprintf( stderr, "X11Application: registerEventSource( %d ) was refused\n",
-                mConnectionFd );
+            qCWarning( gLogDemo )
+                << "X11Application: registerEventSource() was refused for the display connection"
+                << mConnectionFd;
             mConnectionFd = -1;
             return false;
         }
@@ -270,8 +280,9 @@ namespace QtLikeSignalDemo
         {
             // The server went away. Reading further would hit Xlib's I/O error handler, which
             // calls exit() and would skip every destructor in the program.
-            std::fprintf( stderr, "X11Application: the display connection dropped (revents 0x%x); "
-                "quitting\n", static_cast<unsigned int>( aEvents ) );
+            qCCritical( gLogDemo )
+                << "X11Application: the display connection dropped, so this is quitting; revents"
+                << QtLikeSignal::logHex( static_cast<unsigned int>( aEvents ) );
             QtLikeSignal::CoreApplication::quit();
             return;
         }

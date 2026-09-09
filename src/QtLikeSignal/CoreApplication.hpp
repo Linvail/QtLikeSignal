@@ -3,10 +3,10 @@
 
 //! @file
 //!
-//! QtLikeSignal::CoreApplication -- mimics Qt's QCoreApplication. It adopts the program's main thread as a
-//! Thread so Objects created on it gain thread affinity, and runs an event loop (exec()) that
-//! dispatches both queued Object slot invocations and external events through a pluggable
-//! dispatcher. The class documentation below carries the usage example.
+//! QtLikeSignal::CoreApplication -- mimics Qt's QCoreApplication. It adopts the program's main
+//! thread as a Thread so Objects created on it gain thread affinity, and runs an event loop
+//! (exec()) that dispatches both queued Object slot invocations and external events through a
+//! pluggable dispatcher. The class documentation below carries the usage example.
 
 #ifndef QT_LIKE_SIGNAL_COREAPPLICATION_HPP
 #define QT_LIKE_SIGNAL_COREAPPLICATION_HPP
@@ -108,8 +108,8 @@ namespace QtLikeSignal
         //! Returned a bool, and [[nodiscard]], for the reason Thread::post() is: this forwards to
         //! it, so a void return here would have swallowed exactly the answer that guard exists to
         //! surface, one layer above it. The doc used to say the task "is dropped if the main thread
-        //! has no dispatcher, exactly as Thread::post() reports" -- which was true of Thread::post()
-        //! and not of this, because this reported nothing to anybody.
+        //! has no dispatcher, exactly as Thread::post() reports" -- which was true of
+        //! Thread::post() and not of this, because this reported nothing to anybody.
         [[nodiscard]] static bool post
             (
             std::function<void()> aTask

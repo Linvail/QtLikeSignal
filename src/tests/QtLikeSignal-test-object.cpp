@@ -404,8 +404,8 @@ TEST( ObjectTest, TimerRequestsThatAreRefused )
 
 //! Tests connect() with member function slot when receiver lives in another thread.
 //!
-//! Verifies that Object::connect() with ConnectionType::Auto or ConnectionType::Queued routes signal
-//! emissions across thread boundaries into the receiver's thread event loop for execution.
+//! Verifies that Object::connect() with ConnectionType::Auto or ConnectionType::Queued routes
+//! signal emissions across thread boundaries into the receiver's thread event loop for execution.
 TEST( ObjectTest, CrossThreadMemberFunctionConnection )
 {
     Thread workerThread;

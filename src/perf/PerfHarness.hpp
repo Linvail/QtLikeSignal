@@ -210,9 +210,9 @@ namespace PerfHarness
             libraries[0].c_str(), libraries[0].c_str() );
     }
 
-    // Iteration counts, shared so every library does the same amount of work. The queued scenario is
-    // smaller because each in-flight emit holds a heap allocation until the receiving loop drains
-    // it, so a large count measures allocator behaviour as much as dispatch.
+    // Iteration counts, shared so every library does the same amount of work. The queued scenario
+    // is smaller because each in-flight emit holds a heap allocation until the receiving loop
+    // drains it, so a large count measures allocator behaviour as much as dispatch.
     constexpr int kConnectOps = 20000;
     constexpr int kDirectOps  = 1000000;
     constexpr int kQueuedOps  = 200000;
@@ -230,6 +230,48 @@ namespace PerfHarness
     // library's version costs over the hand-rolled one.
     constexpr int kBlockingOps = kQueuedRoundTripOps;
 
+    // The deferred-call scenarios post without waiting, and are given kQueuedOps for the same
+    // reason that row is: what they compare is the cost of *making* a deferred call -- the event,
+    // the queue insertion, the dispatch -- across payloads that differ. Pacing them round-trip
+    // instead would put a thread wake in front of every operation, and a wake is two orders of
+    // magnitude dearer than the difference being looked for, so every row would report the wake.
+    constexpr int kDeferredCallOps = kQueuedOps;
+
+    // Deferred calls made while counting allocations. Two orders of magnitude smaller than
+    // kDeferredCallOps because nothing there is timed -- this count only has to be large enough
+    // that the one-off allocations behind the first call round away.
+    constexpr int kDeferredCallAllocOps = 200;
+
+    // How many timers the idle-pass scenario keeps registered, and none of them due. Two orders of
+    // magnitude between the ends, so a per-pass cost that grows with the number of registered
+    // timers shows up as growth in the table rather than as a number with nothing to compare
+    // against.
+    constexpr int kIdlePassTimerCounts[] = { 1, 16, 256 };
+
+    // Passes of the loop timed per measurement. Each is a lock, a comparison against the next
+    // deadline, and the bookkeeping a pass does whether or not it dispatches anything, so this is
+    // large enough to swamp the clock and small enough to keep the whole scenario under a second
+    // per library.
+    constexpr int kIdlePassOps = 100000;
+
+    // The interval every timer in that scenario is given: an hour, so none of them can come due
+    // during a run however slow the machine. The scenario is the loop finding it has nothing to do.
+    constexpr int kIdlePassIntervalMs = 3600000;
+
+    //! Names the idle-pass row for @p aTimers timers, so every library labels it identically.
+    //!
+    //! A function rather than three literals per library, because the rows only line up in the
+    //! summary table if the strings match exactly, and three copies of a string in two files is
+    //! how they stop matching.
+    inline std::string idlePassScenario
+        (
+        int aTimers   //!< Timers registered for that row.
+        )
+    {
+        return "idle pass, " + std::to_string( aTimers )
+               + ( aTimers == 1 ? " timer" : " timers" );
+    }
+
     // Connections resident on one signal before the disconnect scenario ends them one by one.
     // Deliberately the same as kConnectOps, so the connect() and disconnect() rows describe the two
     // halves of the same connection's life and can be read against each other directly.
@@ -238,8 +280,8 @@ namespace PerfHarness
     //! Grows and faults in the heap the benchmarks will need, before anything is measured.
     //!
     //! Running each test in its own process is not the fix. That makes every library cold rather
-    //! than one of them, and the cold penalty is not uniform: ours is about 1.7x, Qt 6's about 1.1x,
-    //! so the ratios move anyway. The state to settle into is warm, because it is the state a
+    //! than one of them, and the cold penalty is not uniform: ours is about 1.7x, Qt 6's about
+    //! 1.1x, so the ratios move anyway. The state to settle into is warm, because it is the state a
     //! process is in by the time any of this code runs in earnest.
     //!
     //! The blocks are written to, not merely allocated. Reserving address space is cheap; it is the
@@ -297,8 +339,8 @@ namespace PerfHarness
     //! QtLikeSignal measurements, callable from the Qt translation unit.
     //!
     //! Declared here and defined in test_QtLikeSignal_Regression.cpp because the timing guards
-    //! compare libraries and have to live somewhere that can measure both -- and no single
-    //! file can: Qt defines `emit` as an empty macro, so a translation unit that includes Qt headers
+    //! compare libraries and have to live somewhere that can measure both -- and no single file
+    //! can: Qt defines `emit` as an empty macro, so a translation unit that includes Qt headers
     //! cannot also call `signal.emit( 1 )`. This header is the seam, and contains no `emit` for the
     //! same reason.
     namespace Measure

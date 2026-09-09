@@ -35,6 +35,26 @@ namespace QtLikeSignal
     //!   QtLikeSignal::Object::connect( timer.getTimeout(), &receiver, &Receiver::onTick );
     //!   timer.start( 100 );   // every 100 ms, on the thread the timer lives in
     //! @endcode
+    //!
+    //! **Many things ticking together.** One Timer per thing that ticks is the obvious reading of
+    //! this class, and for a set of things sharing one cadence it is the expensive one: K timers at
+    //! the same interval are K registrations, K deadlines, K events and K dispatches every period,
+    //! where one would do. Nothing here folds them together -- there is no coarse-timer rule that
+    //! slides a deadline to meet its neighbours', as Qt::CoarseTimer does.
+    //!
+    //! Share one instead, and let the signal do the fan-out:
+    //!
+    //! @code
+    //!   Timer tick;                                  // one registration, one deadline
+    //!   Object::connect( tick.getTimeout(), &a, &Animation::step );
+    //!   Object::connect( tick.getTimeout(), &b, &Animation::step );
+    //!   tick.start( 33 );                            // 30 Hz, once, for both
+    //! @endcode
+    //!
+    //! The fan-out then costs one mutex, one snapshot of the slot list, and a call per slot, which
+    //! is what an emit costs anyway. Every receiver still runs on the timer's own thread and still
+    //! runs in connection order, so this is a cheaper spelling of the same behaviour rather than a
+    //! different one. Reach for a Timer each only where the cadences genuinely differ.
     class Timer : public Object
     {
     public:
@@ -67,6 +87,13 @@ namespace QtLikeSignal
             );
 
         int timerId() const;
+
+        //! @return milliseconds until this timer next fires, or -1 while it is not running.
+        //!
+        //! QTimer::remainingTime() with the same two answers. 0 means the deadline has passed and
+        //! the next pass of the loop will deliver it, which is also what an active timer on a
+        //! blocked loop reports for as long as the block lasts.
+        int remainingTime() const;
 
         //! Starts or restarts the timer with an interval of @p aMsec milliseconds.
         //!
@@ -149,9 +176,9 @@ namespace QtLikeSignal
 
         // Deliberately unsynchronised, matching QTimer, which has no locking of any kind. Every
         // member here is only ever touched from the timer's own thread: start()/stop() are
-        // thread-confined because they go through Object::startTimer()/killTimer(), and timerEvent()
-        // is delivered by that same thread's event loop. Adding a mutex would only paper over misuse
-        // that the thread-confinement rules already forbid.
+        // thread-confined because they go through Object::startTimer()/killTimer(), and
+        // timerEvent() is delivered by that same thread's event loop. Adding a mutex would only
+        // paper over misuse that the thread-confinement rules already forbid.
         int mInterval { 0 };         //!< The configured interval, in milliseconds.
 
         int mTimerId { -1 };         //!< The underlying Object timer id, or -1 if inactive.

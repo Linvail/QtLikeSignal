@@ -21,7 +21,9 @@
 #include <gtest/gtest.h>
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QEventLoop>
 #include <QtCore/QThread>
+#include <QtCore/QTimer>
 
 #include <atomic>
 #include <chrono>
@@ -136,8 +138,8 @@ TEST( Performance, Qt6_AutoEmitSameThread )
 
 //! Measures end-to-end cross-thread throughput: emit on this thread, receive on a worker's loop.
 //!
-//! Timed until the last message has actually been *received*, not merely posted, so this is the full
-//! queue-and-dispatch round trip rather than the cost of enqueueing.
+//! Timed until the last message has actually been *received*, not merely posted, so this is the
+//! full queue-and-dispatch round trip rather than the cost of enqueueing.
 TEST( Performance, Qt6_QueuedEmitCrossThread )
 {
     ASSERT_NE( QCoreApplication::instance(), nullptr )
@@ -204,8 +206,8 @@ TEST( Performance, Qt6_QueuedEmitCrossThread )
 //! measuring dispatch.
 //!
 //! The objection had real evidence behind it. Measured on Windows on 2026-08-26, Qt 6 delivered
-//! 99.8% of its events before its emit loop finished while QtLikeSignal delivered 77%, and Qt's entire
-//! cost sat in its emit loop -- total and emit-side agreed to within 0.4 ns/op.
+//! 99.8% of its events before its emit loop finished while QtLikeSignal delivered 77%, and Qt's
+//! entire cost sat in its emit loop -- total and emit-side agreed to within 0.4 ns/op.
 //!
 //! **This scenario was written to test that objection, and refutes it.** The emitter here waits for
 //! each delivery before making the next, so the queue holds at most one event, every emit pays a
@@ -320,6 +322,42 @@ TEST( Performance, Qt6_QueuedRoundTrip )
 
     worker.quit();
     worker.wait();
+}
+
+//! Measures one pass of the loop with QTimers registered and none of them due.
+//!
+//! The reference for the QtLikeSignal row of the same name, and the reason the timer path belongs
+//! in this table at all: Qt keeps its timer list ordered by deadline precisely so that the pass
+//! which finds nothing due is one comparison rather than a walk. A row here that stays flat across
+//! two orders of magnitude of T, next to one that does not, is the whole finding.
+TEST( Performance, Qt6_IdlePassWithTimers )
+{
+    for( const int timers : PerfHarness::kIdlePassTimerCounts )
+    {
+        // Parented to one object so the loop below owns every timer and no exit path can leak one.
+        QObject owner;
+        for( int i = 0; i < timers; ++i )
+        {
+            QTimer* const timer = new QTimer( &owner );
+
+            // An hour, so none of them can come due during the run. Precise rather than the default
+            // coarse type: a coarse timer is allowed to slide its deadline to meet its neighbours',
+            // which is a feature QtLikeSignal does not have and which would make this row measure a
+            // different thing at each T.
+            timer->setTimerType( Qt::PreciseTimer );
+            timer->start( PerfHarness::kIdlePassIntervalMs );
+        }
+
+        const double ns = PerfHarness::bestOf( 5, [&]()
+            {
+                return PerfHarness::timeLoop( PerfHarness::kIdlePassOps, []( int )
+                    {
+                        QCoreApplication::processEvents( QEventLoop::AllEvents );
+                    } );
+            } );
+
+        PerfHarness::record( PerfHarness::idlePassScenario( timers ), "Qt6", ns );
+    }
 }
 
 //! Measures ending a connection through its QMetaObject::Connection handle.
@@ -448,9 +486,9 @@ constexpr bool kOptimisedBuild =
 
     //! Fails if our direct emit falls a long way behind Qt 6's.
     //!
-    //! We are currently **faster** than Qt here -- about 24 ns against 29 -- having been 2.3x slower
-    //! before the in-house Signal replaced boost. The bar is 2x Qt, which is where we were when that
-    //! was considered a problem worth a document entry.
+    //! We are currently **faster** than Qt here -- about 24 ns against 29 -- having been 2.3x
+    //! slower before the in-house Signal replaced boost. The bar is 2x Qt, which is where we were
+    //! when that was considered a problem worth a document entry.
     TEST( PerformanceRegression, DirectEmitKeepsUpWithQt6 )
 {
     if( !kOptimisedBuild )

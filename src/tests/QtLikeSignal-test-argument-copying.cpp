@@ -6,8 +6,9 @@
 //! How many times a signal's arguments get copied on the way to a slot.
 //!
 //! This is a behavioural contract, not a micro-optimisation: a signal carrying anything bigger than
-//! an int pays these copies on every emit, per receiver. The counts are asserted exactly rather than
-//! bounded, so a regression shows up as a number rather than as a vague slowdown nobody notices.
+//! an int pays these copies on every emit, per receiver. The counts are asserted exactly rather
+//! than bounded, so a regression shows up as a number rather than as a vague slowdown nobody
+//! notices.
 
 #include <gtest/gtest.h>
 #include "QtLikeSignal/Object.hpp"

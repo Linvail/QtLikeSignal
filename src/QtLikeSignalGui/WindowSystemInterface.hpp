@@ -3,7 +3,8 @@
 
 //! @file
 //!
-//! QtLikeSignalGui::WindowSystemInterface -- the one funnel every window system reports input through.
+//! QtLikeSignalGui::WindowSystemInterface -- the one funnel every window system reports input
+//! through.
 
 #ifndef QT_LIKE_SIGNAL_GUI_WINDOWSYSTEMINTERFACE_HPP
 #define QT_LIKE_SIGNAL_GUI_WINDOWSYSTEMINTERFACE_HPP
@@ -18,23 +19,24 @@ namespace QtLikeSignalGui
     //!
     //! Modelled on Qt's QWindowSystemInterface, and public for the same reason Qt keeps its
     //! semi-public: **on two of the three platforms, the producer is not this library.** The Win32
-    //! backend calls these from inside its own window procedure, but on Wayland the external library
-    //! owns the seat and reports touch and pointer input through its own signals, so the few lines
-    //! of glue that forward those live in the application. Making this funnel public is what lets
-    //! that work without QtLikeSignalGui ever linking libwayland, boost, or the external library itself.
+    //! backend calls these from inside its own window procedure, but on Wayland the external
+    //! library owns the seat and reports touch and pointer input through its own signals, so the
+    //! few lines of glue that forward those live in the application. Making this funnel public is
+    //! what lets that work without QtLikeSignalGui ever linking libwayland, boost, or the external
+    //! library itself.
     //!
     //! **Delivery is synchronous.** Qt queues here and flushes later, because a native event can
     //! reach it on a stack where running application code would be unsafe. This library has no such
     //! case: the Win32 window procedure runs inside EventDispatcherWin32::processPlatformEvents(),
-    //! and a Linux event-source callback runs inside EventDispatcherLinux::processEvents(), so every
-    //! caller is already inside a dispatch pass. A queue would add a hop and no safety.
+    //! and a Linux event-source callback runs inside EventDispatcherLinux::processEvents(), so
+    //! every caller is already inside a dispatch pass. A queue would add a hop and no safety.
     //!
-    //! **There is deliberately no event compression.** Windows already coalesces the two floods that
-    //! matter -- it synthesises at most one pending WM_MOUSEMOVE and merges the update region into a
-    //! single WM_PAINT -- so a compression layer here would be inert on the only platform that
-    //! currently produces events. X11 does need one, since MotionNotify and Expose genuinely pile up
-    //! on the connection, and it belongs with that backend when it lands rather than being written
-    //! speculatively now.
+    //! **There is deliberately no event compression.** Windows already coalesces the two floods
+    //! that matter -- it synthesises at most one pending WM_MOUSEMOVE and merges the update region
+    //! into a single WM_PAINT -- so a compression layer here would be inert on the only platform
+    //! that currently produces events. X11 does need one, since MotionNotify and Expose genuinely
+    //! pile up on the connection, and it belongs with that backend when it lands rather than being
+    //! written speculatively now.
     //!
     //! Every function must be called from the thread running the event loop; the global state below
     //! is plain, not atomic, for that reason.
@@ -123,7 +125,57 @@ namespace QtLikeSignalGui
             int aHeight
             );
 
+        //! Reports that the window's device-pixel ratio changed.
+        //!
+        //! Called by a backend that has learnt a new scale for the window -- a Wayland surface
+        //! that entered an output with a different wl_output scale, a Win32 window that received
+        //! WM_DPICHANGED. A backend with no scaling layer never calls it and the window keeps 1.0.
+        //!
+        //! Silently ignores a ratio that is not positive, and a value equal to the one already
+        //! reported: a backend is free to call this whenever it re-reads the scale, and the
+        //! filtering belongs here rather than in four backends.
+        static void handleDevicePixelRatioChanged
+            (
+            Window* aWindow,
+            double aRatio
+            );
+
+        //! Records the window's starting device-pixel ratio, without reporting a change.
+        //!
+        //! For a backend that knows the scale while it is still building the window. Nothing can
+        //! be connected to a window that has not been returned yet, so an emission there would
+        //! reach nobody -- and it would make getDevicePixelRatioChanged() mean "changed, except
+        //! for the one nobody could hear", which is the kind of exception a caller finds out
+        //! about from a bug rather than from the header.
+        //!
+        //! **Only during creation.** Anything later is a change and belongs in
+        //! handleDevicePixelRatioChanged(), which reports it. Ignores a ratio that is not positive.
+        static void setInitialDevicePixelRatio
+            (
+            Window* aWindow,
+            double aRatio
+            );
+
         static void handleExpose
+            (
+            Window* aWindow
+            );
+
+        //! Reports that the display is ready to be given another frame.
+        //!
+        //! The frame clock's one entry point. A backend with a vsync source calls it from that
+        //! source -- on Wayland, from the wl_surface.frame callback. A backend without one never
+        //! calls it, and a window asking for Display pacing there simply keeps being updated
+        //! immediately.
+        //!
+        //! **Also for an application that owns presentation itself.** The DRM backend here adopts a
+        //! surface some other library set up and never sees the page flip, so whoever does own the
+        //! flip is the only thing that can say a frame was presented. This is how it says so.
+        //!
+        //! Delivers at most one update, to a window that asked for one and is waiting. A window
+        //! with nothing pending is left alone rather than woken: a frame clock reports that the
+        //! display is *ready*, which is not a reason to draw.
+        static void handleFrameReady
             (
             Window* aWindow
             );
@@ -178,8 +230,8 @@ namespace QtLikeSignalGui
 
         //! The window that received the most recent touch down.
         //!
-        //! wl_touch reports frame and cancel against the seat, not against a surface, so there is no
-        //! window on those two events to route by. Qt tracks the same thing as Touch::mFocus. A
+        //! wl_touch reports frame and cancel against the seat, not against a surface, so there is
+        //! no window on those two events to route by. Qt tracks the same thing as Touch::mFocus. A
         //! frame signal that did not say whose points had settled would not be usable.
         static Window* sTouchFocusWindow;
     };

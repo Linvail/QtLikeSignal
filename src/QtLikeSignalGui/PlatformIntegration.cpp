@@ -28,6 +28,9 @@
     #include "QtLikeSignalGui/PlatformIntegrationWayland.hpp"
 #endif
 
+#include "QtLikeSignal/Log.hpp"
+#include "QtLikeSignalGui/LogCategories.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -102,9 +105,10 @@ namespace QtLikeSignalGui
                 return PlatformType::Drm;
             }
 
-            std::fprintf( stderr,
-                "QtLikeSignalGui: \"%s\" is not a platform this library knows; expected one of windows, "
-                "x11, wayland, drm\n", aName.c_str() );
+            qCWarning( gLogGui )
+                <<
+                "QtLikeSignalGui: not a platform this library knows; expected one of windows, x11,"
+                << "wayland, drm. Asked for" << aName;
 
             return PlatformType::Unknown;
         }
@@ -201,8 +205,8 @@ namespace QtLikeSignalGui
     //! Creates the backend for @p aPlatform.
     //!
     //! Statically linked rather than loaded, so a platform this binary does not have is reported
-    //! here and the caller carries on without a window system instead of the process dying. Qt calls
-    //! qFatal() at this point; a library that also serves headless programs should not.
+    //! here and the caller carries on without a window system instead of the process dying. Qt
+    //! calls qFatal() at this point; a library that also serves headless programs should not.
     //!
     //! A switch rather than a chain of comparisons, so adding a platform to the enum makes every
     //! compiler that warns on an unhandled enumerator point straight at this function.
@@ -249,14 +253,16 @@ namespace QtLikeSignalGui
 
         if( aPlatform == PlatformType::Unknown )
         {
-            std::fprintf( stderr,
-                "QtLikeSignalGui: no window system found; pass -p x11, -p wayland or -p drm, or set "
-                "QTLIKESIGNAL_PLATFORM\n" );
+            qCWarning( gLogGui )
+                <<
+                "QtLikeSignalGui: no window system found; pass -p x11, -p wayland or -p drm, or set"
+                << "QTLIKESIGNAL_PLATFORM";
         }
         else
         {
-            std::fprintf( stderr, "QtLikeSignalGui: no \"%s\" backend is built into this binary\n",
-                platformTypeName( aPlatform ) );
+            qCWarning( gLogGui )
+                << "QtLikeSignalGui: this backend is not built into this binary. Backend"
+                << platformTypeName( aPlatform );
         }
 
         return nullptr;
@@ -308,6 +314,30 @@ namespace QtLikeSignalGui
     //! system has: Wayland has no server-side menus at all, and on X11 one is drawn by the client.
     //! Requiring each backend to write an empty override would only spread the same silence across
     //! more files. Window::setMenu() documents the reach.
+    //! @return false. Most backends have nothing to pace against. See the declaration.
+    bool PlatformIntegration::hasFrameClock() const
+    {
+        return false;
+    }
+
+    //! Does nothing. A backend with no frame clock never parks an update. See the declaration.
+    void PlatformIntegration::deliverPacedUpdate
+        (
+        Window* aWindow   //!< Window whose display is ready.
+        )
+    {
+        ( void )aWindow;
+    }
+
+    //! Does nothing, for the same reason as deliverPacedUpdate(). See the declaration.
+    void PlatformIntegration::releasePacedUpdate
+        (
+        Window* aWindow   //!< Window whose pacing was switched off.
+        )
+    {
+        ( void )aWindow;
+    }
+
     void PlatformIntegration::setMenu
         (
         Window* aWindow,     //!< Window to attach the menu to.

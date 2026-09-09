@@ -4,28 +4,27 @@
 import os
 import re
 
-#: Environment variables that say where these two dependencies live.
-#:
-#: Both are names the wider world already uses -- BOOST_ROOT is what CMake's FindBoost and b2 read,
-#: so a machine that already has it set needs nothing further -- rather than a QTLIKESIGNAL_-prefixed
-#: name of our own. That prefix belongs to the library's *runtime* switches; these are build-time
-#: locations and no program this project produces ever reads them.
+# : Environment variables that say where these two dependencies live. : : Both are names the wider
+# world already uses -- BOOST_ROOT is what CMake's FindBoost and b2 read, : so a machine that
+# already has it set needs nothing further -- rather than a QTLIKESIGNAL_-prefixed : name of our
+# own. That prefix belongs to the library's *runtime* switches; these are build-time : locations and
+# no program this project produces ever reads them.
 QT6_ROOT_VARIABLE = "QT6_ROOT"
 BOOST_ROOT_VARIABLE = "BOOST_ROOT"
 
-#: Where Qt 6 is looked for when nothing overrides it.
-#:
-#: On Linux one prefix, because the benchmarks want the locally built Qt rather than a distribution
-#: one. On Windows the installer roots, which hold one directory per version, so the version is
-#: discovered rather than pinned -- this machine has 6.11.2 on Windows and 6.11.1 on Linux, and
-#: pinning either would break the other.
+# : Where Qt 6 is looked for when nothing overrides it.
+# :
+# : On Linux one prefix, because the benchmarks want the locally built Qt rather than a distribution
+# : one. On Windows the installer roots, which hold one directory per version, so the version is
+# : discovered rather than pinned -- this machine has 6.11.2 on Windows and 6.11.1 on Linux, and
+# : pinning either would break the other.
 QT6_DEFAULT_ROOTS = {
     "linux": ["/usr/local/Qt-6.11.1"],
     "win32": ["H:/Qt", "C:/Qt"],
 }
 
-#: Where boost's headers are looked for when nothing overrides it. boost::signals2 is header-only,
-#: so this is a header path and nothing is ever linked from it.
+# : Where boost's headers are looked for when nothing overrides it. boost::signals2 is header-only,
+# : so this is a header path and nothing is ever linked from it.
 BOOST_DEFAULT_ROOTS = {
     "linux": ["/usr/include", "/usr/local/include"],
     "win32": ["H:/Projects-2026/boost_1_74_0", "C:/boost"],

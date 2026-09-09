@@ -20,8 +20,8 @@ namespace QtLikeSignal
     //!
     //! This is how a thread running our event loop also receives platform messages. Sources such as
     //! Wayland and X11 hand out a file descriptor that becomes readable when there is something to
-    //! read; register it with registerEventSource() and the loop will poll() it alongside everything
-    //! else, calling back when it is ready.
+    //! read; register it with registerEventSource() and the loop will poll() it alongside
+    //! everything else, calling back when it is ready.
     //!
     //! Deliberately **no helper thread**. It is tempting to have a second thread block on the
     //! platform descriptor and wake the main one, but poll() already waits on any number of
@@ -82,10 +82,12 @@ namespace QtLikeSignal
             unsigned long long mGeneration;
         };
 
-        //! Looks up a still-registered source by descriptor and generation, and copies its callback.
+        //! Looks up a still-registered source by descriptor and generation, and copies its
+        //! callback.
         //!
         //! Returns an empty callback if that exact registration is gone, which is the check that
-        //! makes unregisterEventSource() take effect immediately rather than one poll() round later.
+        //! makes unregisterEventSource() take effect immediately rather than one poll() round
+        //! later.
         EventSourceCallback callbackIfStillRegistered
             (
             int aFd,

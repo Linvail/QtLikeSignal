@@ -21,9 +21,9 @@ namespace QtLikeSignalGui
     //! **It does not touch OpenGL, and the window is built so that someone else can.** The class is
     //! registered CS_OWNDC and the window styled WS_CLIPCHILDREN | WS_CLIPSIBLINGS, which is what
     //! SetPixelFormat requires of a window it is called on; the background brush is null so nothing
-    //! flood-fills the client area before a frame is drawn; and SetPixelFormat is never called here,
-    //! because it succeeds exactly once per window and calling it would take that one chance away
-    //! from the library that actually creates the context. Hand Window::nativeHandle() to that
+    //! flood-fills the client area before a frame is drawn; and SetPixelFormat is never called
+    //! here, because it succeeds exactly once per window and calling it would take that one chance
+    //! away from the library that actually creates the context. Hand Window::nativeHandle() to that
     //! library and the whole WGL sequence is available to it.
     //!
     //! **There is no message pump here.** EventDispatcherWin32::processPlatformEvents() is what

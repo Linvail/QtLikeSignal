@@ -1,11 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! GuiApplication implementation: window creation and the window procedure.
 
 #include "GuiApplication.hpp"
+
+#include "QtLikeSignal/Log.hpp"
 
 #include <cstdio>
 
@@ -14,6 +19,9 @@
 #endif
 #include <windows.h>
 #include <windowsx.h>
+
+//! This demo's category, declared in GuiApplication.hpp so main.cpp can report on it too.
+QTLIKESIGNAL_DEFINE_LOG_CATEGORY( gLogDemo, "demo.windows", "DWIN" )
 
 namespace QtLikeSignalDemo
 {
@@ -222,8 +230,8 @@ namespace QtLikeSignalDemo
 
         if( RegisterClass( &windowClass ) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS )
         {
-            std::fprintf( stderr, "GuiApplication: RegisterClass() failed (%lu)\n",
-                GetLastError() );
+            qCWarning( gLogDemo )
+                << "GuiApplication: RegisterClass() failed; error" << GetLastError();
             return false;
         }
 
@@ -248,8 +256,8 @@ namespace QtLikeSignalDemo
 
         if( window == nullptr )
         {
-            std::fprintf( stderr, "GuiApplication: CreateWindowEx() failed (%lu)\n",
-                GetLastError() );
+            qCWarning( gLogDemo )
+                << "GuiApplication: CreateWindowEx() failed; error" << GetLastError();
             return false;
         }
 

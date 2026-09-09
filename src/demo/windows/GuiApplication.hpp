@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
 //! QtLikeSignalDemo::GuiApplication -- a CoreApplication that owns a real Win32 window and turns
@@ -10,6 +13,7 @@
 #define QT_LIKE_SIGNAL_DEMO_GUIAPPLICATION_HPP
 
 #include "QtLikeSignal/CoreApplication.hpp"
+#include "QtLikeSignal/LogCategory.hpp"
 #include "QtLikeSignal/Signal.hpp"
 
 #include "MouseEvent.hpp"
@@ -18,6 +22,9 @@
 // header; <tchar.h> is the small CRT header that defines the character type the generic-text Win32
 // entry points take, and nothing else this header needs.
 #include <tchar.h>
+
+//! This demo's logging category, defined beside the application class it belongs to.
+QTLIKESIGNAL_DECLARE_LOG_CATEGORY( gLogDemo )
 
 namespace QtLikeSignalDemo
 {

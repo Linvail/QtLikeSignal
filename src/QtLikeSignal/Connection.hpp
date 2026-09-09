@@ -115,14 +115,14 @@ namespace QtLikeSignal
             //! mIncomingMutex, as are the two sibling pointers below.
             bool mInIncoming { false };
 
-            //! True once the receiver is finished with this node, so registerWithReceiver() must not
-            //! put it back. Set by pruneReceiver() and by ~Object(). Guarded the same way.
+            //! True once the receiver is finished with this node, so registerWithReceiver() must
+            //! not put it back. Set by pruneReceiver() and by ~Object(). Guarded the same way.
             bool mIncomingDone { false };
 
             Object* mOwner;   //!< Receiver keeping this node incoming, or null.
 
-            //! The receiver's affinity box, which carries the flag ~Object() clears. Null when there
-            //! is no receiver.
+            //! The receiver's affinity box, which carries the flag ~Object() clears. Null when
+            //! there is no receiver.
             //!
             //! Strong, where the life token it replaced was weak, and that costs nothing: the slot
             //! this node belongs to already holds the same box, and both are owned by the same
@@ -132,10 +132,10 @@ namespace QtLikeSignal
             //! This node's place in the receiver's list, which is what makes both linking and
             //! unlinking O(1) and costs no allocation of its own.
             //!
-            //! Raw, because the list does not own the node: a node is only ever in the list while it
-            //! is also in its Signal's, which is what keeps it alive. ~Object() is the one reader
-            //! that outlives that guarantee, so it upgrades through shared_from_this() while holding
-            //! mIncomingMutex, before it lets go of anything.
+            //! Raw, because the list does not own the node: a node is only ever in the list while
+            //! it is also in its Signal's, which is what keeps it alive. ~Object() is the one
+            //! reader that outlives that guarantee, so it upgrades through shared_from_this() while
+            //! holding mIncomingMutex, before it lets go of anything.
             ConnectionNode* mPrevIncoming { nullptr };
             ConnectionNode* mNextIncoming { nullptr };
         };
@@ -186,8 +186,8 @@ namespace QtLikeSignal
         //! Ends this connection, so its slot is no longer called. Thread-safe.
         //!
         //! **Does not wait** for an invocation already in progress on another thread; ~Object()
-        //! relies on that, which is why a queued connection captures an Affinity box and a weak life
-        //! token rather than reaching through the receiver.
+        //! relies on that, which is why a queued connection captures an Affinity box and a weak
+        //! life token rather than reaching through the receiver.
         //!
         //! The slot is destroyed once nothing is still calling it.
         void disconnect() const

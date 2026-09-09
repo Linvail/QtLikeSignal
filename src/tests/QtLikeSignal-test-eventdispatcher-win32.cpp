@@ -58,7 +58,8 @@ namespace
     //! TCHAR, matching the generic-text Win32 calls this file makes.
     const TCHAR* const kTestWindowClassName = TEXT( "QtLikeSignalTest_Window" );
 
-    //! A message-only window belonging to the thread that constructs it, recording what it receives.
+    //! A message-only window belonging to the thread that constructs it, recording what it
+    //! receives.
     //!
     //! This is the Windows counterpart of the Linux tests' TestPipe: something the OS will deliver
     //! to, which the dispatcher knows nothing about, so that "the message reached its handler" can
@@ -538,26 +539,38 @@ TEST( EventDispatcherWin32Test, AWorkerThreadDispatchesTheMessagesOfItsOwnWindow
     EXPECT_TRUE( worker.wait( 5000 ) );
 }
 
-//! Verifies the loop can still be woken after a foreign message loop has drained the queue.
+//! Verifies a foreign message loop has no wakeup of ours to steal, and cannot wedge this one.
 //!
-//! wakeWaiter() posts its wakeup message at most once, and leaves mWakePending set until something
-//! consumes it. processPlatformEvents() is not the only consumer on this thread: MessageBox(), a
-//! modal dialog, a menu or drag loop, a COM modal loop, or any third-party GetMessage loop will
-//! take that message off the queue and dispatch it. If nothing clears the flag on that path, it
-//! stays set forever, every later wakeWaiter() returns early without posting, and the loop can
-//! never be woken again -- including by quit(), which wakes through the same path, so the
-//! application cannot even be shut down. That was R34.
+//! **The hazard this guards used to be reachable and is now structural.** wakeWaiter() posted a
+//! message and left mWakePending set until something consumed it, and processPlatformEvents() was
+//! never the only consumer on this thread: MessageBox(), a modal dialog, a menu or drag loop, a COM
+//! modal loop, or any third-party GetMessage loop takes messages off the queue and dispatches them.
+//! With nothing clearing the flag on that path it stayed set forever, every later wakeWaiter()
+//! returned early without posting, and the loop could never be woken again -- including by quit(),
+//! which wakes through the same path, so the application could not even be shut down. That was R34,
+//! and the fix then was the window procedure clearing the flag.
 //!
-//! The fix is the window procedure clearing the flag, so it does not matter who dispatches the
-//! message. This test drives the whole sequence: wake, foreign drain, then a fresh post that only
-//! arrives if the collapse was re-armed.
+//! A wakeup is not a message any more. It is a SetEvent on a handle the wait watches, so there is
+//! nothing on the queue for a foreign loop to take and no path by which one can wedge this loop.
+//! The test therefore asserts something stronger than it used to: that a wake queues **no message
+//! of ours** at all, and that a post still reaches a blocked loop after a foreign drain has run
+//! anyway.
+//!
+//! "Of ours" is the part to read carefully, and it is the whole of the second step's complication.
+//! The queue is not this program's private property: the operating system posts to it too, and a
+//! test that counted every message would report a wakeup that was never sent. What separates the
+//! two is WM_USER, below which every message id belongs to the system.
+//!
+//! Kept rather than deleted, because "the bug cannot happen now" is a claim worth a test. If a
+//! wakeup ever becomes a message again, the first assertion fails here rather than a modal dialog
+//! silently wedging an application.
 TEST( EventDispatcherWin32Test, WakeSurvivesAForeignMessageLoopDrainingTheQueue )
 {
     CoreApplication app;
     auto dispatcher = currentWin32Dispatcher();
     ASSERT_NE( dispatcher, nullptr );
 
-    // 1. Cause a wakeup, so a wakeup message is queued and the collapse flag is set.
+    // 1. Cause a wakeup, so the collapse flag is set and the wake handle is signalled.
     std::atomic<bool> firstRan { false };
     ASSERT_TRUE( CoreApplication::post( [&firstRan]()
         {
@@ -566,18 +579,60 @@ TEST( EventDispatcherWin32Test, WakeSurvivesAForeignMessageLoopDrainingTheQueue 
 
     // 2. The foreign loop. This is the only part of the test that is not our own code's doing, and
     //    it is deliberately the plainest possible drain -- exactly what a modal dialog runs.
+    //
+    //    Everything is drained, because that is what a modal dialog does, but only what could be
+    //    ours is counted. WM_USER is where the range reserved for an application's own use on its
+    //    own windows begins, and the dispatcher's wakeup lives in it; every system message is
+    //    below it. Counting every message instead would fail on a message the operating system
+    //    posted, which is not hypothetical -- see the comment above the assertion.
     MSG message;
-    int drained = 0;
+    int drainedOurs = 0;
+    int drainedSystem = 0;
+    UINT firstSystemMessage = 0;
     while( PeekMessage( &message, nullptr, 0, 0, PM_REMOVE ) != FALSE )
     {
+        if( message.message >= WM_USER )
+        {
+            ++drainedOurs;
+        }
+        else
+        {
+            if( drainedSystem == 0 )
+            {
+                firstSystemMessage = message.message;
+            }
+            ++drainedSystem;
+        }
+
         TranslateMessage( &message );
         DispatchMessage( &message );
-        ++drained;
     }
-    EXPECT_GE( drained, 1 ) << "no wakeup message was queued, so this test proved nothing.";
 
-    // 3. Let the dispatcher run the work it already had. The queue is not empty, so this pass does
-    //    not block and finds no message of its own to clear the flag with.
+    // Nothing of ours may be here. A wakeup travels on the wake handle now, and anything in the
+    // application range this drain found would be a wakeup a modal dialog could have swallowed
+    // instead.
+    //
+    // **System messages are counted separately and deliberately tolerated.** The dispatcher's
+    // window is created with HWND_MESSAGE, which is usually enough for the queue to stay empty --
+    // but not always, and the exception is worth writing down because it cost a review round. On a
+    // desktop other than WinSta0\Default -- which is where a sandboxed or headless test runner
+    // starts its processes, to stop windows stealing focus -- the desktop window manager posts
+    // WM_DWMNCRENDERINGCHANGED (0x031F) to the new window. Measured: zero messages on
+    // WinSta0\Default and exactly that one on a desktop made with CreateDesktopW, same machine,
+    // same binary. An assertion on the total therefore failed for a reason that has nothing to do
+    // with what this test is about.
+    EXPECT_EQ( drainedOurs, 0 )
+        << "a wakeup was queued as a message, which is exactly what a foreign message loop is "
+        "free to swallow -- see this test's comment and R34.";
+    EXPECT_LE( drainedSystem, 4 )
+        << "an unexpected number of system messages was queued; the first was "
+        << firstSystemMessage << ". That is not a fault in the dispatcher, but if it grows it is "
+        "worth understanding before this test is trusted again.";
+
+    // 3. Let the dispatcher run the work it already had. The queue is not empty, so this pass
+    //    returns without entering the wait, and so without clearing the collapse flag -- which
+    //    leaves the flag set and the handle still signalled going into step 4. That pairing is
+    //    what makes the next wait return at once and re-arm, and it is why nothing is lost.
     dispatcher->processEvents(
         AbstractEventDispatcher::ProcessEventsFlag::WaitForMoreEvents );
     EXPECT_TRUE( firstRan.load() );
@@ -601,8 +656,8 @@ TEST( EventDispatcherWin32Test, WakeSurvivesAForeignMessageLoopDrainingTheQueue 
 
     EXPECT_TRUE( secondRan.load() )
         << "a task posted after a foreign message loop drained the queue never ran: the wake "
-        "collapse flag was left set, so wakeWaiter() stopped posting and the loop slept through "
-        "it.";
+        "collapse flag was left set, so wakeWaiter() stopped signalling and the loop slept "
+        "through it.";
     EXPECT_FALSE( watchdog.fired() )
         << "the loop had to be stopped by the watchdog's raw thread message, which means quit() "
         "could not wake it either -- the dispatcher was wedged, not merely slow.";

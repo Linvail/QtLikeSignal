@@ -40,8 +40,8 @@ namespace QtLikeSignalGui
     //!   through its own signals, leaving this library only the loop integration.
     //!   canCreateWindows() is false, and an adoption entry point arrives with those backends.
     //!
-    //! Nothing here is thread-safe. A PlatformIntegration is used only from the thread that runs the
-    //! event loop, which is the thread that created the GuiApplication.
+    //! Nothing here is thread-safe. A PlatformIntegration is used only from the thread that runs
+    //! the event loop, which is the thread that created the GuiApplication.
     class PlatformIntegration
     {
     public:
@@ -63,8 +63,8 @@ namespace QtLikeSignalGui
         //! Returns true if this backend can create windows of its own.
         //!
         //! False for a backend that can only adopt one an external library created. An honest query
-        //! rather than a createWindow() that returns null for reasons the caller cannot distinguish;
-        //! Qt asks the same question as hasCapability( ForeignWindows ).
+        //! rather than a createWindow() that returns null for reasons the caller cannot
+        //! distinguish; Qt asks the same question as hasCapability( ForeignWindows ).
         virtual bool canCreateWindows() const = 0;
 
         //! Returns true if this backend can take over a window created outside it.
@@ -89,8 +89,8 @@ namespace QtLikeSignalGui
         //!
         //! **Destroy it only if this backend created it.** A backend that adopted a window an
         //! external library made must unhook its event selection and leave the window standing:
-        //! destroying it would take it away from the code that owns it, and on X11 that code is also
-        //! still holding a GLX context bound to it.
+        //! destroying it would take it away from the code that owns it, and on X11 that code is
+        //! also still holding a GLX context bound to it.
         //!
         //! Called from ~Window(). Must clear the window's native fields, and must tolerate being
         //! called for a window whose native side has already gone away.
@@ -116,8 +116,8 @@ namespace QtLikeSignalGui
         //! Resizes the window so its client area is exactly @p aWidth by @p aHeight.
         //!
         //! The client area is what a renderer draws on, and every backend has to be able to produce
-        //! a requested one -- so this is required rather than optional. Both arguments are positive;
-        //! Window::setClientSize() rejects anything else before it gets here.
+        //! a requested one -- so this is required rather than optional. Both arguments are
+        //! positive; Window::setClientSize() rejects anything else before it gets here.
         virtual void setClientSize
             (
             Window* aWindow,
@@ -133,12 +133,46 @@ namespace QtLikeSignalGui
 
         //! Marks the window as needing a repaint, so an expose arrives through the loop.
         //!
-        //! Must return immediately rather than painting: the redraw is a message like any other, and
-        //! painting here would run a slot from outside a dispatch pass.
+        //! Must return immediately rather than painting: the redraw is a message like any other,
+        //! and painting here would run a slot from outside a dispatch pass.
         virtual void requestUpdate
             (
             Window* aWindow
             ) = 0;
+
+        //! @return true if this backend can pace updates on the display.
+        //!
+        //! False by default, which is the answer for every backend that has no vsync source to pace
+        //! against -- Win32, X11, and DRM as this library uses it. A window asking for
+        //! Window::UpdatePacing::Display on such a backend keeps being updated immediately, which
+        //! is what it would have got anyway.
+        virtual bool hasFrameClock() const;
+
+        //! Delivers the update a paced window has been waiting for.
+        //!
+        //! Called by WindowSystemInterface::handleFrameReady(), which is the only caller. The
+        //! default does nothing: a backend with no frame clock never has a paced update parked, so
+        //! there is nothing to release.
+        //!
+        //! Delivers at most one, and only if one was asked for. A frame clock reports that the
+        //! display is ready, which is not by itself a reason to draw.
+        virtual void deliverPacedUpdate
+            (
+            Window* aWindow
+            );
+
+        //! Delivers any paced update still waiting, because pacing has been switched off.
+        //!
+        //! Called by Window::setUpdatePacing() on the way from Display back to Immediate. A request
+        //! that was parked waiting for a frame has been made and not answered, and nothing is going
+        //! to answer it -- so it is delivered now rather than stranded until an unrelated frame
+        //! arrives and hands it over at a moment nothing asked for.
+        //!
+        //! The default does nothing: a backend with no frame clock never parks one.
+        virtual void releasePacedUpdate
+            (
+            Window* aWindow
+            );
 
     protected:
         static Window* newWindow

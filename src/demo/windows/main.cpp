@@ -1,21 +1,23 @@
 // SPDX-FileCopyrightText: 2026 Evan
 // SPDX-License-Identifier: MIT
 
+// SPDX-FileCopyrightText: 2026 Evan
+// SPDX-License-Identifier: MIT
+
 //! @file
 //!
-//! A real Windows program on QtLikeSignal: a 1280x800 window whose mouse events arrive through
+//! A real Windows program on QtLikeSignal: a 1280x720 window whose mouse events arrive through
 //! QtLikeSignal's own event dispatcher and are delivered as signals.
 //!
 //! **This is not how to write a GUI program on this library.** QtLikeSignalGui exists for that, and
-//! QtLikeSignalGui-Demo is the demo to copy: it opens a window and never registers a window
-//! class. What this program demonstrates is the other position -- a program that already owns its
-//! HWND and its window procedure, because an existing toolkit or an external WGL library created
-//! them, and wants QtLikeSignal's loop anyway. The GuiApplication class below is deliberately doing by
-//! hand what PlatformIntegrationWin32 does properly; read it as an integration example, not as a
-//! model.
+//! QtLikeSignalGui-Demo is the demo to copy: it opens a window and never registers a window class.
+//! What this program demonstrates is the other position -- a program that already owns its HWND and
+//! its window procedure, because an existing toolkit or an external WGL library created them, and
+//! wants QtLikeSignal's loop anyway. The GuiApplication class below is deliberately doing by hand
+//! what PlatformIntegrationWin32 does properly; read it as an integration example, not as a model.
 //!
-//! The X11 demo beside this one shows the same seam through the other mechanism QtLikeSignal offers:
-//! there the display's file descriptor joins the dispatcher's poll() set, rather than the
+//! The X11 demo beside this one shows the same seam through the other mechanism QtLikeSignal
+//! offers: there the display's file descriptor joins the dispatcher's poll() set, rather than the
 //! dispatcher pumping the queue itself as it does here.
 //!
 //! There is no message loop in this program. CoreApplication::exec() is the only loop, and
@@ -37,6 +39,8 @@
 
 #include "QtLikeSignal/Object.hpp"
 #include "QtLikeSignal/Timer.hpp"
+
+#include "QtLikeSignal/Log.hpp"
 
 #include <cstdio>
 #include <deque>
@@ -293,9 +297,9 @@ int main()
 {
     GuiApplication app;
 
-    if( !app.createWindow( TEXT( "QtLikeSignal demo -- Win32 mouse events" ), 1280, 800 ) )
+    if( !app.createWindow( TEXT( "QtLikeSignal demo -- Win32 mouse events" ), 1280, 720 ) )
     {
-        std::fprintf( stderr, "failed to create the window\n" );
+        qCWarning( gLogDemo ) << "failed to create the window";
         return 1;
     }
 
@@ -322,7 +326,7 @@ int main()
     // Narrow, and deliberately so: this is the C runtime writing to a console, not a Win32 text
     // API, so there is no A/W choice to make here.
     std::printf( "QtLikeSignal Win32 demo running.\n" );
-    std::printf( "  window client area : 1280x800\n" );
+    std::printf( "  window client area : 1280x720\n" );
     std::printf( "  event loop         : CoreApplication::exec()\n" );
     std::printf( "  OS message pump    : EventDispatcherWin32::processPlatformEvents()\n" );
     std::printf( "  no GetMessage loop in this program\n" );

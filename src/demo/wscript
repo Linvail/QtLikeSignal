@@ -29,9 +29,9 @@ def _build_windows_demo(bld):
     kw["features"] = ["cxx", "cxxprogram", "debug-info"]
     kw["source"] = bld.path.ant_glob("windows/*.cpp")
     # The demo's own headers are included unprefixed ("GuiApplication.hpp"), so its directory goes
-    # on the include path, and common/ with it for the MouseEvent both demos share. QtLikeSignal's src/
-    # is already there via the QtLikeSignal use below, which is what makes the library's own includes
-    # read "QtLikeSignal/CoreApplication.hpp".
+    # on the include path, and common/ with it for the MouseEvent both demos share. QtLikeSignal's
+    # src/ is already there via the QtLikeSignal use below, which is what makes the library's own
+    # includes read "QtLikeSignal/CoreApplication.hpp".
     kw["includes"] = ["windows", "common"]
     # user32 for the window and its messages, gdi32 for the painting, both as uselibs the Windows
     # toolchains declare -- the same way the Linux targets name X11.
@@ -44,10 +44,10 @@ def _build_gui_demo(bld):
     """
     Build the QtLikeSignalGui demo: the same program as the Win32 demo, written against the library.
 
-    Worth having both. demo/windows/ shows what the dispatcher does for a program that owns its own
-    window procedure; this one shows the same events arriving after QtLikeSignalGui has taken that job
-    over, with the drawing left to whoever holds the HWND -- which is the position an external
-    WGL library is in.
+    Worth having both. demo/windows/ shows what the dispatcher does for a program that owns its
+    own window procedure; this one shows the same events arriving after QtLikeSignalGui has taken
+    that job over, with the drawing left to whoever holds the HWND -- which is the position an
+    external WGL library is in.
     """
     kw = {}
     kw["features"] = ["cxx", "cxxprogram", "debug-info"]
@@ -64,9 +64,9 @@ def _build_gui_x11_demo(bld):
     """
     Build the QtLikeSignalGui X11 demo, if the X11 development headers are installed.
 
-    The Linux counterpart of the QtLikeSignalGui demo: the same program, adopting a window an external
-    library created rather than creating one. Skipped with a message when X11 is unavailable, for
-    the same reason the plain X11 demo is.
+    The Linux counterpart of the QtLikeSignalGui demo: the same program, adopting a window an
+    external library created rather than creating one. Skipped with a message when X11 is
+    unavailable, for the same reason the plain X11 demo is.
     """
     if not _have_x11(bld):
         bld.build_msg("QtLikeSignalGui X11 demo", "skipped (install libx11-dev)", color="YELLOW")
@@ -76,10 +76,11 @@ def _build_gui_x11_demo(bld):
     kw["features"] = ["cxx", "cxxprogram", "debug-info"]
     kw["source"] = bld.path.ant_glob("gui-x11/*.cpp")
 
-    # X11 twice over, and only named once. This demo calls Xlib itself, so it says so; QtLikeSignalGui's
-    # X11 backend named it too, and its libinput -- which this program never touches but still has
-    # to link -- comes along the use chain without being repeated here. That propagation is what
-    # replaced a hand-kept list of every library any backend might have been compiled with.
+    # X11 twice over, and only named once. This demo calls Xlib itself, so it says so;
+    # QtLikeSignalGui's X11 backend named it too, and its libinput -- which this program never
+    # touches but still has to link -- comes along the use chain without being repeated here. That
+    # propagation is what replaced a hand-kept list of every library any backend might have been
+    # compiled with.
     kw["use"] = ["QtLikeSignalGui", "QtLikeSignal", "X11"]
 
     bld(target="QtLikeSignalGui-Demo-X11", **kw)
@@ -89,20 +90,22 @@ def _build_gui_wayland_demo(bld):
     """
     Build the QtLikeSignalGui Wayland demo, if libwayland is installed.
 
-    The Wayland counterpart of the QtLikeSignalGui demo: the library creates the surface and delivers the
-    input, and the program attaches the buffer -- which is the division every backend makes, drawn
-    here with shared memory instead of EGL so that the demo needs no GL stack to run.
+    The Wayland counterpart of the QtLikeSignalGui demo: the library creates the surface and
+    delivers the input, and the program attaches the buffer -- which is the division every backend
+    makes, drawn here with shared memory instead of EGL so that the demo needs no GL stack to run.
     """
     if not bld.env.HAVE_WAYLAND_CLIENT:
-        bld.build_msg("QtLikeSignalGui Wayland demo", "skipped (install libwayland-dev)", color="YELLOW")
+        bld.build_msg("QtLikeSignalGui Wayland demo", "skipped (install libwayland-dev)",
+                      color="YELLOW")
         return
 
     kw = {}
     kw["features"] = ["cxx", "cxxprogram", "debug-info"]
     kw["source"] = bld.path.ant_glob("gui-wayland/*.cpp")
 
-    # WAYLAND-CLIENT arrives through QtLikeSignalGui, whose Wayland backend named it, but this program
-    # calls wl_shm and wl_registry itself -- so it says so rather than relying on what it is handed.
+    # WAYLAND-CLIENT arrives through QtLikeSignalGui, whose Wayland backend named it, but this
+    # program calls wl_shm and wl_registry itself -- so it says so rather than relying on what it is
+    # handed.
     kw["use"] = ["QtLikeSignalGui", "QtLikeSignal", "WAYLAND-CLIENT"]
 
     bld(target="QtLikeSignalGui-Demo-Wayland", **kw)
@@ -142,16 +145,16 @@ def build(bld):
     The QtLikeSignalGui-Demo-* programs are how a program is meant to be written on this library: no
     event loop of their own, no window-system call, nothing but signals and exec(). The
     QtLikeSignal-Demo-* ones own their window and their window system, and hand the connection to
-    QtLikeSignal -- which is where a program with an existing toolkit, or an external GL library, finds
-    itself. Both positions are real, so both are shown.
+    QtLikeSignal -- which is where a program with an existing toolkit, or an external GL library,
+    finds itself. Both positions are real, so both are shown.
 
     There is no raw Wayland demo. There used to be, and it was 1578 lines demonstrating exactly
     what demo/x11/ demonstrates: take the connection's fd, hand it to
     EventDispatcherLinux::registerEventSource(), and let one poll() wait on everything. Two
     protocols reading a socket differently is a difference in the C API being called, not in
-    anything about QtLikeSignal, and the lesson does not become truer for being told twice. Wayland is
-    still covered as a platform by QtLikeSignalGui-Demo-Wayland; what went away was the second copy of
-    the integration story, not the backend.
+    anything about QtLikeSignal, and the lesson does not become truer for being told twice. Wayland
+    is still covered as a platform by QtLikeSignalGui-Demo-Wayland; what went away was the second
+    copy of the integration story, not the backend.
 
     Win32 is kept alongside X11 because it integrates by a genuinely different mechanism:
     EventDispatcherWin32::processPlatformEvents() pumps the OS queue from inside exec(), where the

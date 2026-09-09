@@ -7,9 +7,11 @@
 
 #include "QtLikeSignal/EventDispatcherLinux.hpp"
 
+#include "QtLikeSignal/Log.hpp"
+#include "QtLikeSignal/LogCategories.hpp"
+
 #include <cerrno>
 #include <cstdint>
-#include <cstdio>
 
 #include <poll.h>
 #include <sys/eventfd.h>
@@ -28,9 +30,10 @@ namespace QtLikeSignal
             // Not fatal: waitForEvents() falls back to the inherited condition-variable wait, which
             // still delivers our own events correctly. Only registered platform descriptors stop
             // working, so say so rather than failing silently.
-            std::fprintf( stderr,
-                "EventDispatcherLinux: eventfd() failed (%d); falling back to the "
-                "cross-platform wait, so platform event sources will not be polled\n", errno );
+            qCCritical( gLogDispatcher )
+                << "EventDispatcherLinux: eventfd() failed, so this falls back to the"
+                << "cross-platform wait and platform event sources will not be polled; errno"
+                << errno;
         }
     }
 
@@ -78,8 +81,8 @@ namespace QtLikeSignal
                     source.mEvents     = aEvents;
                     source.mCallback   = std::move( aCallback );
                     source.mGeneration = generation;
-                    // Fall through to the wake below: a loop already blocked in poll() is waiting on
-                    // the old mask and has to rebuild its descriptor set to honour the new one.
+                    // Fall through to the wake below: a loop already blocked in poll() is waiting
+                    // on the old mask and has to rebuild its descriptor set to honour the new one.
                     replaced = true;
                     break;
                 }
@@ -154,9 +157,9 @@ namespace QtLikeSignal
         }
 
         // Snapshot the descriptor set while we still hold the lock. Only each source's identity is
-        // taken, not its callback: the callback is looked up again, under the lock, at the moment it is
-        // about to be invoked. Copying them out here would pin a callback unregisterEventSource() has
-        // since removed, and deliver to it anyway.
+        // taken, not its callback: the callback is looked up again, under the lock, at the moment
+        // it is about to be invoked. Copying them out here would pin a callback
+        // unregisterEventSource() has since removed, and deliver to it anyway.
         std::vector<pollfd> pollSet;
         std::vector<unsigned long long> generations;
         pollSet.reserve( mSources.size() + 1 );
@@ -193,10 +196,10 @@ namespace QtLikeSignal
                     continue;
                 }
 
-                // Resolved immediately before it is called, so a source unregistered by an earlier callback in
-                // this same round is not then called itself. That is what makes unregisterEventSource()
-                // synchronous on this thread, and it is the rule the dispatch batches follow too: re-check
-                // under the lock, act outside it.
+                // Resolved immediately before it is called, so a source unregistered by an earlier
+                // callback in this same round is not then called itself. That is what makes
+                // unregisterEventSource() synchronous on this thread, and it is the rule the
+                // dispatch batches follow too: re-check under the lock, act outside it.
                 const EventSourceCallback callback
                     = callbackIfStillRegistered( pollSet[i].fd, generations[i] );
                 if( callback )
@@ -209,7 +212,8 @@ namespace QtLikeSignal
         {
             // EINTR is routine (a signal arrived); treat the wait as finished and let the caller
             // re-evaluate. Anything else means the descriptor set is malformed, which would spin.
-            std::fprintf( stderr, "EventDispatcherLinux: poll() failed (%d)\n", errno );
+            qCWarning( gLogDispatcher )
+                << "EventDispatcherLinux: poll() failed; errno" << errno;
         }
 
         aLock.lock();

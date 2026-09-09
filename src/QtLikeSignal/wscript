@@ -1,6 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Evan
 # SPDX-License-Identifier: MIT
 
+# Applications build this library from source with exceptions disabled, so it has to compile that
+# way. --no-exceptions is how that is checked with the real include paths.
+from toolchains import apply_library_exception_policy
+
+
 def build(bld):
     """
     Build the QtLikeSignal library: the event loop, the threads, the timers and the signals.
@@ -15,23 +20,30 @@ def build(bld):
             "ThreadPosix.cpp",
             "EventDispatcherWin32.cpp",
             "EventDispatcherLinux.cpp",
+            "SignalWatcherWin.cpp",
+            "SignalWatcherPosix.cpp",
         ],
     )
     if bld.env.DEST_OS == "win32":
         kw["source"].append(bld.path.find_node("ThreadWin.cpp"))
         kw["source"].append(bld.path.find_node("EventDispatcherWin32.cpp"))
+        kw["source"].append(bld.path.find_node("SignalWatcherWin.cpp"))
     elif bld.env.DEST_OS == "linux":
         kw["source"].append(bld.path.find_node("ThreadPosix.cpp"))
         kw["source"].append(bld.path.find_node("EventDispatcherLinux.cpp"))
+        kw["source"].append(bld.path.find_node("SignalWatcherPosix.cpp"))
     # ".." is src/, the directory holding this one, and it is what goes on the include path -- so
-    # every include of a QtLikeSignal header reads "QtLikeSignal/Object.hpp" rather than "Object.hpp".
-    # These are ordinary header names that another library on the include path could easily also
-    # use, so an unprefixed include would resolve by include-path order rather than by intent.
+    # every include of a QtLikeSignal header reads "QtLikeSignal/Object.hpp" rather than
+    # "Object.hpp". These are ordinary header names that another library on the include path could
+    # easily also use, so an unprefixed include would resolve by include-path order rather than by
+    # intent.
     kw["includes"] = ".."
     kw["export_includes"] = ".."
 
     build_shared_lib = getattr(bld.env, "QT_LIKE_SIGNAL_BUILD_SHARED_LIB", False)
     if build_shared_lib and bld.env.DEST_OS != "win32":
         kw["features"].append("cxxshlib")
+
+    apply_library_exception_policy(bld, kw)
 
     bld(target="QtLikeSignal", **kw)

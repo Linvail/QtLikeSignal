@@ -10,6 +10,9 @@
 #include "QtLikeSignalGui/PlatformIntegration.hpp"
 #include "QtLikeSignalGui/WindowSystemInterface.hpp"
 
+#include "QtLikeSignal/Log.hpp"
+#include "QtLikeSignalGui/LogCategories.hpp"
+
 #include <cstdio>
 
 namespace QtLikeSignalGui
@@ -18,8 +21,8 @@ namespace QtLikeSignalGui
 
     //! Constructs an application with no command-line arguments.
     //!
-    //! The backend is then chosen from the environment alone, since there is no `-p` to read. Useful
-    //! for a test or for a program that embeds the loop and has no argv to pass on.
+    //! The backend is then chosen from the environment alone, since there is no `-p` to read.
+    //! Useful for a test or for a program that embeds the loop and has no argv to pass on.
     GuiApplication::GuiApplication()
         : QtLikeSignal::CoreApplication()
     {
@@ -40,10 +43,10 @@ namespace QtLikeSignalGui
     //! Destroys the application, its windows, and then the backend that made them.
     //!
     //! **That order is the reason this destructor exists at all.** Windows are children of the
-    //! application, so ~Object() would eventually delete them -- but ~Object() runs after this body,
-    //! by which time mIntegration would already have been released, and ~Window() calls into the
-    //! backend to destroy its native window. Deleting them here, first, is what keeps the backend
-    //! alive for exactly as long as something can still ask it for anything.
+    //! application, so ~Object() would eventually delete them -- but ~Object() runs after this
+    //! body, by which time mIntegration would already have been released, and ~Window() calls into
+    //! the backend to destroy its native window. Deleting them here, first, is what keeps the
+    //! backend alive for exactly as long as something can still ask it for anything.
     //!
     //! Deleting a child detaches it from the parent as it goes, so the later sweep in ~Object()
     //! finds nothing left to do rather than a list of freed pointers.
@@ -81,9 +84,9 @@ namespace QtLikeSignalGui
             // CoreApplication warns about this too, and for the same reason keeps the first
             // instance rather than aborting. Reported separately because the two statics are
             // independent: a program could construct a CoreApplication and a GuiApplication.
-            std::fprintf( stderr,
-                "GuiApplication: there should be only one application object; the existing one is "
-                "kept and this one will not be reachable through instance()\n" );
+            qCWarning( gLogGui )
+                << "GuiApplication: there should be only one application object; the existing one"
+                << "is kept and this one will not be reachable through instance()";
         }
 
         mPlatformType = choosePlatform( arguments() );
@@ -127,17 +130,18 @@ namespace QtLikeSignalGui
     {
         if( !mIntegration )
         {
-            std::fprintf( stderr,
-                "GuiApplication::createWindow: no platform backend; there is no window system to "
-                "create a window on\n" );
+            qCWarning( gLogGui )
+                << "GuiApplication::createWindow: no platform backend; there is no window system to"
+                << "create a window on";
             return nullptr;
         }
 
         if( !mIntegration->canCreateWindows() )
         {
-            std::fprintf( stderr,
-                "GuiApplication::createWindow: the \"%s\" backend does not create windows; it "
-                "adopts one created elsewhere\n", platformTypeName( mIntegration->type() ) );
+            qCWarning( gLogGui )
+                << "GuiApplication::createWindow: this backend does not create windows; it adopts"
+                << "one created elsewhere. Backend"
+                << platformTypeName( mIntegration->type() );
             return nullptr;
         }
 
@@ -152,9 +156,9 @@ namespace QtLikeSignalGui
         // mean the window is unowned, so it is destroyed rather than leaked.
         if( !window->setParent( this ) )
         {
-            std::fprintf( stderr,
-                "GuiApplication::createWindow: could not parent the new window to the "
-                "application\n" );
+            qCWarning( gLogGui )
+                << "GuiApplication::createWindow: could not parent the new window to the"
+                << "application";
             delete window;
             return nullptr;
         }
@@ -165,10 +169,10 @@ namespace QtLikeSignalGui
     //! Takes charge of a window an external library created, parenting it to this application.
     //!
     //! The counterpart of createWindow() for the platforms where this library does not create the
-    //! window: on X11 and Wayland an external library makes the window and its GL context, and hands
-    //! over the connection and the identifier. From that point the window behaves exactly like a
-    //! created one -- same signals, same lifetime, same place in windows() -- except that destroying
-    //! it stops the listening rather than destroying the window.
+    //! window: on X11 and Wayland an external library makes the window and its GL context, and
+    //! hands over the connection and the identifier. From that point the window behaves exactly
+    //! like a created one -- same signals, same lifetime, same place in windows() -- except that
+    //! destroying it stops the listening rather than destroying the window.
     //!
     //! @code
     //!   NativeWindow native;
@@ -193,17 +197,17 @@ namespace QtLikeSignalGui
     {
         if( !mIntegration )
         {
-            std::fprintf( stderr,
-                "GuiApplication::adoptWindow: no platform backend; there is no window system to "
-                "adopt a window from\n" );
+            qCWarning( gLogGui )
+                << "GuiApplication::adoptWindow: no platform backend; there is no window system to"
+                << "adopt a window from";
             return nullptr;
         }
 
         if( !mIntegration->canAdoptWindows() )
         {
-            std::fprintf( stderr,
-                "GuiApplication::adoptWindow: the \"%s\" backend creates its own windows; use "
-                "createWindow()\n", platformTypeName( mIntegration->type() ) );
+            qCWarning( gLogGui )
+                << "GuiApplication::adoptWindow: this backend creates its own windows; use"
+                << "createWindow(). Backend" << platformTypeName( mIntegration->type() );
             return nullptr;
         }
 
@@ -215,9 +219,9 @@ namespace QtLikeSignalGui
 
         if( !window->setParent( this ) )
         {
-            std::fprintf( stderr,
-                "GuiApplication::adoptWindow: could not parent the adopted window to the "
-                "application\n" );
+            qCWarning( gLogGui )
+                << "GuiApplication::adoptWindow: could not parent the adopted window to the"
+                << "application";
             delete window;
             return nullptr;
         }
@@ -244,8 +248,8 @@ namespace QtLikeSignalGui
     //! @endcode
     //!
     //! Asking is what opens the connection, so this is not a passive query: on X11 the first call
-    //! connects to the server. Null on Win32, which has no connection object, and on a build with no
-    //! backend.
+    //! connects to the server. Null on Win32, which has no connection object, and on a build with
+    //! no backend.
     //!
     //! @return the Display*, or nullptr.
     void* GuiApplication::nativeDisplay()
@@ -255,9 +259,9 @@ namespace QtLikeSignalGui
 
     //! Gets every window this application owns, oldest last.
     //!
-    //! Read from the object tree rather than from a list of its own. A second list would be a second
-    //! thing to keep in step with ~Window(), and the one that went stale would be the one holding
-    //! freed pointers; the child list is already maintained by Object for exactly this.
+    //! Read from the object tree rather than from a list of its own. A second list would be a
+    //! second thing to keep in step with ~Window(), and the one that went stale would be the one
+    //! holding freed pointers; the child list is already maintained by Object for exactly this.
     std::vector<Window*> GuiApplication::windows() const
     {
         std::vector<Window*> found;
@@ -278,10 +282,10 @@ namespace QtLikeSignalGui
     //! Applies the quit-on-last-window-closed policy after a close was requested.
     //!
     //! Hiding the window rather than destroying it is the difference between this and Qt, and it is
-    //! deliberate: an application here owns its Window and may well still hold a GL context bound to
-    //! its handle, so destroying it out from underneath that would be the library breaking something
-    //! it does not own. Hidden is enough for the policy question -- "is any window still up?" -- and
-    //! the destruction remains the application's to time.
+    //! deliberate: an application here owns its Window and may well still hold a GL context bound
+    //! to its handle, so destroying it out from underneath that would be the library breaking
+    //! something it does not own. Hidden is enough for the policy question -- "is any window still
+    //! up?" -- and the destruction remains the application's to time.
     void GuiApplication::handleCloseRequested
         (
         Window* aWindow   //!< The window whose close was requested.

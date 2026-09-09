@@ -16,8 +16,8 @@ namespace QtLikeSignal
         //! Blocks until settle() has run, and reports what it was told.
         //!
         //! The predicate is mSettled rather than mRan, so a call that was discarded still wakes the
-        //! waiter -- it just wakes it with false. Waiting on mRan would sleep forever on exactly the
-        //! cases this latch exists to survive.
+        //! waiter -- it just wakes it with false. Waiting on mRan would sleep forever on exactly
+        //! the cases this latch exists to survive.
         //!
         //! No timeout, deliberately. A deadline here would turn "the receiving thread is busy" into
         //! a failure the caller cannot tell apart from "the receiving thread is gone", and the
