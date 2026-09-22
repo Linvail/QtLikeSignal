@@ -123,8 +123,25 @@ namespace QtLikeSignal
         }
         mWorkArrived.notify_all();
 
-        // Each worker leaves workerLoop() when it sees mStopping, so ~Thread's own quit() and
-        // wait() find a thread that is already on its way out.
+        // Every worker is joined here, before any Worker object is destroyed, and ~Thread's own
+        // quit() and wait() then find a thread that has already finished.
+        //
+        // Joining in ~Thread alone is too late. Destroying an object rewrites its vptr -- once as
+        // ~Worker begins and again as ~Thread does -- and a worker that has started but not yet
+        // reached the virtual call in Thread::threadBody() reads that same vptr to dispatch run().
+        // The two race, and the thread can dispatch the base class's run() instead of the
+        // worker's. ThreadSanitizer names it "data race on vptr (ctor/dtor vs virtual call)".
+        //
+        // Each worker leaves workerLoop() when it sees mStopping, which the notify above has just
+        // announced, so this waits for work already in run() rather than for anything new.
+        for( const auto& worker : mWorkers )
+        {
+            if( worker )
+            {
+                worker->quit();
+                static_cast<void>( worker->wait() );
+            }
+        }
         mWorkers.clear();
     }
 

@@ -1305,3 +1305,26 @@ TEST( ThreadPoolTest, AHandOffTakesAPriority )
     const std::vector<std::string> expected = { "high work", "low work" };
     EXPECT_EQ( order, expected );
 }
+
+//! Verifies a pool destroyed before its workers reach run() joins them before destroying them.
+//!
+//! The defect. ~ThreadPool cleared its vector of workers and left the joining to ~Thread, which
+//! runs after ~Worker and therefore too late. Destroying an object rewrites its vptr -- once as
+//! the derived destructor begins and again as the base one does -- while a worker that has
+//! started but has not yet reached the virtual call that enters run() is reading that same vptr
+//! to dispatch it. The thread could enter the base class's run() rather than the worker's.
+//!
+//! Any pool built and destroyed without being given work is the shape that shows it, because that
+//! is the shortest life a worker can have. ThreadSanitizer is what detects it, as a "data race on
+//! vptr (ctor/dtor vs virtual call)"; without one the two writes and the read usually land in an
+//! order that hides it.
+TEST( ThreadPoolTest, APoolDestroyedBeforeItsWorkersStartJoinsThemFirst )
+{
+    for( int round = 0; round < 50; ++round )
+    {
+        ThreadPool pool( 4 );
+    }
+
+    // Reaching here without a sanitizer report is the assertion.
+    SUCCEED();
+}
