@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -85,6 +86,13 @@ namespace QtLikeSignalGui
         //! ratio needs both. Keyed by the wl_output pointer, which is what wl_surface::enter and
         //! leave hand over.
         std::map<wl_output*, int> mOutputScales;
+
+        //! Every wl_output this backend has bound, keyed by the registry name it came with.
+        //!
+        //! This map owns the proxies. The destructor destroys each one, and registryGlobalRemove()
+        //! destroys one when the compositor removes that output. The key is the name, not the
+        //! pointer, because wl_registry::global_remove gives only the name.
+        std::map<std::uint32_t, wl_output*> mOutputs;
 
         //! The outputs this window's surface is currently on, in the compositor's opinion.
         //!
@@ -272,6 +280,7 @@ namespace QtLikeSignalGui
                 {
                     wl_output* const output = static_cast<wl_output*>( wl_registry_bind( aRegistry,
                         aName, &wl_output_interface, std::min( 2u, aVersion ) ) );
+                    internals.mOutputs[aName] = output;
                     internals.mOutputScales[output] = 1;
                     wl_output_add_listener( output, &kOutputListener, self );
                 }
@@ -426,17 +435,40 @@ namespace QtLikeSignalGui
             updateDevicePixelRatio( self );
         }
 
-        //! A global went away. Nothing here holds one whose loss is survivable, so this is silent.
+        //! A global went away. Only an output is acted on, because a monitor can be disconnected
+        //! while the program runs. The loss of any other global that this backend holds is fatal.
+        //!
+        //! The proxy is destroyed here, not kept until the destructor. The output also leaves both
+        //! scale maps, so its last scale does not stay in the window's ratio after the monitor is
+        //! gone. The compositor usually sends wl_surface::leave first, but this does not rely on it.
         static void registryGlobalRemove
             (
-            void* aData,
-            wl_registry* aRegistry,
-            std::uint32_t aName
+            void* aData,             //!< The backend.
+            wl_registry* aRegistry,  //!< The registry announcing.
+            std::uint32_t aName      //!< The name of the global that went away.
             )
         {
-            static_cast<void>( aData );
             static_cast<void>( aRegistry );
-            static_cast<void>( aName );
+            PlatformIntegrationWayland* const self =
+                static_cast<PlatformIntegrationWayland*>( aData );
+            PlatformIntegrationWayland::Internals& internals = *self->mInternals;
+
+            const auto it = internals.mOutputs.find( aName );
+            if( it == internals.mOutputs.end() )
+            {
+                return;
+            }
+
+            wl_output* const output = it->second;
+            internals.mOutputs.erase( it );
+            internals.mOutputScales.erase( output );
+            const bool surfaceWasOnIt = internals.mSurfaceOutputs.erase( output ) > 0;
+            wl_output_destroy( output );
+
+            if( surfaceWasOnIt )
+            {
+                updateDevicePixelRatio( self );
+            }
         }
 
         //-------------------------------------------------------------------------------------
@@ -1450,6 +1482,17 @@ namespace QtLikeSignalGui
         {
             wl_compositor_destroy( internals.mCompositor );
         }
+        // wl_output_destroy, not wl_output_release: release is a version 3 request, and
+        // registryGlobal() binds version 2 at most. Without this loop, each output proxy leaks
+        // when the connection closes.
+        for( const auto& entry : internals.mOutputs )
+        {
+            wl_output_destroy( entry.second );
+        }
+        internals.mOutputs.clear();
+        internals.mOutputScales.clear();
+        internals.mSurfaceOutputs.clear();
+
         if( internals.mRegistry != nullptr )
         {
             wl_registry_destroy( internals.mRegistry );
