@@ -638,11 +638,113 @@ namespace QtLikeSignal
         return extras ? extras->mFirstChild : nullptr;
     }
 
+    //! Gets the last child of this object, or nullptr. See the declaration.
+    Object* Object::lastChild() const
+    {
+        const Extras* extras = extrasOrNull();
+        if( extras == nullptr || extras->mFirstChild == nullptr )
+        {
+            return nullptr;
+        }
+        // The back link of the first child points to the last child. See Extras::mPrevSibling.
+        return extras->mFirstChild->extrasOrNull()->mPrevSibling;
+    }
+
     //! Gets the next child of this object's parent, or nullptr. See the declaration.
     Object* Object::nextSibling() const
     {
         const Extras* extras = extrasOrNull();
         return extras ? extras->mNextSibling : nullptr;
+    }
+
+    //! Gets the previous child of the parent, or nullptr. See the declaration.
+    Object* Object::previousSibling() const
+    {
+        const Extras* extras = extrasOrNull();
+        if( extras == nullptr || extras->mParent == nullptr
+            || extras->mParent->extrasOrNull()->mFirstChild == this )
+        {
+            // No parent, or the first child. The back link of the first child points to the last
+            // child, not to a previous child.
+            return nullptr;
+        }
+        return extras->mPrevSibling;
+    }
+
+    namespace
+    {
+        //! Checks that @p aSelf can move next to @p aSibling, and writes a warning when it cannot.
+        //! @return true when it can.
+        bool isStackingSibling
+            (
+            const Object* aSelf,     //!< The object to move.
+            const Object* aSibling,  //!< The sibling that it goes next to.
+            const char* aFunction    //!< Prefix for the warning, such as "Object::stackBefore:".
+            )
+        {
+            if( aSibling == nullptr || aSibling == aSelf || aSelf->parent() == nullptr
+                || aSibling->parent() != aSelf->parent() )
+            {
+                qCWarning( gLogObject )
+                    << aFunction
+                    << "the sibling is null, this object, or not a child of the same parent;"
+                    << "the order is unchanged";
+                return false;
+            }
+            return true;
+        }
+    }
+
+    //! Moves this object to just before a sibling. See the declaration.
+    bool Object::stackBefore
+        (
+        Object* aSibling  //!< A child of the parent of this object, whose links this changes.
+        )
+    {
+        if( !isStackingSibling( this, aSibling, "Object::stackBefore:" ) )
+        {
+            return false;
+        }
+        if( nextSibling() != aSibling )
+        {
+            Object* parentObject = parent();
+            detachFromParent();
+            attachToParent( parentObject, aSibling );
+        }
+        return true;
+    }
+
+    //! Moves this object to just after a sibling. See the declaration.
+    bool Object::stackAfter
+        (
+        Object* aSibling  //!< A child of the parent of this object, whose links this changes.
+        )
+    {
+        if( !isStackingSibling( this, aSibling, "Object::stackAfter:" ) )
+        {
+            return false;
+        }
+        if( aSibling->nextSibling() != this )
+        {
+            Object* parentObject = parent();
+            detachFromParent();
+            // Read the next sibling of aSibling after this object leaves the list. When it is
+            // null, aSibling is the last child, and an attach before null appends.
+            attachToParent( parentObject, aSibling->nextSibling() );
+        }
+        return true;
+    }
+
+    //! Returns true if this object is a widget. See the declaration.
+    bool Object::isWidgetType() const
+    {
+        return hasFlag( kIsWidgetType );
+    }
+
+    //! Marks this object as a widget. See the declaration.
+    void Object::setWidgetType()
+    {
+        setFlag( kIsWidgetType );
     }
 
     //! Counts this object's direct children. See the declaration.
@@ -723,32 +825,62 @@ namespace QtLikeSignal
         detachFromParent();
         if( aParent != nullptr )
         {
-            attachToParent( aParent );
+            attachToParent( aParent, nullptr );
         }
         return true;
     }
 
-    //! Links this object into aParent's child list. See the declaration.
+    //! Links this object into the child list of aParent. See the declaration.
     //!
-    //! At the head, because the order of the list is not part of the contract -- the same reason
-    //! ConnectionNode::registerWithReceiver() does it, and what keeps this O(1).
+    //! The default position is the end, because QObject::children() uses this order. This is
+    //! still O(1): the back link of the first child points to the last child
+    //! (Extras::mPrevSibling). Thus the function finds the end without a walk, and without a tail
+    //! pointer in each box.
     void Object::attachToParent
         (
-        Object* aParent  //!< The new parent; never null, and never this object's current one.
+        Object* aParent,  //!< The new parent: not null, and not the current parent.
+        Object* aBefore   //!< The child of aParent to go before, or null for the end.
         )
     {
         Extras& parentExtras = aParent->ensureExtras();
         Extras& selfExtras   = ensureExtras();
+        selfExtras.mParent = aParent;
 
-        selfExtras.mParent      = aParent;
-        selfExtras.mPrevSibling = nullptr;
-        selfExtras.mNextSibling = parentExtras.mFirstChild;
-        if( parentExtras.mFirstChild != nullptr )
+        Object* const first = parentExtras.mFirstChild;
+        if( first == nullptr )
         {
-            // The existing head is a child, so it has a box already; this is a read, not a create.
-            parentExtras.mFirstChild->extrasOrNull()->mPrevSibling = this;
+            // This is the only child, so it is also its own last child.
+            selfExtras.mPrevSibling  = this;
+            selfExtras.mNextSibling  = nullptr;
+            parentExtras.mFirstChild = this;
+            return;
         }
-        parentExtras.mFirstChild = this;
+
+        // The children in the list already have boxes, so these calls only read them.
+        Extras* const firstExtras = first->extrasOrNull();
+        if( aBefore == nullptr )
+        {
+            Object* const last = firstExtras->mPrevSibling;
+            last->extrasOrNull()->mNextSibling = this;
+            selfExtras.mPrevSibling  = last;
+            selfExtras.mNextSibling  = nullptr;
+            firstExtras->mPrevSibling = this;
+            return;
+        }
+
+        // When aBefore is the first child, its back link points to the last child.
+        Extras* const beforeExtras = aBefore->extrasOrNull();
+        selfExtras.mPrevSibling  = beforeExtras->mPrevSibling;
+        selfExtras.mNextSibling  = aBefore;
+        if( aBefore == first )
+        {
+            parentExtras.mFirstChild = this;
+        }
+        else
+        {
+            beforeExtras->mPrevSibling->extrasOrNull()->mNextSibling = this;
+        }
+        beforeExtras->mPrevSibling = this;
     }
 
     //! Unlinks this object from its parent's child list. See the declaration.
@@ -762,18 +894,31 @@ namespace QtLikeSignal
 
         // Everything reachable from here has a box: this object has one (it has a parent), the
         // parent has one (it has a child), and so does every sibling.
-        Extras* parentExtras = selfExtras->mParent->extrasOrNull();
-        if( selfExtras->mPrevSibling != nullptr )
+        Extras* const parentExtras = selfExtras->mParent->extrasOrNull();
+        Object* const previous     = selfExtras->mPrevSibling;   // the last child, if this is first
+        Object* const next         = selfExtras->mNextSibling;
+        if( parentExtras->mFirstChild == this )
         {
-            selfExtras->mPrevSibling->extrasOrNull()->mNextSibling = selfExtras->mNextSibling;
+            parentExtras->mFirstChild = next;
+            if( next != nullptr )
+            {
+                // The new first child gets the back link to the last child.
+                next->extrasOrNull()->mPrevSibling = previous;
+            }
         }
         else
         {
-            parentExtras->mFirstChild = selfExtras->mNextSibling;
-        }
-        if( selfExtras->mNextSibling != nullptr )
-        {
-            selfExtras->mNextSibling->extrasOrNull()->mPrevSibling = selfExtras->mPrevSibling;
+            previous->extrasOrNull()->mNextSibling = next;
+            if( next != nullptr )
+            {
+                next->extrasOrNull()->mPrevSibling = previous;
+            }
+            else
+            {
+                // This object was the last child, so the back link of the first child moves to
+                // the new last child.
+                parentExtras->mFirstChild->extrasOrNull()->mPrevSibling = previous;
+            }
         }
 
         selfExtras->mPrevSibling = nullptr;
@@ -844,6 +989,10 @@ namespace QtLikeSignal
     //!
     //! The child's own ~Object() calls detachFromParent() too; it is a no-op by then, because this
     //! already unlinked it and cleared its parent pointer.
+    //!
+    //! The loop takes the first child each time, so it destroys the children in the order in which
+    //! they were attached. Qt uses the same order: QObjectPrivate::deleteChildren() walks its list
+    //! from index 0.
     //!
     //! **A child must be heap-allocated.** This calls `delete` on it. Standard C++ cannot ask
     //! whether a pointer names automatic or dynamic storage, so nothing here can check it -- Qt

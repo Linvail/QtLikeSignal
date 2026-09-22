@@ -46,6 +46,38 @@ namespace
         return children;
     }
 
+    //! Collects the children of a parent from the last to the first, with lastChild() and
+    //! previousSibling(). Thus a test can check the back links and the forward links.
+    std::vector<Object*> childrenBackwardsOf
+        (
+        const Object& aParent  //!< The parent to walk.
+        )
+    {
+        std::vector<Object*> children;
+        for( Object* child = aParent.lastChild(); child != nullptr;
+            child = child->previousSibling() )
+        {
+            children.push_back( child );
+        }
+        return children;
+    }
+
+    //! Checks the children of a parent against @p aExpected, in the two directions.
+    //!
+    //! A walk in the forward direction does not find a broken back link. A broken back link is the
+    //! only failure that the link from the first child to the last child can have.
+    void expectChildren
+        (
+        const Object& aParent,                   //!< The parent to walk.
+        const std::vector<Object*>& aExpected    //!< Its children, first to last.
+        )
+    {
+        EXPECT_EQ( childrenOf( aParent ), aExpected );
+        const std::vector<Object*> backwards( aExpected.rbegin(), aExpected.rend() );
+        EXPECT_EQ( childrenBackwardsOf( aParent ), backwards );
+        EXPECT_EQ( aParent.lastChild(), aExpected.empty() ? nullptr : aExpected.back() );
+    }
+
     //! True when @p aChild appears exactly once among @p aParent's children.
     bool hasChild
         (
@@ -489,6 +521,275 @@ TEST( ParentChildTest, DetachingFromTheMiddleKeepsTheListIntact )
     EXPECT_FALSE( hasChild( parent, &middle ) );
 }
 
+//! The children keep the order in which they were attached, as QObject::children() does. A walk
+//! in each direction gives this order.
+TEST( ParentChildTest, ChildrenKeepTheOrderTheyWereAttachedIn )
+{
+    Object parent;
+    Object first;
+    Object second;
+    Object third;
+
+    ASSERT_TRUE( first.setParent( &parent ) );
+    expectChildren( parent, { &first } );
+    EXPECT_EQ( first.previousSibling(), nullptr ) << "an only child found a sibling before it.";
+    EXPECT_EQ( first.nextSibling(), nullptr );
+
+    ASSERT_TRUE( second.setParent( &parent ) );
+    ASSERT_TRUE( third.setParent( &parent ) );
+    expectChildren( parent, { &first, &second, &third } );
+    EXPECT_EQ( first.previousSibling(), nullptr )
+        << "the first child's back link to the last leaked out of previousSibling().";
+}
+
+//! When the first, the last or a middle child leaves, the two directions of the list stay correct.
+//!
+//! The back link from the first child to the last child makes the first and the last child
+//! special. When the first child leaves, the next child gets that link. When the last child
+//! leaves, the link points to the new last child.
+TEST( ParentChildTest, DetachingKeepsBothDirectionsIntact )
+{
+    Object parent;
+    Object a;
+    Object b;
+    Object c;
+    Object d;
+    Object e;
+    for( Object* child : { &a, &b, &c, &d, &e } )
+    {
+        ASSERT_TRUE( child->setParent( &parent ) );
+    }
+
+    ASSERT_TRUE( a.setParent( nullptr ) );
+    expectChildren( parent, { &b, &c, &d, &e } );
+
+    ASSERT_TRUE( e.setParent( nullptr ) );
+    expectChildren( parent, { &b, &c, &d } );
+
+    ASSERT_TRUE( c.setParent( nullptr ) );
+    expectChildren( parent, { &b, &d } );
+
+    ASSERT_TRUE( b.setParent( nullptr ) );
+    expectChildren( parent, { &d } );
+
+    ASSERT_TRUE( d.setParent( nullptr ) );
+    expectChildren( parent, {} );
+    EXPECT_EQ( parent.firstChild(), nullptr );
+}
+
+//! A child that changes its parent goes to the end of the list of the new parent, as a new child
+//! does.
+TEST( ParentChildTest, ReParentingAppendsToTheNewParent )
+{
+    Object oldParent;
+    Object newParent;
+    Object resident;
+    Object mover;
+
+    ASSERT_TRUE( mover.setParent( &oldParent ) );
+    ASSERT_TRUE( resident.setParent( &newParent ) );
+    ASSERT_TRUE( mover.setParent( &newParent ) );
+
+    expectChildren( newParent, { &resident, &mover } );
+    expectChildren( oldParent, {} );
+}
+
+//! stackBefore() moves a child in front of a sibling: to the front, from the front, and between
+//! two children.
+TEST( ParentChildTest, StackBeforeMovesAChildInFrontOfASibling )
+{
+    Object parent;
+    Object a;
+    Object b;
+    Object c;
+    for( Object* child : { &a, &b, &c } )
+    {
+        ASSERT_TRUE( child->setParent( &parent ) );
+    }
+
+    EXPECT_TRUE( c.stackBefore( &a ) );
+    expectChildren( parent, { &c, &a, &b } );
+
+    EXPECT_TRUE( c.stackBefore( &b ) );
+    expectChildren( parent, { &a, &c, &b } );
+
+    // The child is already there: the call returns true and changes nothing.
+    EXPECT_TRUE( c.stackBefore( &b ) );
+    expectChildren( parent, { &a, &c, &b } );
+
+    EXPECT_TRUE( b.stackBefore( &a ) );
+    expectChildren( parent, { &b, &a, &c } );
+}
+
+//! stackAfter() moves a child behind a sibling, also to the end. A toolkit raises a widget this
+//! way.
+TEST( ParentChildTest, StackAfterMovesAChildBehindASibling )
+{
+    Object parent;
+    Object a;
+    Object b;
+    Object c;
+    for( Object* child : { &a, &b, &c } )
+    {
+        ASSERT_TRUE( child->setParent( &parent ) );
+    }
+
+    EXPECT_TRUE( a.stackAfter( &c ) );
+    expectChildren( parent, { &b, &c, &a } );
+
+    EXPECT_TRUE( a.stackAfter( &b ) );
+    expectChildren( parent, { &b, &a, &c } );
+
+    // The child is already there: the call returns true and changes nothing.
+    EXPECT_TRUE( a.stackAfter( &b ) );
+    expectChildren( parent, { &b, &a, &c } );
+
+    EXPECT_TRUE( b.stackAfter( &c ) );
+    expectChildren( parent, { &a, &c, &b } );
+}
+
+//! Two children are the smallest list in which an order exists, and each link in it is the first
+//! and the last at once. A swap there goes through the code that a longer list never reaches.
+TEST( ParentChildTest, StackingSwapsTheOnlyTwoSiblings )
+{
+    Object parent;
+    Object a;
+    Object b;
+    ASSERT_TRUE( a.setParent( &parent ) );
+    ASSERT_TRUE( b.setParent( &parent ) );
+    expectChildren( parent, { &a, &b } );
+
+    EXPECT_TRUE( b.stackBefore( &a ) );
+    expectChildren( parent, { &b, &a } );
+
+    EXPECT_TRUE( b.stackAfter( &a ) );
+    expectChildren( parent, { &a, &b } );
+
+    // Each child is already where it is asked to go: both calls return true and change nothing.
+    EXPECT_TRUE( a.stackBefore( &b ) );
+    EXPECT_TRUE( b.stackAfter( &a ) );
+    expectChildren( parent, { &a, &b } );
+}
+
+//! A move next to an object that is not a sibling fails, and the order does not change.
+TEST( ParentChildTest, StackingAgainstANonSiblingIsRefused )
+{
+    Object parent;
+    Object otherParent;
+    Object a;
+    Object b;
+    Object stranger;
+    Object orphan;
+    ASSERT_TRUE( a.setParent( &parent ) );
+    ASSERT_TRUE( b.setParent( &parent ) );
+    ASSERT_TRUE( stranger.setParent( &otherParent ) );
+
+    EXPECT_FALSE( a.stackBefore( nullptr ) );
+    EXPECT_FALSE( a.stackAfter( nullptr ) );
+    EXPECT_FALSE( a.stackBefore( &a ) );
+    EXPECT_FALSE( a.stackAfter( &a ) );
+    EXPECT_FALSE( b.stackBefore( &stranger ) );
+    EXPECT_FALSE( b.stackAfter( &stranger ) );
+    EXPECT_FALSE( b.stackBefore( &parent ) ) << "a child was stacked against its own parent.";
+    EXPECT_FALSE( orphan.stackBefore( &a ) ) << "an object with no parent was stacked.";
+
+    expectChildren( parent, { &a, &b } );
+    expectChildren( otherParent, { &stranger } );
+    EXPECT_EQ( orphan.parent(), nullptr );
+}
+
+namespace
+{
+    //! A child that records its number in a shared list when it is destroyed. The teardown tests
+    //! read the list to see the order in which a parent destroyed its children.
+    class NumberedChild : public Object
+    {
+    public:
+        //! Keeps the list and the number for the destructor.
+        NumberedChild
+            (
+            std::vector<int>& aLog,   //!< Where to record the destruction.
+            int aNumber               //!< What to record.
+            )
+            : mLog( aLog )
+            , mNumber( aNumber )
+        {
+        }
+
+        //! Records the number.
+        virtual ~NumberedChild() override
+        {
+            mLog.push_back( mNumber );
+        }
+
+    private:
+        std::vector<int>& mLog;       //!< The shared list.
+        int mNumber;                  //!< The number of this child.
+    };
+}
+
+//! A parent destroys its children in the order in which they were attached. Qt does the same:
+//! deleteChildren() walks its list from index 0.
+TEST( ParentChildTest, TeardownDestroysChildrenInAttachOrder )
+{
+    std::vector<int> log;
+    {
+        Object parent;
+        for( int number = 1; number <= 3; ++number )
+        {
+            ASSERT_NE( Object::createChild<NumberedChild>( &parent, log, number ), nullptr );
+        }
+    }
+
+    EXPECT_EQ( log, ( std::vector<int> { 1, 2, 3 } ) );
+}
+
+//! Teardown follows the child list, not the order in which the children were attached, so a
+//! restack changes the order in which they are destroyed.
+TEST( ParentChildTest, TeardownFollowsARestackedOrder )
+{
+    std::vector<int> log;
+    {
+        Object parent;
+        std::vector<Object*> children;
+        for( int number = 1; number <= 3; ++number )
+        {
+            Object* const child = Object::createChild<NumberedChild>( &parent, log, number );
+            ASSERT_NE( child, nullptr );
+            children.push_back( child );
+        }
+
+        // 1, 2, 3 becomes 3, 1, 2.
+        ASSERT_TRUE( children[2]->stackBefore( children[0] ) );
+        expectChildren( parent, { children[2], children[0], children[1] } );
+    }
+
+    EXPECT_EQ( log, ( std::vector<int> { 3, 1, 2 } ) );
+}
+
+//! isWidgetType() is false for a plain Object, and true after a class declares that it is a
+//! widget.
+TEST( ParentChildTest, IsWidgetTypeIsSetOnlyByTheWidgetClass )
+{
+    //! A class that declares that it is a widget, as the base class of a widget toolkit does.
+    class WidgetLike : public Object
+    {
+    public:
+        //! Marks this object as a widget.
+        WidgetLike()
+        {
+            setWidgetType();
+        }
+
+    };
+
+    Object plain;
+    WidgetLike widget;
+
+    EXPECT_FALSE( plain.isWidgetType() );
+    EXPECT_TRUE( widget.isWidgetType() );
+}
+
 //! A destroyed child takes itself out of its parent's list.
 //!
 //! ~Object() unlinks from the parent as its second act, before anything else it does. Without that
@@ -559,9 +860,14 @@ TEST( ParentChildTest, AChildDestructorMayDeleteASibling )
     int aliveCount = 0;
     {
         Object parent;
-        Object* victim = new CountedChild( aliveCount, &parent );
-        ( void )new SiblingKiller( &parent, aliveCount, victim );
+
+        // The parent deletes the children in the order in which they were attached. Thus the
+        // killer must be attached before its victim, and the victim exists without a parent
+        // before the two are attached. The list is [third, killer, victim].
+        Object* victim = new CountedChild( aliveCount );
         ( void )new CountedChild( aliveCount, &parent );
+        ( void )new SiblingKiller( &parent, aliveCount, victim );
+        ASSERT_TRUE( victim->setParent( &parent ) );
         ASSERT_EQ( parent.childCount(), 3u );
         ASSERT_EQ( aliveCount, 3 );
     }
@@ -571,23 +877,23 @@ TEST( ParentChildTest, AChildDestructorMayDeleteASibling )
 
 //! The same, with a sibling still to come after the one that was deleted out from under the walk.
 //!
-//! **The case above cannot reach this.** attachToParent() prepends, so attaching victim, killer,
-//! third leaves the list as [third, killer, victim] and the victim is its tail -- deleting it
-//! empties the list, the walk sees null and stops, and whether it could have *continued* past a
-//! mid-list deletion is never asked.
+//! **The case above cannot reach this.** Its list is [third, killer, victim], so the victim is the
+//! last child. When the killer deletes it, the list is empty, and the walk sees null and stops.
+//! Thus that case never shows if the walk can *continue* after a deletion in the middle.
 //!
-//! Attaching in the other order puts the victim in the middle, so the walk has to carry on to a
-//! survivor whose link the victim was holding a moment earlier.
+//! Here the victim is in the middle. Thus the walk must continue to a survivor, and a moment
+//! before, the victim held the link to that survivor.
 TEST( ParentChildTest, TeardownContinuesPastASiblingDeletedMidWalk )
 {
     int aliveCount = 0;
     {
         Object parent;
 
-        // Prepending means the list ends up [killer, victim, survivor].
-        ( void )new CountedChild( aliveCount, &parent );
-        Object* victim = new CountedChild( aliveCount, &parent );
+        // The list is [killer, victim, survivor].
+        Object* victim = new CountedChild( aliveCount );
         ( void )new SiblingKiller( &parent, aliveCount, victim );
+        ASSERT_TRUE( victim->setParent( &parent ) );
+        ( void )new CountedChild( aliveCount, &parent );
 
         ASSERT_EQ( parent.childCount(), 3u );
         ASSERT_EQ( aliveCount, 3 );

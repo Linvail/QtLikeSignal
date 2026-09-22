@@ -276,14 +276,66 @@ namespace QtLikeSignal
         //! themselves -- so there is no container here to hand back, and building a std::vector per
         //! call would allocate on every traversal and give back exactly the cost the intrusive form
         //! exists to avoid. See mFirstChild.
+        //!
+        //! **The order is the order of QObject::children().** The child that was attached first
+        //! comes first, and a new child goes to the end. stackBefore() and stackAfter() can change
+        //! this order. Thus a widget toolkit can use it as its stacking order, as QWidget::raise()
+        //! and QWidget::lower() use the list of QObject.
         Object* firstChild() const;
+
+        //! Gets the last child of this object, or nullptr when it has no children. Use
+        //! previousSibling() to walk the children from the last to the first: from the top to the
+        //! bottom, when the order is a stacking order.
+        //!
+        //! **Not thread-safe**, as parent(). O(1): the back link of the first child points to the
+        //! last child.
+        Object* lastChild() const;
 
         //! Gets the next child of this object's parent, or nullptr when this is the last one.
         //!
-        //! **Not thread-safe**, as parent(). Order is unspecified and callers must not rely on it;
-        //! it is currently most-recently-attached first, because attaching at the head is what
-        //! makes it O(1).
+        //! **Not thread-safe**, as parent(). See firstChild() for the order.
         Object* nextSibling() const;
+
+        //! Gets the previous child of the parent of this object, or nullptr when this object is the
+        //! first child.
+        //!
+        //! **Not thread-safe**, as parent().
+        Object* previousSibling() const;
+
+        //! Moves this object to the position just before @p aSibling in the child list of its
+        //! parent.
+        //!
+        //! **Not thread-safe**, as parent(). O(1).
+        //!
+        //! QObject has no function like this. Only QWidget gives a meaning to the order of the
+        //! children, and QWidget::stackUnder() changes the private list of QObject directly. Object
+        //! has no private list for a subclass to change, so Object itself supplies the move. The
+        //! name comes from QQuickItem::stackBefore(), which does the same to the visual children of
+        //! an item.
+        //!
+        //! **@p aSibling is not const, where QQuickItem::stackBefore() takes a const item.** The
+        //! order there is a list held by the parent, and a move writes only that list. Here the
+        //! order is the links inside the children themselves, so a move writes the previous-sibling
+        //! link of @p aSibling. A const parameter would promise the caller something the move
+        //! cannot keep.
+        //!
+        //! @return true when this object is just before @p aSibling, also when it was there before
+        //! the call. false when @p aSibling is null, is this object, or is not a child of the same
+        //! parent; then the function writes a warning and changes nothing.
+        bool stackBefore
+            (
+            Object* aSibling  //!< A child of the parent of this object, whose links this changes.
+            );
+
+        //! Moves this object to the position just after @p aSibling in the child list of its
+        //! parent. It works as stackBefore() does, on the other side, and it writes the links of
+        //! @p aSibling for the same reason. The name comes from QQuickItem::stackAfter().
+        //!
+        //! @return the same values as stackBefore().
+        bool stackAfter
+            (
+            Object* aSibling  //!< A child of the parent of this object, whose links this changes.
+            );
 
         //! Number of direct children of this object.
         //!
@@ -374,6 +426,16 @@ namespace QtLikeSignal
         //! A debugging aid, like QObject::dumpObjectTree(). Names come from objectName(); an
         //! unnamed object prints as its address alone.
         void dumpObjectTree() const;
+
+        //! Returns true if this object is a widget, as its class declared with setWidgetType().
+        //! Thread-safe.
+        //!
+        //! This is QObject::isWidgetType(), for the same use. The children of a widget can include
+        //! objects that are not widgets, for example a Timer that the widget is the parent of. Code
+        //! that walks the tree to paint or to hit-test must skip them. This function reads one bit
+        //! that the object already has, but a dynamic_cast compares type names for each child on
+        //! each walk. For the same reason, Qt makes qobject_cast<QWidget*> read its own bit.
+        bool isWidgetType() const;
 
         //! Posts @p aEvent to @p aReceiver's thread, to be delivered by its event() later.
         //!
@@ -912,6 +974,11 @@ namespace QtLikeSignal
             ThreadData* aThreadData
             );
 
+        //! Marks this object as a widget, so that isWidgetType() returns true. The base class of a
+        //! widget toolkit calls it in its constructor, before the object joins a tree. QWidget sets
+        //! the same bit in its QObjectPrivate. The mark is permanent: no function removes it.
+        void setWidgetType();
+
     private:
         //! Key identifying a deduplicated deferred call.
         //!
@@ -1300,16 +1367,16 @@ namespace QtLikeSignal
         friend class Timer;
 
         const std::shared_ptr<Affinity> mAffinity;           //!< Thread affinity box, which also carries the life flag ~Object() clears; the box itself is never reassigned, only its contents (see moveToThread()).
-        //! The four per-object flags, packed into one byte.
+        //! The per-object flags, packed into one byte.
         //!
-        //! Each was a std::atomic<bool> of its own. Four bytes of payload, but they sat between
-        //! two 8-aligned members and cost eight; packed, and with mIncomingCount narrowed to fill
-        //! the hole they leave, sizeof(Object) drops from 96 to 88. Qt packs twelve flags into one
-        //! 32-bit word in QObjectData for the same reason.
+        //! The first four flags were each a std::atomic<bool>. Their payload was four bytes, but
+        //! they sat between two members with 8-byte alignment and used eight. Packed, and with a
+        //! narrower mIncomingCount to fill the hole, sizeof(Object) goes from 96 to 88. Qt packs
+        //! twelve flags into one 32-bit word in QObjectData for the same reason.
         //!
-        //! All four are set-once and never cleared, which is what makes the packing safe: two
-        //! threads setting different bits cannot lose each other's write, because fetch_or is a
-        //! read-modify-write rather than a store.
+        //! Each flag is set once and never cleared. This makes the packing safe: two threads that
+        //! set different bits cannot lose a write of the other thread, because fetch_or is a
+        //! read-modify-write and not a store.
         enum Flag : std::uint8_t
         {
             //! Set once deleteLater() has posted a DeferredDeleteEvent; de-bounces repeat calls,
@@ -1331,6 +1398,10 @@ namespace QtLikeSignal
             //! Set once this object has started a timer, so ~Object() knows whether the extras box
             //! can possibly hold a timer id. See Extras.
             kUsedTimers = 1u << 3,
+
+            //! setWidgetType() sets this flag, and isWidgetType() reads it. Qt keeps the same flag
+            //! in QObjectData::isWidget.
+            kIsWidgetType = 1u << 4,
         };
 
         std::atomic<std::uint8_t> mFlags { 0 };
@@ -1509,6 +1580,13 @@ namespace QtLikeSignal
             //! Raw pointers, and owning in the opposite direction from mIncomingHead's: a parent
             //! owns its children, so it deletes them rather than merely unlinking them. A child
             //! never owns its parent.
+            //!
+            //! **The mPrevSibling of the first child points to the last child**, not to null. When
+            //! the first child is the only child, it points to itself. This back link makes
+            //! lastChild() and an append O(1) without a tail pointer here, which each tree node
+            //! would pay for. Thus, to find if a child is the first child, compare it with the
+            //! mFirstChild of the parent; a null mPrevSibling does not tell it. mNextSibling is
+            //! null at the end, as usual.
             Object* mPrevSibling { nullptr };
             Object* mNextSibling { nullptr };
         };
@@ -1534,11 +1612,13 @@ namespace QtLikeSignal
             return mExtras.load( std::memory_order_acquire );
         }
 
-        //! Links this object into @p aParent's child list. Callers have already refused the cases
-        //! setParent() refuses, and have already detached from any previous parent.
+        //! Links this object into the child list of @p aParent, just before @p aBefore, or at the
+        //! end when @p aBefore is null. The callers already refused the cases that setParent()
+        //! refuses, and already detached this object from its previous parent.
         void attachToParent
             (
-            Object* aParent
+            Object* aParent,  //!< The new parent.
+            Object* aBefore   //!< The child of aParent to go before, or null for the end.
             );
 
         //! Unlinks this object from its parent's child list, and does nothing when it has no

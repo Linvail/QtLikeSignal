@@ -280,8 +280,21 @@ existing parent.
 - The tree is not locked. It is thread-confined, which is stronger and free: only the thread the
   subtree lives in may read or change any of it. Qt guards `parent`/`children` the same way, with an
   invariant rather than a mutex, which is why neither library carries a per-object lock for it.
-- `parent()`, `firstChild()`, `nextSibling()`, `childCount()`, `findChild()`, `findChildren()` and
+- `parent()`, `firstChild()`, `nextSibling()`, `lastChild()`, `previousSibling()`,
+  `childCount()`, `stackBefore()`, `stackAfter()`, `findChild()`, `findChildren()` and
   `setParent()` are all subject to that: call them from the thread the objects live in.
+
+### The order of the children
+
+The children keep the order in which they were attached, as `QObject::children()` does. A parent
+also destroys its children in this order. `firstChild()` and `nextSibling()` walk the children
+from the first to the last. `lastChild()` and `previousSibling()` walk them from the last to the
+first.
+
+`stackBefore()` and `stackAfter()` move a child to a different position in this order. Thus a
+widget toolkit can use the order as its stacking order, as `QWidget` does. The toolkit calls
+`setWidgetType()` on each widget. Then `isWidgetType()` tells which children are widgets, so the
+toolkit can skip the other children, for example a `Timer`, without a `dynamic_cast`.
 
 ### Finding things
 
