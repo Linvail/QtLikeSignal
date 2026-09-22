@@ -7,6 +7,9 @@
 //! queue, who deletes the work, and what shutdown waits for.
 
 #include "QtLikeSignal/CoreApplication.hpp"
+#include "QtLikeSignal/Log.hpp"
+#include "QtLikeSignal/LogMessage.hpp"
+#include "QtLikeSignal/LogSink.hpp"
 #include "QtLikeSignal/Object.hpp"
 #include "QtLikeSignal/Runnable.hpp"
 #include "QtLikeSignal/TaskHandle.hpp"
@@ -60,6 +63,64 @@ namespace
         std::mutex mMutex;                 //!< Guards mOpen.
         std::condition_variable mChanged;  //!< Wakes the waiters.
         bool mOpen { false };              //!< True once open() was called.
+    };
+
+    //! A sink that counts the records containing one phrase, installed for as long as it lives.
+    //!
+    //! It lets a test assert on a record the library writes, and it keeps every other record out of
+    //! a passing run. The previous sink is put back on destruction.
+    class PhraseCountingSink : public LogSink
+    {
+    public:
+        //! Installs this sink, which counts the records that contain @p aPhrase.
+        explicit PhraseCountingSink
+            (
+            const std::string& aPhrase   //!< The text to look for inside a record.
+            )
+            : mPhrase( aPhrase )
+        {
+            mPrevious = Log::setSink( this );
+        }
+
+        //! Puts the previous sink back.
+        virtual ~PhraseCountingSink() override
+        {
+            Log::setSink( mPrevious );
+        }
+
+        PhraseCountingSink
+            (
+            const PhraseCountingSink&
+            ) = delete;
+
+        PhraseCountingSink& operator=
+            (
+            const PhraseCountingSink&
+            ) = delete;
+
+        //! Counts the record if it contains the phrase.
+        virtual void write
+            (
+            const LogMessage& aMessage   //!< The record.
+            ) override
+        {
+            const std::string text( aMessage.mText, aMessage.mLength );
+            if( text.find( mPhrase ) != std::string::npos )
+            {
+                ++mCount;
+            }
+        }
+
+        //! @return how many records contained the phrase.
+        int count() const
+        {
+            return mCount.load();
+        }
+
+    private:
+        const std::string mPhrase;         //!< The text to look for.
+        std::atomic<int> mCount { 0 };     //!< Records that contained it.
+        LogSink* mPrevious { nullptr };    //!< What was installed before, put back on destruction.
     };
 
     //! Counts how often it ran, and on which threads, and says when it is destroyed.
@@ -1315,16 +1376,23 @@ TEST( ThreadPoolTest, AHandOffTakesAPriority )
 //! to dispatch it. The thread could enter the base class's run() rather than the worker's.
 //!
 //! Any pool built and destroyed without being given work is the shape that shows it, because that
-//! is the shortest life a worker can have. ThreadSanitizer is what detects it, as a "data race on
-//! vptr (ctor/dtor vs virtual call)"; without one the two writes and the read usually land in an
-//! order that hides it.
+//! is the shortest life a worker can have. ThreadSanitizer detects the race itself, as a "data
+//! race on vptr (ctor/dtor vs virtual call)"; without one the two writes and the read usually land
+//! in an order that hides it.
+//!
+//! So the assertion does not depend on the race. ~Worker writes a critical record when its thread
+//! is still running, which is true of a worker that was not joined whether or not the race hit
+//! this time. The test fails in every build if the join is removed, and a sanitizer build still
+//! reports the race as well.
 TEST( ThreadPoolTest, APoolDestroyedBeforeItsWorkersStartJoinsThemFirst )
 {
+    PhraseCountingSink sink( "destroyed while its thread still runs" );
+
     for( int round = 0; round < 50; ++round )
     {
         ThreadPool pool( 4 );
+        ASSERT_EQ( pool.workerCount(), 4 );
     }
 
-    // Reaching here without a sanitizer report is the assertion.
-    SUCCEED();
+    EXPECT_EQ( sink.count(), 0 );
 }

@@ -49,6 +49,22 @@ namespace QtLikeSignal
         {
         }
 
+        //! Reports a worker whose thread is still running when it begins to be destroyed.
+        //!
+        //! ~ThreadPool must join every worker before it destroys any of them, and this is where a
+        //! pool that did not is seen. ~Thread would still stop and join the thread, but only after
+        //! this destructor has rewritten the vptr that a starting thread reads to dispatch run().
+        //! Only ThreadSanitizer sees that race. Every build sees this record, so a test can fail
+        //! without a sanitizer.
+        virtual ~Worker() override
+        {
+            if( isRunning() )
+            {
+                qCCritical( gLogThread ) << "ThreadPool: worker" << objectName()
+                                         << "destroyed while its thread still runs";
+            }
+        }
+
     protected:
         //! Drains the pool's queue until the pool stops.
         virtual void run() override
