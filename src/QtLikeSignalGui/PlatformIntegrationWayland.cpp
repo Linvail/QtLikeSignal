@@ -2197,6 +2197,12 @@ namespace QtLikeSignalGui
             internals.mSurface = nullptr;
         }
 
+        // Destroying a surface sends no wl_surface::leave for the outputs it was on, so this set
+        // keeps them unless the clear is here. A later createWindow() would then start its surface
+        // on the outputs of the surface that went away, and updateDevicePixelRatio() would report
+        // the old scale instead of the 1.0 that a surface on no output has to start at.
+        internals.mSurfaceOutputs.clear();
+
         if( internals.mDisplay != nullptr )
         {
             wl_display_flush( internals.mDisplay );
