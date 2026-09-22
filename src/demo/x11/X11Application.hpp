@@ -74,7 +74,7 @@ namespace QtLikeSignalDemo
             char** aArgv
             );
 
-        virtual ~X11Application() override;
+        ~X11Application() override;
 
         bool createWindow
             (

@@ -83,7 +83,7 @@ namespace
         }
 
         //! Puts the previous sink back.
-        virtual ~PhraseCountingSink() override
+        ~PhraseCountingSink() override
         {
             Log::setSink( mPrevious );
         }
@@ -99,7 +99,7 @@ namespace
             ) = delete;
 
         //! Counts the record if it contains the phrase.
-        virtual void write
+        void write
             (
             const LogMessage& aMessage   //!< The record.
             ) override
@@ -137,7 +137,7 @@ namespace
         }
 
         //! Counts the run, and remembers the thread it ran on and how many ran before it.
-        virtual void run() override
+        void run() override
         {
             mRanOn = Thread::currentThread();
             mOrder = ++mCount;
@@ -162,13 +162,13 @@ namespace
         }
 
         //! Reports the destruction.
-        virtual ~ReportingWork() override
+        ~ReportingWork() override
         {
             mDeleted = true;
         }
 
         //! Does nothing; this work is about its lifetime.
-        virtual void run() override
+        void run() override
         {
         }
 

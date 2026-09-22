@@ -207,7 +207,7 @@ namespace QtLikeSignal
     {
     public:
         //! Destroys the callable in the tail. See create() for why it can assume one is there.
-        virtual ~MetaCallEvent() override
+        ~MetaCallEvent() override
         {
             mDestroy( storage() );
         }

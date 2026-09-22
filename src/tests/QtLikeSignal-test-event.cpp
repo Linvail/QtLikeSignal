@@ -53,7 +53,7 @@ namespace
             ++gLiveEvents;
         }
 
-        virtual ~OrderEvent() override
+        ~OrderEvent() override
         {
             --gLiveEvents;
         }
@@ -84,7 +84,7 @@ namespace
             ++gLiveEvents;
         }
 
-        virtual ~ForgedEvent() override
+        ~ForgedEvent() override
         {
             --gLiveEvents;
         }
@@ -100,7 +100,7 @@ namespace
     class EventRecorder : public Object
     {
     public:
-        virtual bool event
+        bool event
             (
             Event* aEvent  //!< The event to handle.
             ) override
@@ -116,7 +116,7 @@ namespace
             return Object::event( aEvent );
         }
 
-        virtual void timerEvent
+        void timerEvent
             (
             TimerEvent* aEvent
             ) override
@@ -142,7 +142,7 @@ namespace
     class GreedyRecorder : public Object
     {
     public:
-        virtual bool event
+        bool event
             (
             Event* aEvent
             ) override
@@ -152,7 +152,7 @@ namespace
             return true;
         }
 
-        virtual void timerEvent
+        void timerEvent
             (
             TimerEvent* aEvent
             ) override

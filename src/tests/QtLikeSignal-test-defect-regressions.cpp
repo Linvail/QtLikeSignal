@@ -96,7 +96,7 @@ namespace
         {
         }
 
-        virtual ~DestructionRecorder() override
+        ~DestructionRecorder() override
         {
             mFlag->store( true );
         }
@@ -118,7 +118,7 @@ namespace
         {
         }
 
-        virtual ~DestructionCounter() override
+        ~DestructionCounter() override
         {
             mCount->fetch_add( 1 );
         }
@@ -160,7 +160,7 @@ class DefectInstantFinishThread : public Thread
 {
 protected:
     //! Returns immediately so the thread reaches the finished state quickly.
-    virtual void run() override
+    void run() override
     {
     }
 
@@ -417,7 +417,7 @@ public:
 
 protected:
     //! Counts the delivery.
-    virtual void timerEvent
+    void timerEvent
         (
         TimerEvent* aEvent  //!< Unused.
         ) override
@@ -541,7 +541,7 @@ public:
 
 protected:
     //! Records the delivering thread.
-    virtual void timerEvent
+    void timerEvent
         (
         TimerEvent* event  //!< Unused.
         ) override
@@ -644,7 +644,7 @@ public:
 
 protected:
     //! Toggles the subject's affinity between this thread and none until stopped.
-    virtual void run() override
+    void run() override
     {
         while( !mStopToggling.load( std::memory_order_acquire ) )
         {
@@ -1412,7 +1412,7 @@ public:
     std::chrono::steady_clock::time_point mOrigin;
 
 protected:
-    virtual void timerEvent
+    void timerEvent
         (
         TimerEvent* aEvent
         ) override
@@ -1497,7 +1497,7 @@ public:
     std::vector<int> mFiredIds;                          //!< Ids delivered to this object, in order.
 
 protected:
-    virtual void timerEvent
+    void timerEvent
         (
         TimerEvent* aEvent
         ) override
@@ -1614,7 +1614,7 @@ public:
     int mFireCount { 0 };                    //!< Fires delivered to this object.
 
 protected:
-    virtual void timerEvent
+    void timerEvent
         (
         TimerEvent* aEvent
         ) override
@@ -1634,7 +1634,7 @@ public:
     int mFireCount { 0 };  //!< Fires delivered to this object.
 
 protected:
-    virtual void timerEvent
+    void timerEvent
         (
         TimerEvent* aEvent
         ) override
@@ -1690,7 +1690,7 @@ public:
     int mFireCount { 0 };          //!< Fires delivered to this object.
 
 protected:
-    virtual void timerEvent
+    void timerEvent
         (
         TimerEvent* aEvent
         ) override
@@ -2222,7 +2222,7 @@ TEST( ObjectDefectTest, DeleteLaterFallsBackToASynchronousDeleteAfterClose )
             }
         }
 
-        virtual ~DeathProbe() override
+        ~DeathProbe() override
         {
             mCount.fetch_add( 1 );
         }

@@ -135,7 +135,7 @@ namespace QtLikeSignal
                 }
 
                 //! Runs the callable.
-                virtual void run() override
+                void run() override
                 {
                     mWork();
                 }

@@ -89,7 +89,7 @@ namespace QtLikeSignal
 
         //! Virtual so a subclass overriding run() can be destroyed through a Thread*, which the
         //! subclassing idiom below makes reachable. See run().
-        virtual ~Thread() override;
+        ~Thread() override;
 
         Thread
             (
@@ -527,7 +527,7 @@ namespace QtLikeSignal
             }
 
         protected:
-            virtual void run() override
+            void run() override
             {
                 if( mFn )
                 {

@@ -175,7 +175,7 @@ namespace QtLikeSignal
 
     protected:
         //! Writes the blended value into the property.
-        virtual void updateCurrentValue
+        void updateCurrentValue
             (
             double aProgress  //!< Shaped progress through the current run.
             ) override
@@ -189,7 +189,7 @@ namespace QtLikeSignal
         //! animation... which is exactly what it must **not** do, and why the flag is checked:
         //! re-reading on each loop would make the second run start where the first ended, and a
         //! loop would walk away from its origin instead of repeating.
-        virtual void updateState
+        void updateState
             (
             AnimationState aNewState,  //!< The state now in force.
             AnimationState aOldState   //!< The state it was in before.

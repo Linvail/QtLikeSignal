@@ -138,7 +138,7 @@ namespace
 
     protected:
         //! Runs a timer on this thread and emits on every expiry, until quit() stops the loop.
-        virtual void run() override
+        void run() override
         {
             //! Counts expiries and publishes them through the thread's signal.
             //!
@@ -226,7 +226,7 @@ namespace
         }
 
         //! Frees the font, if one was loaded.
-        virtual ~EventLog() override
+        ~EventLog() override
         {
             if( mFont != nullptr )
             {

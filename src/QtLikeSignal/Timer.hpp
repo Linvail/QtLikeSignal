@@ -63,7 +63,7 @@ namespace QtLikeSignal
             Object* aParent = nullptr
             );
 
-        virtual ~Timer() override;
+        ~Timer() override;
 
         int interval() const;
 
@@ -149,7 +149,7 @@ namespace QtLikeSignal
             );
 
     protected:
-        virtual void timerEvent
+        void timerEvent
             (
             TimerEvent* aEvent
             ) override;
@@ -218,7 +218,7 @@ namespace QtLikeSignal
             }
 
         protected:
-            virtual void timerEvent
+            void timerEvent
                 (
                 TimerEvent* aEvent
                 ) override
@@ -314,7 +314,7 @@ namespace QtLikeSignal
             }
 
         protected:
-            virtual void timerEvent
+            void timerEvent
                 (
                 TimerEvent* aEvent
                 ) override

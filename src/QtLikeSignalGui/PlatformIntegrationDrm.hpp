@@ -68,44 +68,44 @@ namespace QtLikeSignalGui
     public:
         PlatformIntegrationDrm();
 
-        virtual ~PlatformIntegrationDrm() override;
+        ~PlatformIntegrationDrm() override;
 
-        virtual PlatformType type() const override;
+        PlatformType type() const override;
 
-        virtual bool canCreateWindows() const override;
+        bool canCreateWindows() const override;
 
-        virtual bool canAdoptWindows() const override;
+        bool canAdoptWindows() const override;
 
-        virtual Window* adoptWindow
+        Window* adoptWindow
             (
             const NativeWindow& aNative
             ) override;
 
-        virtual void releaseNativeWindow
+        void releaseNativeWindow
             (
             Window* aWindow
             ) override;
 
-        virtual void setWindowTitle
+        void setWindowTitle
             (
             Window* aWindow,
             const std::string& aTitle
             ) override;
 
-        virtual void setWindowVisible
+        void setWindowVisible
             (
             Window* aWindow,
             bool aVisible
             ) override;
 
-        virtual void setClientSize
+        void setClientSize
             (
             Window* aWindow,
             int aWidth,
             int aHeight
             ) override;
 
-        virtual void requestUpdate
+        void requestUpdate
             (
             Window* aWindow
             ) override;

@@ -33,7 +33,7 @@ namespace
     {
     public:
         //! Records one step.
-        virtual void updateCurrentValue
+        void updateCurrentValue
             (
             double aProgress  //!< The shaped progress.
             ) override

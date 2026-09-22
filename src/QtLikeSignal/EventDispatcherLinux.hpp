@@ -41,7 +41,7 @@ namespace QtLikeSignal
     public:
         EventDispatcherLinux();
 
-        virtual ~EventDispatcherLinux() override;
+        ~EventDispatcherLinux() override;
 
         //! Invoked when a registered descriptor is ready; receives the poll(2) revents bitmask.
         using EventSourceCallback = std::function<void ( short aEvents )>;
@@ -59,13 +59,13 @@ namespace QtLikeSignal
             );
 
     protected:
-        virtual void waitForEvents
+        void waitForEvents
             (
             std::unique_lock<std::mutex>& aLock,
             int aTimeoutMs
             ) override;
 
-        virtual void wakeWaiter() override;
+        void wakeWaiter() override;
 
     private:
         //! One registered platform descriptor and what to call when it is ready.

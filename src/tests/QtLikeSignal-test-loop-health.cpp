@@ -42,7 +42,7 @@ namespace
     class ProbeReceiver : public Object
     {
     public:
-        virtual bool event
+        bool event
             (
             Event* aEvent  //!< The event to handle.
             ) override
@@ -59,7 +59,7 @@ namespace
             return Object::event( aEvent );
         }
 
-        virtual void timerEvent
+        void timerEvent
             (
             TimerEvent* aEvent
             ) override

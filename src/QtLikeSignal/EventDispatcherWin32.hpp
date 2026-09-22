@@ -40,18 +40,18 @@ namespace QtLikeSignal
     public:
         EventDispatcherWin32();
 
-        virtual ~EventDispatcherWin32() override;
+        ~EventDispatcherWin32() override;
 
     protected:
-        virtual void waitForEvents
+        void waitForEvents
             (
             std::unique_lock<std::mutex>& aLock,
             int aTimeoutMs
             ) override;
 
-        virtual void wakeWaiter() override;
+        void wakeWaiter() override;
 
-        virtual void processPlatformEvents() override;
+        void processPlatformEvents() override;
 
     private:
         //! The hidden message-only window, or nullptr if it could not be created.

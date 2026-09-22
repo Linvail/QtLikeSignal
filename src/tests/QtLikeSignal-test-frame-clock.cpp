@@ -32,22 +32,22 @@ namespace
     class FakeFrameClockIntegration : public PlatformIntegration
     {
     public:
-        virtual PlatformType type() const override
+        PlatformType type() const override
         {
             return PlatformType::Unknown;
         }
 
-        virtual bool canCreateWindows() const override
+        bool canCreateWindows() const override
         {
             return true;
         }
 
-        virtual bool canAdoptWindows() const override
+        bool canAdoptWindows() const override
         {
             return false;
         }
 
-        virtual Window* createWindow
+        Window* createWindow
             (
             const WindowSettings& aSettings
             ) override
@@ -62,7 +62,7 @@ namespace
             return mWindow;
         }
 
-        virtual void releaseNativeWindow
+        void releaseNativeWindow
             (
             Window* aWindow
             ) override
@@ -70,7 +70,7 @@ namespace
             ( void )aWindow;
         }
 
-        virtual void setWindowTitle
+        void setWindowTitle
             (
             Window* aWindow,
             const std::string& aTitle
@@ -80,7 +80,7 @@ namespace
             ( void )aTitle;
         }
 
-        virtual void setWindowVisible
+        void setWindowVisible
             (
             Window* aWindow,
             bool aVisible
@@ -90,7 +90,7 @@ namespace
             ( void )aVisible;
         }
 
-        virtual void setClientSize
+        void setClientSize
             (
             Window* aWindow,
             int aWidth,
@@ -102,12 +102,12 @@ namespace
             ( void )aHeight;
         }
 
-        virtual bool hasFrameClock() const override
+        bool hasFrameClock() const override
         {
             return mHasFrameClock;
         }
 
-        virtual void requestUpdate
+        void requestUpdate
             (
             Window* aWindow
             ) override
@@ -131,7 +131,7 @@ namespace
             deliver();
         }
 
-        virtual void deliverPacedUpdate
+        void deliverPacedUpdate
             (
             Window* aWindow
             ) override
@@ -145,7 +145,7 @@ namespace
             deliver();
         }
 
-        virtual void releasePacedUpdate
+        void releasePacedUpdate
             (
             Window* aWindow
             ) override

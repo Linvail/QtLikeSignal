@@ -129,7 +129,7 @@ namespace
         std::function<void( int aTimerId )> mOnTimer;
 
     protected:
-        virtual void timerEvent
+        void timerEvent
             (
             TimerEvent* aEvent
             ) override
@@ -251,7 +251,7 @@ namespace
         }
 
     protected:
-        virtual void timerEvent
+        void timerEvent
             (
             TimerEvent* aEvent
             ) override

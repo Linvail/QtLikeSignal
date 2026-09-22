@@ -51,16 +51,16 @@ namespace QtLikeSignal
             bool aFlushEachRecord = true
             );
 
-        virtual ~LogSinkFile() override;
+        ~LogSinkFile() override;
 
         //! Formats @p aMessage as one line and writes it.
-        virtual void write
+        void write
             (
             const LogMessage& aMessage
             ) override;
 
         //! Flushes the underlying stream.
-        virtual void flush() override;
+        void flush() override;
 
     private:
         //! The stream to write to. Not owned, and not closed by this class: the two instances that

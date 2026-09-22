@@ -65,7 +65,7 @@ namespace QtLikeSignal
             char** aArgv
             );
 
-        virtual ~CoreApplication() override;
+        ~CoreApplication() override;
 
         CoreApplication
             (

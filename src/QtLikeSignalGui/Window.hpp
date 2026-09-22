@@ -151,7 +151,7 @@ namespace QtLikeSignalGui
     class Window : public QtLikeSignal::Object
     {
     public:
-        virtual ~Window() override;
+        ~Window() override;
 
         Window
             (

@@ -56,7 +56,7 @@ namespace QtLikeSignal
         //! this destructor has rewritten the vptr that a starting thread reads to dispatch run().
         //! Only ThreadSanitizer sees that race. Every build sees this record, so a test can fail
         //! without a sanitizer.
-        virtual ~Worker() override
+        ~Worker() override
         {
             if( isRunning() )
             {
@@ -67,7 +67,7 @@ namespace QtLikeSignal
 
     protected:
         //! Drains the pool's queue until the pool stops.
-        virtual void run() override
+        void run() override
         {
             mPool.workerLoop();
         }

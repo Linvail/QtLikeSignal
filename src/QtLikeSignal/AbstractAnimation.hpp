@@ -76,7 +76,7 @@ namespace QtLikeSignal
             );
 
         //! Stops the animation, so it is off its thread's clock before anything of it is destroyed.
-        virtual ~AbstractAnimation() override;
+        ~AbstractAnimation() override;
 
         AbstractAnimation
             (

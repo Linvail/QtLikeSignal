@@ -109,7 +109,7 @@ namespace
             }
         }
 
-        virtual ~CountedChild() override
+        ~CountedChild() override
         {
             --mAliveCount;
         }
@@ -137,7 +137,7 @@ namespace
             ++mAliveCount;
         }
 
-        virtual ~ConstructedChild() override
+        ~ConstructedChild() override
         {
             --mAliveCount;
         }
@@ -164,7 +164,7 @@ namespace
             EXPECT_TRUE( setParent( aParent ) );
         }
 
-        virtual ~SiblingKiller() override
+        ~SiblingKiller() override
         {
             delete mVictim;
             --mAliveCount;
@@ -193,7 +193,7 @@ namespace
             EXPECT_TRUE( setParent( aParent ) );
         }
 
-        virtual ~LateAttacher() override
+        ~LateAttacher() override
         {
             // Remembered at construction, because parent() is already null here: deleteChildren()
             // unlinks a child before deleting it, so a child's destructor cannot reach its parent
@@ -233,7 +233,7 @@ namespace
             ++mAliveCount;
         }
 
-        virtual ~NamedChild() override
+        ~NamedChild() override
         {
             --mAliveCount;
         }
@@ -280,7 +280,7 @@ namespace
             mRememberedParent = parent();
         }
 
-        virtual ~DyingParentProbe() override
+        ~DyingParentProbe() override
         {
             // Remembered rather than read from parent(), which is already null here; see
             // LateAttacher for why.
@@ -363,7 +363,7 @@ namespace
             }
         }
 
-        virtual ~OtherKind() override
+        ~OtherKind() override
         {
             --mAliveCount;
         }
@@ -717,7 +717,7 @@ namespace
         }
 
         //! Records the number.
-        virtual ~NumberedChild() override
+        ~NumberedChild() override
         {
             mLog.push_back( mNumber );
         }

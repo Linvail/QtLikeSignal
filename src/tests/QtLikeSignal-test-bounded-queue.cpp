@@ -50,7 +50,7 @@ namespace
             ++gLiveBoundedEvents;
         }
 
-        virtual ~TickEvent() override
+        ~TickEvent() override
         {
             --gLiveBoundedEvents;
         }
@@ -68,7 +68,7 @@ namespace
     class TickRecorder : public Object
     {
     public:
-        virtual bool event
+        bool event
             (
             Event* aEvent  //!< The event to handle.
             ) override
@@ -106,7 +106,7 @@ namespace
         {
         }
 
-        virtual ~DeleteRecorder() override
+        ~DeleteRecorder() override
         {
             ++mCounter;
         }

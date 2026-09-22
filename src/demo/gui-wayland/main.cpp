@@ -121,7 +121,7 @@ namespace
         }
 
         //! Releases the buffer and its mapping.
-        virtual ~Renderer() override
+        ~Renderer() override
         {
             if( mBuffer != nullptr )
             {

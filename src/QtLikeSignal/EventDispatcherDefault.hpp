@@ -28,49 +28,49 @@ namespace QtLikeSignal
     public:
         EventDispatcherDefault();
 
-        virtual ~EventDispatcherDefault() override;
+        ~EventDispatcherDefault() override;
 
-        virtual bool processEvents
+        bool processEvents
             (
             ProcessEventsFlag aFlag
             ) override;
 
-        virtual void wakeUp() override;
+        void wakeUp() override;
 
-        virtual void interrupt() override;
+        void interrupt() override;
 
-        virtual void close() override;
+        void close() override;
 
-        virtual void processDeferredDeletes() override;
+        void processDeferredDeletes() override;
 
-        virtual void setEventQueueCapacity
+        void setEventQueueCapacity
             (
             std::size_t aCapacity
             ) override;
 
-        virtual std::size_t eventQueueCapacity() const override;
+        std::size_t eventQueueCapacity() const override;
 
-        virtual std::size_t eventQueueDepth() const override;
+        std::size_t eventQueueDepth() const override;
 
-        virtual unsigned long long droppedEventCount() const override;
+        unsigned long long droppedEventCount() const override;
 
-        virtual void setHealthTrackingEnabled
+        void setHealthTrackingEnabled
             (
             bool aEnabled
             ) override;
 
-        virtual bool isHealthTrackingEnabled() const override;
+        bool isHealthTrackingEnabled() const override;
 
-        virtual LoopHealth health() const override;
+        LoopHealth health() const override;
 
-        virtual void setWakeCallback
+        void setWakeCallback
             (
             std::function<void()> aCallback
             ) override;
 
-        virtual int remainingTimeMs() const override;
+        int remainingTimeMs() const override;
 
-        virtual void setDeadlineCallback
+        void setDeadlineCallback
             (
             std::function<void( int aMsFromNow )> aCallback
             ) override;
@@ -80,24 +80,24 @@ namespace QtLikeSignal
         // already governs every call made through the AbstractEventDispatcher* that
         // Thread::eventDispatcher() hands out, so this is belt-and-suspenders -- it closes the
         // remaining gap for a caller holding a EventDispatcherDefault* directly.
-        virtual void registerTimer
+        void registerTimer
             (
             int aTimerId,
             int aInterval,
             Object* aObject
             ) override;
 
-        virtual bool unregisterTimer
+        bool unregisterTimer
             (
             int aTimerId
             ) override;
 
-        virtual int timerRemainingTimeMs
+        int timerRemainingTimeMs
             (
             int aTimerId
             ) const override;
 
-        virtual bool postEvent
+        bool postEvent
             (
             Object* aReceiver,
             Event* aEvent,
@@ -105,24 +105,24 @@ namespace QtLikeSignal
             int aPriority
             ) override;
 
-        virtual bool postEventUnconditionally
+        bool postEventUnconditionally
             (
             Object* aReceiver,
             Event* aEvent,
             int aPriority
             ) override;
 
-        virtual void removeEventsForReceiver
+        void removeEventsForReceiver
             (
             Object* aReceiver
             ) override;
 
-        virtual std::vector<TimerRegistration> takeTimersForReceiver
+        std::vector<TimerRegistration> takeTimersForReceiver
             (
             Object* aReceiver
             ) override;
 
-        virtual std::vector<Event*> takeEventsForReceiver
+        std::vector<Event*> takeEventsForReceiver
             (
             Object* aReceiver
             ) override;

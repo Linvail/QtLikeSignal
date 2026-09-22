@@ -327,7 +327,7 @@ public:
     }
 
 protected:
-    virtual void timerEvent
+    void timerEvent
         (
         TimerEvent* aEvent
         ) override

@@ -64,7 +64,7 @@ namespace QtLikeSignalDemo
     public:
         GuiApplication();
 
-        virtual ~GuiApplication() override;
+        ~GuiApplication() override;
 
         bool createWindow
             (

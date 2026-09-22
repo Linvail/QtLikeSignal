@@ -88,7 +88,7 @@ namespace QtLikeSignal
             SignalWatchMode aMode = SignalWatchMode::Handler  //!< How the signal is to be received.
             );
 
-        virtual ~SignalWatcher() override;
+        ~SignalWatcher() override;
 
         //! A watcher owns process-global state and cannot be copied.
         SignalWatcher

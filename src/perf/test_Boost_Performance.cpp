@@ -101,7 +101,7 @@ namespace
         }
 
         //! Runs the callback, if one is still set.
-        virtual void emit() override
+        void emit() override
         {
             if( mFunction )
             {

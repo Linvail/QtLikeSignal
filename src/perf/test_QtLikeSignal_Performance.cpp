@@ -597,7 +597,7 @@ TEST( Performance, QtLikeSignal_ThreadPoolHandOff )
 class SummaryPrinter : public ::testing::Environment
 {
 public:
-    virtual void TearDown() override
+    void TearDown() override
     {
         PerfHarness::printSummary();
     }

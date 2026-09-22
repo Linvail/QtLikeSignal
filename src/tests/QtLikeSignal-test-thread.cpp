@@ -33,7 +33,7 @@ using namespace QtLikeSignal;
 class CustomTestThread : public Thread
 {
 protected:
-    virtual void run() override
+    void run() override
     {
         std::this_thread::sleep_for( std::chrono::milliseconds( 50 ) );
         mExecuted = true;
@@ -54,7 +54,7 @@ private:
 class ThreadPointerCheckThread : public Thread
 {
 protected:
-    virtual void run() override
+    void run() override
     {
         mSelfPointer = Thread::currentThread();
     }
@@ -74,7 +74,7 @@ private:
 class ExitCodeTestThread : public Thread
 {
 protected:
-    virtual void run() override
+    void run() override
     {
         exit( 123 );
     }
@@ -85,7 +85,7 @@ protected:
 class SlowTestThread : public Thread
 {
 protected:
-    virtual void run() override
+    void run() override
     {
         std::this_thread::sleep_for( std::chrono::milliseconds( 300 ) );
     }
@@ -119,7 +119,7 @@ TEST( ThreadTest, ParentDeletesAThreadThatIsStillRunning )
         {
         }
 
-        virtual ~FlaggedThread() override
+        ~FlaggedThread() override
         {
             *mDestroyed = true;
         }
@@ -472,7 +472,7 @@ TEST( ThreadTest, AThreadNameReachesTheOperatingSystem )
 
     protected:
         //! Reads this thread's own name back from the operating system.
-        virtual void run() override
+        void run() override
         {
             const std::string reported = Thread::nativeName();
             std::lock_guard<std::mutex> lock( mMutex );

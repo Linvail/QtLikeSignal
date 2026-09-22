@@ -42,7 +42,7 @@ namespace
         };
 
         //! Copies @p aMessage into the captured list.
-        virtual void write
+        void write
             (
             const LogMessage& aMessage
             ) override
@@ -62,7 +62,7 @@ namespace
         }
 
         //! Counts a flush, so a test can tell Log::flush() reached the sink.
-        virtual void flush() override
+        void flush() override
         {
             mFlushCount.fetch_add( 1 );
         }
@@ -132,7 +132,7 @@ namespace
     {
     protected:
         //! Installs the capture sink, and switches both test categories fully on.
-        virtual void SetUp() override
+        void SetUp() override
         {
             mPrevious = Log::setSink( &mSink );
             Log::setFilterRules( "qtlikesignal.test.*=debug" );
@@ -143,7 +143,7 @@ namespace
         //!
         //! Both matter to the tests that run after this one in the same binary: the sink is
         //! process-wide, and a rule left in place would follow the suite out of this file.
-        virtual void TearDown() override
+        void TearDown() override
         {
             Log::setFilterRules( "" );
             Log::setSink( mPrevious );
@@ -604,7 +604,7 @@ namespace
         class ThrowingSink : public LogSink
         {
         public:
-            virtual void write
+            void write
                 (
                 const LogMessage&
                 ) override

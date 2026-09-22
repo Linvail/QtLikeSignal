@@ -529,7 +529,7 @@ namespace
         }
 
     protected:
-        virtual void timerEvent
+        void timerEvent
             (
             TimerEvent* aEvent
             ) override
@@ -744,7 +744,7 @@ namespace
     class NullSink : public QtLikeSignal::LogSink
     {
     public:
-        virtual void write
+        void write
             (
             const QtLikeSignal::LogMessage&
             ) override

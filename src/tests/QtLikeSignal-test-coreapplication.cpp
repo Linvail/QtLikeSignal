@@ -49,7 +49,7 @@ static Object* newDestructionProbe
         {
         }
 
-        virtual ~DestructionProbe() override
+        ~DestructionProbe() override
         {
             mTarget->store( true );
         }

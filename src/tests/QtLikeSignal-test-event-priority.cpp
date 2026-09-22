@@ -48,7 +48,7 @@ namespace
             ++gLivePriorityEvents;
         }
 
-        virtual ~MarkEvent() override
+        ~MarkEvent() override
         {
             --gLivePriorityEvents;
         }
@@ -66,7 +66,7 @@ namespace
     class MarkRecorder : public Object
     {
     public:
-        virtual bool event
+        bool event
             (
             Event* aEvent  //!< The event to handle.
             ) override
@@ -500,7 +500,7 @@ TEST( EventPriorityTest, ADeferredDeleteIsStillExemptWithPriorities )
         {
         }
 
-        virtual ~DeleteProbe() override
+        ~DeleteProbe() override
         {
             ++mCounter;
         }

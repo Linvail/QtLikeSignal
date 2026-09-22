@@ -40,7 +40,7 @@ namespace
     class Qt6Environment : public ::testing::Environment
     {
     public:
-        virtual void SetUp() override
+        void SetUp() override
         {
             if( QCoreApplication::instance() == nullptr )
             {
@@ -48,7 +48,7 @@ namespace
             }
         }
 
-        virtual void TearDown() override
+        void TearDown() override
         {
             delete mApp;
             mApp = nullptr;

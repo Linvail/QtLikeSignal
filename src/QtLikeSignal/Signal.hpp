@@ -299,7 +299,7 @@ namespace QtLikeSignal
             {
             }
 
-            virtual void invoke
+            void invoke
                 (
                 Args... aArgs
                 ) override
@@ -344,7 +344,7 @@ namespace QtLikeSignal
             //! themselves disconnected rather than pointing at a list that no longer exists.
             //!
             //! disconnectAll() is exactly that, plus emptying a list about to be emptied anyway.
-            virtual ~Impl() override
+            ~Impl() override
             {
                 disconnectAll();
             }
@@ -452,7 +452,7 @@ namespace QtLikeSignal
             //!
             //! O(1): the node carries its own index, so the slot is nulled where it stands and the
             //! cost does not depend on how many other connections exist.
-            virtual void removeConnection
+            void removeConnection
                 (
                 Private::ConnectionNode* aNode
                 ) override

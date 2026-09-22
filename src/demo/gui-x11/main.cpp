@@ -92,7 +92,7 @@ namespace
         }
 
         //! Frees the back buffer.
-        virtual ~Renderer() override
+        ~Renderer() override
         {
             if( mBackBuffer != 0 )
             {

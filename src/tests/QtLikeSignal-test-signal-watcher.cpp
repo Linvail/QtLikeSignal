@@ -82,7 +82,7 @@ namespace
     {
     public:
         //! Records the text, so a test can look for the line one of its slots wrote.
-        virtual void write
+        void write
             (
             const LogMessage& aMessage
             ) override
@@ -92,7 +92,7 @@ namespace
         }
 
         //! Counts the flush, and notes how much had been written when it happened.
-        virtual void flush() override
+        void flush() override
         {
             std::lock_guard<std::mutex> guard( mMutex );
             ++mFlushCount;

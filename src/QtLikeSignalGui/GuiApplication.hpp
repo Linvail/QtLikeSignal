@@ -77,7 +77,7 @@ namespace QtLikeSignalGui
             char** aArgv
             );
 
-        virtual ~GuiApplication() override;
+        ~GuiApplication() override;
 
         static GuiApplication* instance();
 
