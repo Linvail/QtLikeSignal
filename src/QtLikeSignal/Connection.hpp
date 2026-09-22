@@ -132,12 +132,29 @@ namespace QtLikeSignal
             //! This node's place in the receiver's list, which is what makes both linking and
             //! unlinking O(1) and costs no allocation of its own.
             //!
-            //! Raw, because the list does not own the node: a node is only ever in the list while
-            //! it is also in its Signal's, which is what keeps it alive. ~Object() is the one
-            //! reader that outlives that guarantee, so it upgrades through shared_from_this() while
-            //! holding mIncomingMutex, before it lets go of anything.
+            //! Raw, because mIncomingSelf below is what owns the node while it is listed. The two
+            //! are set and cleared together, under mIncomingMutex.
             ConnectionNode* mPrevIncoming { nullptr };
             ConnectionNode* mNextIncoming { nullptr };
+
+            //! Keeps this node alive for as long as it is in mOwner's incoming list. Guarded by
+            //! mOwner's mIncomingMutex, as are the two pointers above.
+            //!
+            //! **The receiver's list owns what it points at.** It used to point at nodes it did not
+            //! own, on the reasoning that a listed node is also in its Signal's list, which keeps it
+            //! alive. That is not true for the whole of a disconnect: disconnectAll() drops the node
+            //! from the Signal under the Signal's mutex, then calls pruneReceiver() with that mutex
+            //! released, and a pruneReceiver() that finds the receiver already dying returns without
+            //! unlinking. Between those two steps the node is listed and owned by nobody, so the
+            //! last reference falling at the end of the disconnect freed a node ~Object() was
+            //! walking -- one thread disconnecting while the receiver's own thread destroys it.
+            //!
+            //! A self-reference rather than a shared_ptr in the Object, because the list is
+            //! intrusive: there is nowhere else to put it that does not cost an allocation for each
+            //! connection. It is not a leak -- every route out of the list clears it, and each of
+            //! those routes holds another reference while it does, so nothing is destroyed halfway
+            //! through its own unlinking.
+            std::shared_ptr<ConnectionNode> mIncomingSelf;
         };
 
         //! The part of a Signal a Connection can reach without knowing its argument types.

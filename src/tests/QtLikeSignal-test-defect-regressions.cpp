@@ -2786,3 +2786,67 @@ namespace
 
 
 }
+
+//! Verifies a disconnect on another thread cannot free a connection node that the receiver's
+//! destructor is still walking.
+//!
+//! The defect. ~Object() clears its life token before it takes mIncomingMutex, and a
+//! pruneReceiver() that finds the token cleared returns at once without unlinking -- touching the
+//! receiver from there would be the very use-after-free it is avoiding. That left the node listed
+//! in the receiver and owned by nobody: the disconnect dropped the last reference the moment its
+//! own list of dropped slots died, and ~Object() was then reading mNextIncoming out of freed
+//! memory, before it had taken a reference of its own. The receiver's list now owns what it points
+//! at, so neither order can free a listed node.
+//!
+//! The shape is a Signal destroyed on one thread while its receiver is destroyed on another,
+//! started together and repeated. That is what a pool's hand-off does for real: the continuation's
+//! signal belongs to the task, so a worker ends the connection while the receiver is destroyed on
+//! its own thread. Two senders and several thousand connections per round, so the nodes one thread
+//! frees are spread through the list the other is walking and the two overlap rather than racing
+//! past one another.
+//!
+//! AddressSanitizer is what detects it. Without one, the freed node usually still holds its old
+//! pointers and the walk finishes as though nothing had happened.
+TEST( ObjectDefectTest, ADisconnectOnAnotherThreadCannotFreeANodeTheReceiverIsWalking )
+{
+    constexpr int kRounds = 30;
+    constexpr int kPairs  = 2000;
+
+    for( int round = 0; round < kRounds; ++round )
+    {
+        // Two senders, and the receiver takes a connection from each in turn, so the nodes the
+        // other thread frees are spread evenly through the list this thread has to walk. One
+        // sender is held by a shared_ptr, so that the other thread -- and only the other thread --
+        // destroys it: ~Signal disconnects everything, which is the path that frees the nodes.
+        std::shared_ptr<Signal<> > racer = std::make_shared<Signal<> >();
+        Signal<>                   keeper;
+        std::unique_ptr<Object>    receiver( new Object );
+
+        for( int i = 0; i < kPairs; ++i )
+        {
+            Object::connect( *racer, receiver.get(), []()
+                {
+                }, ConnectionType::Direct );
+            Object::connect( keeper, receiver.get(), []()
+                {
+                }, ConnectionType::Direct );
+        }
+
+        std::atomic<bool> go { false };
+        std::thread disconnecter( [&racer, &go]()
+            {
+                while( !go.load( std::memory_order_acquire ) )
+                {
+                    std::this_thread::yield();
+                }
+                racer.reset();
+            } );
+
+        go.store( true, std::memory_order_release );
+        receiver.reset();
+        disconnecter.join();
+    }
+
+    // Reaching here without a sanitizer report is the assertion.
+    SUCCEED();
+}

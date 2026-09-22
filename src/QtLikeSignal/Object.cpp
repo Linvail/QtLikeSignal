@@ -228,11 +228,11 @@ namespace QtLikeSignal
         // removeConnection() would nest our mutex inside the Signal's, the reverse of the order
         // pruneReceiver() takes them in, and there is no reason to invite that inversion.
         //
-        // The nodes are upgraded to shared_ptr *while the mutex is held*, and that is the whole of
-        // why this is safe. A node in the list is one whose prune has not run, so its Signal still
-        // holds it -- but the instant we unlink it here, a Signal disconnecting on another thread
-        // may drop the last reference. Holding one ourselves closes that window. The upgrade cannot
-        // fail: every node is created by make_shared.
+        // The list's own reference to each node is taken over here, while the mutex is held, and
+        // that is the whole of why this is safe. A Signal disconnecting on another thread may drop
+        // its reference at any moment -- including from a pruneReceiver() that saw us already dying
+        // and returned without unlinking -- so the only reference this walk can rely on is the one
+        // the list itself holds. See ConnectionNode::mIncomingSelf.
         std::vector<std::shared_ptr<Private::ConnectionNode> > incoming;
         {
             std::lock_guard<Lock> lock( mIncomingMutex );
@@ -248,7 +248,7 @@ namespace QtLikeSignal
                 node->mNextIncoming = nullptr;
                 node->mInIncoming   = false;
                 node->mIncomingDone = true;
-                incoming.push_back( node->shared_from_this() );
+                incoming.push_back( std::move( node->mIncomingSelf ) );
                 node = next;
             }
             mIncomingHead  = nullptr;
@@ -1570,6 +1570,10 @@ namespace QtLikeSignal
         }
         mOwner->mIncomingHead = this;
         mInIncoming = true;
+
+        // The list owns what it points at, from here until whoever unlinks the node lets go. See
+        // ConnectionNode::mIncomingSelf for what goes wrong when it does not.
+        mIncomingSelf = shared_from_this();
         ++mOwner->mIncomingCount;
     }
 
@@ -1585,12 +1589,19 @@ namespace QtLikeSignal
             return;
         }
 
+        // Declared before the lock guard so that it dies after it: this is the list's own reference
+        // to the node, and dropping the last one here would destroy the node while the receiver's
+        // mutex is still held.
+        std::shared_ptr<ConnectionNode> listed;
+
         std::lock_guard<Object::Lock> lock( mOwner->mIncomingMutex );
         mIncomingDone = true;
         if( !mInIncoming )
         {
             return;
         }
+
+        listed = std::move( mIncomingSelf );
 
         if( mPrevIncoming != nullptr )
         {
