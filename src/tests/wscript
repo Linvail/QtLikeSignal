@@ -15,14 +15,32 @@ def build(bld):
     if bld.env.DEST_OS == "win32" and "msvc" in bld.env.CXX_NAME:
         kw_test["linkflags"] = ["/SUBSYSTEM:CONSOLE"]
 
+    #: The CallStack suite, and the platforms that src/QtLikeSignalDebug/wscript builds
+    #: QtLikeSignalDebug for. The two lists must agree; a test naming a class that was not built
+    #: does not link.
+    debug_suite = "QtLikeSignalDebug-test-callstack.cpp"
+    debug_platforms = ("win32", "linux")
+
+    sources = bld.path.ant_glob("*.cpp", excl=[debug_suite])
+    use = ["QtLikeSignal", "QtLikeSignalGui", "google-test"]
+
+    if bld.env.DEST_OS in debug_platforms:
+        sources.append(bld.path.find_node(debug_suite))
+        use.append("QtLikeSignalDebug")
+        if bld.env.DEST_OS == "linux":
+            # Linux names a frame only from the dynamic symbol table. The functions of a program
+            # are in that table only when the program exports them. The suite looks for the names
+            # of its own functions in a stack, so the program must export them.
+            kw_test.setdefault("linkflags", []).append("-rdynamic")
+
     bld.program(
         target="QtLikeSignal-test",
         # QtLikeSignalGui as well as QtLikeSignal: the GUI tests are in the same binary rather
         # than in one of their own, because most of what they cover -- the input types,
         # platform selection, the null-window guards -- is portable and would otherwise need a
         # second test program that existed only on Windows.
-        use=["QtLikeSignal", "QtLikeSignalGui", "google-test"],
+        use=use,
         features=["cxx", "cxxprogram"],
-        source=bld.path.ant_glob("*.cpp"),
+        source=sources,
         **kw_test,
     )

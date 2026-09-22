@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: 2026 Evan
+# SPDX-License-Identifier: MIT
+
+
+# Applications build this library from source with exceptions disabled, so it has to compile that
+# way. --no-exceptions is how that is checked, with the real include paths.
+from toolchains import apply_library_exception_policy
+
+
+def build(bld):
+    """
+    Build QtLikeSignalDebug: the debugging aids that need more than QtLikeSignal itself can link.
+
+    Today the library has one class, CallStack. It reads the call stack of a thread: the stack of
+    the calling thread, or the stack of a stuck thread, for a watchdog. It needs DbgHelp on Windows,
+    and the dynamic loader and a signal on Linux. QtLikeSignal depends only on the C++ runtime
+    and on the threads of the platform. Thus CallStack is in a target of its own, and a program
+    that wants it links it.
+
+    **This file decides availability, not the preprocessor.** Each platform has its own source
+    file, and the build compiles it only where it applies. On a different platform this file
+    declares no target. Then a program that names QtLikeSignalDebug fails to find it, and does not
+    link a helper that cannot work there.
+    """
+    #: The source that captures and names frames, for each DEST_OS.
+    platform_sources = {
+        "win32": "CallStackWin.cpp",
+        "linux": "CallStackLinux.cpp",
+    }
+    platform_source = platform_sources.get(bld.env.DEST_OS)
+    if platform_source is None:
+        return
+
+    kw = {}
+    kw["features"] = ["cxx"]
+    kw["source"] = [
+        bld.path.find_node("CallStack.cpp"),
+        bld.path.find_node(platform_source),
+    ]
+    # ".." is src/, the directory that holds this one, so an include reads
+    # "QtLikeSignalDebug/CallStack.hpp". QtLikeSignal's own wscript sets the same rule, for the
+    # same reason: CallStack.hpp is a common name, and a different library can use it too.
+    kw["includes"] = ".."
+    kw["export_includes"] = ".."
+
+    if bld.env.DEST_OS == "linux":
+        # Before glibc 2.34, dladdr() is in libdl; from 2.34, it is in libc. The name libdl is
+        # correct for both, because the newer glibc keeps an empty libdl for this purpose.
+        kw["lib"] = ["dl"]
+
+    # Shared on Linux when QtLikeSignal is shared, for the same reason; objects on Windows, as
+    # QtLikeSignal.
+    build_shared_lib = getattr(bld.env, "QT_LIKE_SIGNAL_BUILD_SHARED_LIB", False)
+    if build_shared_lib and bld.env.DEST_OS != "win32":
+        kw["features"].append("cxxshlib")
+
+    apply_library_exception_policy(bld, kw)
+
+    bld(target="QtLikeSignalDebug", **kw)

@@ -5,16 +5,18 @@ def build(bld):
     """
     Build QtLikeSignal and everything that sits beside it.
 
-    Five parts, each with its own wscript next to its own sources, so that no build script globs
+    Six parts, each with its own wscript next to its own sources, so that no build script globs
     into a directory it does not own and every source list is written in local names.
 
-    Read in groups: the two libraries first -- QtLikeSignal, and QtLikeSignalGui over it -- then the
-    three things that exercise them (tests, demo, perf). That grouping is for whoever reads this
-    list, not for waf, which resolves a target's "use" wherever it was declared and would build
-    these in any order.
+    Read in groups: the three libraries first -- QtLikeSignal, QtLikeSignalGui over it, and
+    QtLikeSignalDebug beside it -- then the three things that exercise them (tests, demo, perf).
+    That grouping is for whoever reads this list, not for waf, which resolves a target's "use"
+    wherever it was declared and would build these in any order. QtLikeSignalDebug declares a
+    target on Windows and on Linux only.
     """
     bld.recurse("QtLikeSignal")
     bld.recurse("QtLikeSignalGui")
+    bld.recurse("QtLikeSignalDebug")
     bld.recurse("tests")
     bld.recurse("demo")
     bld.recurse("perf")

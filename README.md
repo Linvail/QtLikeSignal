@@ -17,6 +17,7 @@ and the submodule that used to bootstrap them is gone.
 |---|---|
 | `src/QtLikeSignal/` | the library -- event loop, threads, timers, signals, logging, properties, animation |
 | `src/QtLikeSignalGui/` | windows and input over it, one backend per window system |
+| `src/QtLikeSignalDebug/` | an optional library for what QtLikeSignal itself cannot link: a thread's call stack |
 | `src/tests/` | the correctness suite (GoogleTest), one binary covering both libraries |
 | `src/demo/` | demo programs, one per window system |
 | `src/perf/` | the benchmarks and the regression guards |
@@ -24,7 +25,7 @@ and the submodule that used to bootstrap them is gone.
 | `submodules/external/` | waf and googletest, as submodules |
 
 Each part under `src/` has its own wscript beside its own sources; `src/wscript` recurses into all
-five.
+six.
 
 The GUI tests live in the same binary as the rest rather than in one of their own, because most of
 what they cover -- the input types, platform selection, the null-window guards -- is portable and
@@ -45,6 +46,9 @@ library and the whole test suite -- it just cannot open a window.
 | `libx11-dev` | the X11 backend |
 | `libinput-dev`, `libudev-dev` | the DRM/libinput backend |
 | `libwayland-dev`, `libwayland-bin`, `wayland-protocols`, `libdecor-0-dev` | the Wayland backend |
+
+`src/QtLikeSignalDebug/` needs no package. On Windows it loads `dbghelp.dll` when it runs, and on
+Linux it links `libdl`. The build makes it for Windows and Linux only.
 
 The build reports what it got:
 
@@ -314,6 +318,32 @@ O(1) -- where Qt's `QList<QObject*>` makes removing one child O(siblings), and d
 individually quadratic. The tree's pointers live in a lazily-allocated box that an object outside
 any tree never allocates, so joining a tree is free for an object that has already been named or has
 already run a timer.
+
+## Reading a thread's call stack
+
+`QtLikeSignalDebug` is a library of its own, which a program opts into by linking it. It has one
+class, `CallStack`, which reads the call stack of a thread -- the calling thread, or another thread
+that is stuck, which is what a watchdog wants.
+
+The thread that you watch makes a `CallStack::Target` for itself, one time. Whoever watches it
+reads the stack when it decides the thread is stuck:
+
+```cpp
+// On the thread that you watch, for example in the first task that you post to it:
+QtLikeSignal::CallStack::Target target = QtLikeSignal::CallStack::Target::currentThread();
+
+// On the watching thread:
+const QtLikeSignal::CallStack stack = QtLikeSignal::CallStack::capture( target );
+qCCritical( gLogApp ) << stack.toString();
+```
+
+`toString()` writes one line for each frame. Where symbols are available, each line has the
+function name, and on Windows also the source line.
+
+On Linux a capture sends the signal `SIGRTMIN + 5` to the thread, so do not use that signal for a
+different purpose, and link the program with `-rdynamic`, or the stack does not show the names of
+the program's own functions. `src/QtLikeSignalDebug/CallStack.hpp` says what each platform does to
+a thread while it reads the stack.
 
 ## Compiler configuration
 
