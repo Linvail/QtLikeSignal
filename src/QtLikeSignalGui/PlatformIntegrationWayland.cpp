@@ -565,6 +565,37 @@ namespace QtLikeSignalGui
         }
 
         //-------------------------------------------------------------------------------------
+        // frame callback
+        //-------------------------------------------------------------------------------------
+
+        //! Reports that the compositor is ready to be given another frame.
+        //!
+        //! The frame clock. wl_surface_frame() queues a request for one of these; the renderer's
+        //! own commit, inside eglSwapBuffers, carries it to the compositor; and this fires when the
+        //! compositor wants the next frame. That is what paces a paced window.
+        static void frameReady
+            (
+            void* aData,
+            wl_callback* aCallback,
+            std::uint32_t aTime
+            )
+        {
+            static_cast<void>( aTime );
+
+            PlatformIntegrationWayland* const self =
+                static_cast<PlatformIntegrationWayland*>( aData );
+
+            // Destroyed here rather than reused: a wl_callback is one-shot, and the next frame gets
+            // a new one from wl_surface_frame(). Cleared before delivering, so a renderer that asks
+            // for the next frame from inside its expose slot -- which is the normal way to drive
+            // continuous drawing -- arms a fresh request rather than seeing this one still pending.
+            wl_callback_destroy( aCallback );
+            self->mFrameCallbackPending = false;
+
+            WindowSystemInterface::handleFrameReady( self->mWindow );
+        }
+
+        //-------------------------------------------------------------------------------------
         // libdecor
         //-------------------------------------------------------------------------------------
         #if defined( HAVE_LIBDECOR_0 )
@@ -599,33 +630,6 @@ namespace QtLikeSignalGui
 
             wl_callback_destroy( aCallback );
             self->mInternals->mDecorReadyCallback = nullptr;
-        }
-
-        //! Reports that the compositor is ready to be given another frame.
-        //!
-        //! The frame clock. wl_surface_frame() queues a request for one of these; the renderer's
-        //! own commit, inside eglSwapBuffers, carries it to the compositor; and this fires when the
-        //! compositor wants the next frame. That is what paces a paced window.
-        static void frameReady
-            (
-            void* aData,
-            wl_callback* aCallback,
-            std::uint32_t aTime
-            )
-        {
-            static_cast<void>( aTime );
-
-            PlatformIntegrationWayland* const self =
-                static_cast<PlatformIntegrationWayland*>( aData );
-
-            // Destroyed here rather than reused: a wl_callback is one-shot, and the next frame gets
-            // a new one from wl_surface_frame(). Cleared before delivering, so a renderer that asks
-            // for the next frame from inside its expose slot -- which is the normal way to drive
-            // continuous drawing -- arms a fresh request rather than seeing this one still pending.
-            wl_callback_destroy( aCallback );
-            self->mFrameCallbackPending = false;
-
-            WindowSystemInterface::handleFrameReady( self->mWindow );
         }
 
         //! Applies a decoration configure, and reports the resize it implies.
