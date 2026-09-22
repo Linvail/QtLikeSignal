@@ -39,7 +39,10 @@
 
 #include "QtLikeSignal/Object.hpp"
 #include "QtLikeSignal/Signal.hpp"
+#include "QtLikeSignal/CoreApplication.hpp"
+#include "QtLikeSignal/TaskHandle.hpp"
 #include "QtLikeSignal/Thread.hpp"
+#include "QtLikeSignal/ThreadPool.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -54,6 +57,7 @@ using PerfHarness::kDirectOps;
 using PerfHarness::kQueuedOps;
 using PerfHarness::kQueuedRoundTripOps;
 using PerfHarness::kDeferredCallOps;
+using PerfHarness::kPoolOps;
 using PerfHarness::kBlockingOps;
 using PerfHarness::kDisconnectOps;
 using PerfHarness::record;
@@ -481,6 +485,107 @@ TEST( Performance, QtLikeSignal_Disconnect )
 
     sig.emit( 1 );
     EXPECT_EQ( received, 0 );
+}
+
+//! Measures submit() on a pool whose workers are busy: what queuing one task costs the caller.
+//!
+//! The workers are held inside one task, so nothing is dequeued while the loop runs and every
+//! iteration measures the submit alone: the allocation of the wrapper and of the task state, the
+//! lock, the insert, and the wake-up. The queue is cleared afterwards rather than run.
+TEST( Performance, QtLikeSignal_ThreadPoolSubmit )
+{
+    QtLikeSignal::ThreadPool pool( 1 );
+    std::atomic<int> started { 0 };
+    std::atomic<bool> release { false };
+
+    pool.submit( [&]()
+        {
+            ++started;
+            while( !release.load() )
+            {
+                std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+            }
+        } );
+    while( started.load() == 0 )
+    {
+        std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+    }
+
+    long long counter = 0;
+    const double ns = timeLoop( kPoolOps, [&]( int )
+        {
+            pool.submit( [&counter]()
+            {
+                ++counter;
+            } );
+        } );
+    record( "pool submit, queued", "QtLikeSignal", ns );
+
+    static_cast<void>( pool.clear() );
+    release = true;
+    EXPECT_TRUE( pool.waitForDone( 5000 ) );
+}
+
+//! Measures submit -> run -> back: one task handed to a worker and waited for.
+//!
+//! This is the round trip a caller feels when it must have the answer: the wake-up of a parked
+//! worker, the task, and the wake-up of the waiter. It is the pool's answer to the queued emit
+//! round trip measured above.
+TEST( Performance, QtLikeSignal_ThreadPoolRoundTrip )
+{
+    QtLikeSignal::ThreadPool pool( 1 );
+    std::atomic<long long> counter { 0 };
+
+    // One warm-up, so the measurement does not pay for the first wake-up of a fresh worker.
+    pool.submit( [&counter]()
+        {
+            ++counter;
+        } ).wait();
+
+    const double ns = timeLoop( kPoolOps, [&]( int )
+        {
+            QtLikeSignal::TaskHandle handle = pool.submit( [&counter]()
+                {
+                    ++counter;
+                } );
+            handle.wait();
+        } );
+    record( "pool submit->run->wait", "QtLikeSignal", ns );
+    EXPECT_GT( counter.load(), 0 );
+}
+
+//! Measures a result carried home: work on a worker, continuation on this thread.
+//!
+//! The loop drives this thread's own event loop, because that is where the continuation arrives,
+//! so the number covers the whole hand-off: the task, the queued connection, the posted event and
+//! the dispatch.
+TEST( Performance, QtLikeSignal_ThreadPoolHandOff )
+{
+    QtLikeSignal::CoreApplication app;
+    QtLikeSignal::Object receiver;
+    QtLikeSignal::ThreadPool pool( 1 );
+    long long received = 0;
+
+    const double ns = timeLoop( kPoolOps, [&]( int )
+        {
+            long long expected = received + 1;
+            pool.submit( &receiver,
+            []()
+            {
+                return 1;
+            },
+            [&received]( int aValue )
+            {
+                received += aValue;
+            } );
+
+            while( received < expected )
+            {
+                QtLikeSignal::Thread::currentThread()->processEvents();
+            }
+        } );
+    record( "pool work->result home", "QtLikeSignal", ns );
+    EXPECT_GT( received, 0 );
 }
 
 // =================================================================================================

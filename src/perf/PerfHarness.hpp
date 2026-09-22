@@ -237,6 +237,12 @@ namespace PerfHarness
     // magnitude dearer than the difference being looked for, so every row would report the wake.
     constexpr int kDeferredCallOps = kQueuedOps;
 
+    //! Iterations for the thread pool scenarios.
+    //!
+    //! Fewer than the signal counts, because every one of these hands work to another thread and
+    //! waits for it to arrive: the loop is bounded by two thread wake-ups rather than by a call.
+    constexpr int kPoolOps = 20000;
+
     // Deferred calls made while counting allocations. Two orders of magnitude smaller than
     // kDeferredCallOps because nothing there is timed -- this count only has to be large enough
     // that the one-off allocations behind the first call round away.
