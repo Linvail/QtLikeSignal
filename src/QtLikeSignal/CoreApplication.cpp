@@ -257,7 +257,7 @@ namespace QtLikeSignal
         return false;
     }
 
-    //! Sets the name of the organization that wrote the application, for example "Garmin".
+    //! Sets the name of the organization that wrote the application, for example "Example".
     //! Thread-safe.
     //!
     //! Settings uses it to name its file when no name is given to its constructor. Static, and

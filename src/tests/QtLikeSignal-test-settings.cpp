@@ -942,17 +942,17 @@ TEST_F( SettingsTest, TheOrganizationConstructorNamesTheFile )
 {
     const char separator = SettingsFileIo::separator();
     {
-        Settings settings( "Garmin", "Chartplotter" );
+        Settings settings( "Example", "Chartplotter" );
         EXPECT_EQ( settings.fileName(),
-            directory() + separator + "Garmin" + separator + "Chartplotter.ini" );
-        EXPECT_EQ( settings.organizationName(), "Garmin" );
+            directory() + separator + "Example" + separator + "Chartplotter.ini" );
+        EXPECT_EQ( settings.organizationName(), "Example" );
         EXPECT_EQ( settings.applicationName(), "Chartplotter" );
         settings.setValue( "k", 1 );
     }
-    EXPECT_TRUE( exists( pathOf( "Garmin/Chartplotter.ini" ) ) );
+    EXPECT_TRUE( exists( pathOf( "Example/Chartplotter.ini" ) ) );
 
-    Settings organizationOnly( "Garmin" );
-    EXPECT_EQ( organizationOnly.fileName(), directory() + separator + "Garmin.ini" );
+    Settings organizationOnly( "Example" );
+    EXPECT_EQ( organizationOnly.fileName(), directory() + separator + "Example.ini" );
     EXPECT_EQ( organizationOnly.status(), SettingsStatus::NoError );
 }
 

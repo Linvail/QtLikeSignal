@@ -17,7 +17,7 @@ namespace QtLikeSignal
     //! An exclusive lock between processes, held on a file `<settings file>.lock`.
     //!
     //! @code
-    //!   QtLikeSignal::SettingsLockFile lock( "/home/evan/.config/Garmin/Chartplotter.ini.lock" );
+    //!   QtLikeSignal::SettingsLockFile lock( "/home/evan/.config/Example/Chartplotter.ini.lock" );
     //!   if( lock.tryLock( 5000 ) )
     //!   {
     //!       // read, merge and replace the settings file

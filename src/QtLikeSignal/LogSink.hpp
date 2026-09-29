@@ -15,10 +15,9 @@ namespace QtLikeSignal
     //! Destination for emitted log records.
     //!
     //! Two sinks ship with QtLikeSignal itself, both LogSinkFile: one on stderr, which is the
-    //! default, and one on stdout. The sinks that matter in a vehicle -- journald and DLT -- live
-    //! in the separate QtLikeSignalLog target instead, because QtLikeSignal depends on nothing but
-    //! the C++ runtime and the platform's threading and linking libsystemd or libdlt into it would
-    //! end that.
+    //! default, and one on stdout. There is no sink for journald or DLT, because QtLikeSignal
+    //! depends on nothing but the C++ runtime and the platform's threading and linking libsystemd
+    //! or libdlt into it would end that. An application that needs one derives it from LogSink.
     //!
     //! Three obligations on an implementation, all of them consequences of where write() is
     //! called from:

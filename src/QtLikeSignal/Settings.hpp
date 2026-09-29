@@ -25,10 +25,10 @@ namespace QtLikeSignal
     //! Reads and writes an application's settings, in an INI file that QSettings can also read.
     //!
     //! @code
-    //!   QtLikeSignal::CoreApplication::setOrganizationName( "Garmin" );
+    //!   QtLikeSignal::CoreApplication::setOrganizationName( "Example" );
     //!   QtLikeSignal::CoreApplication::setApplicationName( "Chartplotter" );
     //!
-    //!   QtLikeSignal::Settings settings;                 // ~/.config/Garmin/Chartplotter.ini
+    //!   QtLikeSignal::Settings settings;                 // ~/.config/Example/Chartplotter.ini
     //!
     //!   settings.beginGroup( "window" );
     //!   const int width = settings.value( "width", 800 );      // 800 if the key is not set

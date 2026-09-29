@@ -102,7 +102,7 @@ namespace QtLikeSignal
     //! The file is read here. It does not have to exist; its directory is made at the first write.
     Settings::Settings
         (
-        const std::string& aOrganization,  //!< The organization, for example "Garmin".
+        const std::string& aOrganization,  //!< The organization, for example "Example".
         const std::string& aApplication,   //!< The application, for example "Chartplotter".
         Object* aParent                    //!< The parent, or null.
         )

@@ -327,10 +327,10 @@ format, so a file that one of them writes, the other can read.
 ```cpp
 #include "QtLikeSignal/Settings.hpp"
 
-QtLikeSignal::CoreApplication::setOrganizationName( "Garmin" );
+QtLikeSignal::CoreApplication::setOrganizationName( "Example" );
 QtLikeSignal::CoreApplication::setApplicationName( "Chartplotter" );
 
-// ~/.config/Garmin/Chartplotter.ini, or under %APPDATA% on Windows
+// ~/.config/Example/Chartplotter.ini, or under %APPDATA% on Windows
 QtLikeSignal::Settings settings;
 
 settings.beginGroup( "window" );
