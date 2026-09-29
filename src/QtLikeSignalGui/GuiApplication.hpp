@@ -116,6 +116,11 @@ namespace QtLikeSignalGui
             const NativeWindow& aNative
             );
 
+        bool closeWindow
+            (
+            Window* aWindow
+            );
+
         void* nativeDisplay();
 
         std::vector<Window*> windows() const;

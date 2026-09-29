@@ -1,10 +1,22 @@
 # SPDX-FileCopyrightText: 2026 Evan
 # SPDX-License-Identifier: MIT
 
-
 # Applications build this library from source with exceptions disabled, so it has to compile that
 # way. --no-exceptions is how that is checked, with the real include paths.
-from toolchains import apply_library_exception_policy
+from waflib import Context
+
+
+def load_library_policy(bld):
+    """
+    Returns the build policy that the library wscripts share, from
+    src/QtLikeSignal/qtlikesignal_waf.py.
+
+    It is loaded by path because only the directory of this wscript is on sys.path while waf runs
+    it. That module says why it is in src/QtLikeSignal and not in tools/.
+    """
+    return Context.load_tool(
+        "qtlikesignal_waf", [bld.path.parent.find_dir("QtLikeSignal").abspath()]
+    )
 
 
 def build(bld):
@@ -38,10 +50,23 @@ def build(bld):
         bld.path.find_node(platform_source),
     ]
     # ".." is src/, the directory that holds this one, so an include reads
-    # "QtLikeSignalDebug/CallStack.hpp". QtLikeSignal's own wscript sets the same rule, for the
-    # same reason: CallStack.hpp is a common name, and a different library can use it too.
+    # "QtLikeSignalDebug/CallStack.hpp". QtLikeSignal's own wscript sets the same rule, for the same
+    # reason: CallStack.hpp is a common name, and a different library can use it too.
     kw["includes"] = ".."
     kw["export_includes"] = ".."
+
+    if bld.env.DEST_OS == "win32" and "msvc" in bld.env.CXX_NAME:
+        targets = bld.env.MSVC_TARGETS or [""]
+        if "x86" in targets[0]:
+            # Frame pointers in this library, on x86. /O2 includes /Oy there, which lets the
+            # compiler leave the frame pointer out of a function, and a capture of the calling
+            # thread needs one in its own frames: RtlCaptureContext() builds the context of its
+            # caller from the caller's EBP frame, and without one it gives EIP 0 and the walk has
+            # nowhere to start. It also keeps the EBP chain unbroken through the frames of this
+            # library. The frames of the application need no such flag; CallStackWin.cpp walks
+            # them with the frame data in their PDB. x64 needs none of this: every function there
+            # has unwind data.
+            kw["cxxflags"] = ["/Oy-"]
 
     if bld.env.DEST_OS == "linux":
         # Before glibc 2.34, dladdr() is in libdl; from 2.34, it is in libc. The name libdl is
@@ -54,6 +79,6 @@ def build(bld):
     if build_shared_lib and bld.env.DEST_OS != "win32":
         kw["features"].append("cxxshlib")
 
-    apply_library_exception_policy(bld, kw)
+    load_library_policy(bld).apply_library_exception_policy(bld, kw)
 
     bld(target="QtLikeSignalDebug", **kw)

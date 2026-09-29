@@ -25,7 +25,9 @@
 #define QT_LIKE_SIGNAL_OBJECT_HPP
 
 #include "QtLikeSignal/BlockingCall.hpp"
+#include "QtLikeSignal/Connection.hpp"
 #include "QtLikeSignal/Event.hpp"
+#include "QtLikeSignal/EventPriority.hpp"
 #include "QtLikeSignal/Global.hpp"
 #include "QtLikeSignal/Log.hpp"
 #include "QtLikeSignal/LogCategories.hpp"
@@ -1468,7 +1470,7 @@ namespace QtLikeSignal
         //! the former carries an ABI-frozen structure supporting timed and recursive locking that
         //! nothing here asks for. libstdc++ is the other way round -- std::mutex 40,
         //! std::shared_mutex 56, a pthread_rwlock_t -- so there it stays std::mutex. Measured, not
-        //! assumed; see src/OBJECT-SIZE-REPORT.md.
+        //! assumed.
         //!
         //! Only the exclusive half of the interface is ever used -- lock(), try_lock(), unlock() --
         //! which both types provide with identical semantics under std::lock_guard. Nothing takes a

@@ -13,12 +13,9 @@
 //! Four of them matter, and they are the four that made replacing boost::signals2 delicate.
 //! Each one fails silently rather than at compile time.
 
-#include "QtLikeSignal-test-types.hpp"
-
 #include "gtest/gtest.h"
 #include "QtLikeSignal/Object.hpp"
 #include "QtLikeSignal/Signal.hpp"
-#include "QtLikeSignal/Thread.hpp"
 #include <atomic>
 #include <memory>
 #include <thread>

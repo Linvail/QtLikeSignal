@@ -11,6 +11,7 @@
 #include "QtLikeSignal/EventDispatcherDefault.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <functional>
 #include <vector>
 
@@ -45,6 +46,15 @@ namespace QtLikeSignal
 
         //! Invoked when a registered descriptor is ready; receives the poll(2) revents bitmask.
         using EventSourceCallback = std::function<void ( short aEvents )>;
+
+        //! Largest number of platform descriptors that may be registered at once.
+        //!
+        //! Bounding this lets waitForEvents() build its poll set (this many sources plus the one
+        //! wakeup FD) in a fixed stack buffer, with no per-iteration heap allocation -- the whole
+        //! point of the descriptor-set snapshot. Real loops use a handful (Wayland/X11 plus
+        //! timers), so the ceiling is generous; registerEventSource() rejects anything past it
+        //! rather than silently falling back to the heap.
+        static constexpr std::size_t kMaxEventSources = 15;
 
         bool registerEventSource
             (

@@ -115,6 +115,20 @@ namespace QtLikeSignal
             std::function<void()> aTask
             );
 
+        static void setOrganizationName
+            (
+            const std::string& aName
+            );
+
+        static std::string organizationName();
+
+        static void setApplicationName
+            (
+            const std::string& aName
+            );
+
+        static std::string applicationName();
+
         //! The application is bound to the thread it adopted and cannot be re-homed.
         //!
         //! Deleted rather than merely documented: moving it would leave exec() running a loop on a

@@ -319,6 +319,62 @@ individually quadratic. The tree's pointers live in a lazily-allocated box that 
 any tree never allocates, so joining a tree is free for an object that has already been named or has
 already run a timer.
 
+## Settings that stay between runs
+
+`Settings` is `QSettings`: it keeps values in an INI file, under the same names and in the same
+format, so a file that one of them writes, the other can read.
+
+```cpp
+#include "QtLikeSignal/Settings.hpp"
+
+QtLikeSignal::CoreApplication::setOrganizationName( "Garmin" );
+QtLikeSignal::CoreApplication::setApplicationName( "Chartplotter" );
+
+// ~/.config/Garmin/Chartplotter.ini, or under %APPDATA% on Windows
+QtLikeSignal::Settings settings;
+
+settings.beginGroup( "window" );
+const int width = settings.value( "width", 800 );        // 800 if the key is not there
+settings.setValue( "height", 600 );
+settings.endGroup();
+
+// A file you name
+QtLikeSignal::Settings other( "/data/device.ini", QtLikeSignal::SettingsFormat::Ini );
+```
+
+The file that results:
+
+```ini
+[window]
+height=600
+```
+
+**A value is one of six kinds**: a bool, an integer, a double, a string, a list of strings, or
+nothing. They are what an INI file can give back, and `SettingsValue` holds them. There is no
+fallback that serialises other types, so store a size as two integers. `value( key, default )`
+gives back the type of the default, and gives the default also when the text in the file is not
+that type.
+
+**The file is written later, not at `setValue()`**: when control returns to the event loop, at
+`sync()`, or when the object is destroyed. So a thousand changes cost one write. The write is an
+atomic replace under a lock between processes, and it merges with what is on disk, so two programs
+that change different keys keep both changes.
+
+**What is different from `QSettings`:**
+
+- **INI on every platform.** No Windows registry, no macOS property list.
+- **Keys are case-sensitive on every platform.** Qt ignores case on Windows only, because the
+  registry does. A difference that shows only on Windows is found in the field, not in a test.
+- **One file per object.** No system-wide scope and no fallback files. A default goes in the second
+  argument of `value()`.
+- **The organization name and application name have no default.** Qt uses the program's file name;
+  here the settings must not move when the program is renamed.
+- **The write lock cannot go stale.** The operating system releases it when the process ends, even
+  in a crash, so there is no process-id file to guess about.
+
+**A test must not write into the real user folder.** Call `Settings::setPath()` first, or name the
+file. A test that writes into `~/.config` passes, and so this goes wrong without a sign.
+
 ## Reading a thread's call stack
 
 `QtLikeSignalDebug` is a library of its own, which a program opts into by linking it. It has one

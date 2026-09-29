@@ -229,6 +229,54 @@ namespace QtLikeSignalGui
         return window;
     }
 
+    //! Destroys one window now, rather than leaving it for the application's destructor.
+    //!
+    //! The explicit counterpart to the automatic sweep in ~GuiApplication(): it destroys exactly
+    //! the window given -- native side and all -- and detaches it from the application. Use it to
+    //! release a window, and free whatever the program bound to its handle, at a point of the
+    //! program's choosing instead of only at application teardown.
+    //!
+    //! **Any GL context made current against the window's handle must be torn down first**, for the
+    //! same reason ~Window() gives: destroying the window destroys the native window with it, so a
+    //! context still bound to nativeHandle() would outlive the handle it was made for.
+    //!
+    //! Refused, with false, for a null pointer or a window this application does not own -- closing
+    //! through the application that did not create it would delete a pointer this object has no
+    //! claim to.
+    //!
+    //! **It does not apply quitOnLastWindowClosed().** Destroying the last window does not stop the
+    //! event loop; only a close request from the window system does. Qt behaves the same way:
+    //! QWindow::close() can quit the application, and deleting a QWindow cannot. A program that
+    //! destroys its last window this way and wants to stop calls
+    //! QtLikeSignal::CoreApplication::quit().
+    //!
+    //! @return true if the window was owned by this application and has been destroyed.
+    bool GuiApplication::closeWindow
+        (
+        Window* aWindow   //!< A window from this application's createWindow() or adoptWindow().
+        )
+    {
+        if( aWindow == nullptr )
+        {
+            qCWarning( gLogGui )
+                << "GuiApplication::closeWindow: ignoring a null window";
+            return false;
+        }
+
+        if( aWindow->parent() != this )
+        {
+            qCWarning( gLogGui )
+                << "GuiApplication::closeWindow: this window is not owned by this application,"
+                << "so it will not be closed";
+            return false;
+        }
+
+        // Deleting a child detaches it from the parent as it goes, so windows() stops reporting it
+        // and the destructor's sweep will not reach it a second time.
+        delete aWindow;
+        return true;
+    }
+
     //! Gets the window system connection: the X11 Display*. Null where there is no such thing.
     //!
     //! **Ask for this before creating a window, if a GL library is involved.** On X11 the window's

@@ -8,15 +8,10 @@
 #ifndef QT_LIKE_SIGNAL_ABSTRACTEVENTDISPATCHER_HPP
 #define QT_LIKE_SIGNAL_ABSTRACTEVENTDISPATCHER_HPP
 
-#include "QtLikeSignal/EventPriority.hpp"
 #include "QtLikeSignal/LoopHealth.hpp"
 #include "QtLikeSignal/OverflowPolicy.hpp"
 
-#include <deque>
 #include <functional>
-#include <mutex>
-#include <condition_variable>
-#include <atomic>
 
 #include <vector>
 

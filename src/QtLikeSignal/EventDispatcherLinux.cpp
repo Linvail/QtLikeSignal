@@ -11,6 +11,7 @@
 #include "QtLikeSignal/LogCategories.hpp"
 
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 
 #include <poll.h>
@@ -53,7 +54,9 @@ namespace QtLikeSignal
     //! own thread with no lock held, so it may freely post events, start timers, or register and
     //! unregister sources. Registering a descriptor that is already registered replaces its mask
     //! and callback, and counts as a new registration for the purposes of unregisterEventSource().
-    //! Returns false if @p aFd is negative or @p aCallback is empty. Thread-safe.
+    //! Returns false if @p aFd is negative, @p aCallback is empty, or a *new* descriptor would push
+    //! the count past kMaxEventSources (re-registering an existing one is always allowed, since it
+    //! does not grow the set). Thread-safe.
     bool EventDispatcherLinux::registerEventSource
         (
         int aFd,                          //!< Descriptor to poll; must be >= 0.
@@ -89,6 +92,17 @@ namespace QtLikeSignal
             }
             if( !replaced )
             {
+                // A new descriptor: refuse it if the set is full. Capping the count here is what
+                // lets waitForEvents() build its poll set in a fixed stack buffer with no heap
+                // fallback. Replacing an existing source above skips this, since it does not grow.
+                if( mSources.size() >= kMaxEventSources )
+                {
+                    qCWarning( gLogDispatcher )
+                        << "EventDispatcherLinux: refusing fd" << aFd
+                        << "-- already at the kMaxEventSources limit of"
+                        << static_cast<unsigned long long>( kMaxEventSources );
+                    return false;
+                }
                 mSources.push_back( { aFd, aEvents, std::move( aCallback ), generation } );
             }
         }
@@ -160,24 +174,29 @@ namespace QtLikeSignal
         // taken, not its callback: the callback is looked up again, under the lock, at the moment
         // it is about to be invoked. Copying them out here would pin a callback
         // unregisterEventSource() has since removed, and deliver to it anyway.
-        std::vector<pollfd> pollSet;
-        std::vector<unsigned long long> generations;
-        pollSet.reserve( mSources.size() + 1 );
-        generations.reserve( mSources.size() + 1 );
+        //
+        // registerEventSource() caps mSources at kMaxEventSources, so the set (those sources plus
+        // the one wakeup FD) always fits this fixed stack buffer. That is the whole point of the
+        // cap: no heap allocation on any event loop iteration.
+        constexpr std::size_t kPollSetCapacity = kMaxEventSources + 1;
+        pollfd pollSet[kPollSetCapacity];
+        unsigned long long generations[kPollSetCapacity];
 
-        pollSet.push_back( pollfd { mWakeFd, POLLIN, 0 } );
-        generations.push_back( 0 );   // index 0 is the wakeup FD; it has no user callback
-        for( const auto& source : mSources )
+        const std::size_t totalCount = mSources.size() + 1;
+
+        pollSet[0] = pollfd { mWakeFd, POLLIN, 0 };
+        generations[0] = 0;   // index 0 is the wakeup FD; it has no user callback
+        for( std::size_t i = 0; i < mSources.size(); ++i )
         {
-            pollSet.push_back( pollfd { source.mFd, source.mEvents, 0 } );
-            generations.push_back( source.mGeneration );
+            pollSet[i + 1] = pollfd { mSources[i].mFd, mSources[i].mEvents, 0 };
+            generations[i + 1] = mSources[i].mGeneration;
         }
 
         // Block with the lock released: poll() cannot hold a std::mutex, and holding it would stop
         // every other thread from posting -- including the post that is supposed to wake us.
         aLock.unlock();
 
-        const int ready = ::poll( pollSet.data(), static_cast<nfds_t>( pollSet.size() ),
+        const int ready = ::poll( pollSet, static_cast<nfds_t>( totalCount ),
             aTimeoutMs );
 
         if( ready > 0 )
@@ -189,7 +208,7 @@ namespace QtLikeSignal
 
             // Invoke platform callbacks unlocked, before re-acquiring. Index 0 is the wakeup FD and
             // is deliberately skipped -- it is ours, not a user source.
-            for( size_t i = 1; i < pollSet.size(); ++i )
+            for( std::size_t i = 1; i < totalCount; ++i )
             {
                 if( pollSet[i].revents == 0 )
                 {

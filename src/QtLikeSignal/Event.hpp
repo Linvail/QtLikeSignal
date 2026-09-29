@@ -12,7 +12,6 @@
 #include "QtLikeSignal/EventPool.hpp"
 
 #include <cstddef>
-#include <functional>
 #include <new>
 #include <type_traits>
 #include <utility>

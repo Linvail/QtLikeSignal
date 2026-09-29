@@ -47,7 +47,6 @@
 #include <atomic>
 #include <chrono>
 #include <future>
-#include <memory>
 #include <thread>
 #include <vector>
 

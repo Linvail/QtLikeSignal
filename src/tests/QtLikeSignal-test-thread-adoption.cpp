@@ -8,8 +8,6 @@
 //! thread running its own native loop can drain our queue with processEvents() /
 //! setWakeCallback().
 
-#include "QtLikeSignal-test-types.hpp"
-
 #include "gtest/gtest.h"
 #include "QtLikeSignal/Object.hpp"
 #include "QtLikeSignal/Signal.hpp"

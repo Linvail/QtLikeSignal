@@ -19,9 +19,37 @@
 #include "QtLikeSignal/Event.hpp"
 #include "QtLikeSignal/Thread.hpp"
 
+#include <mutex>
+#include <string>
 
 namespace QtLikeSignal
 {
+    namespace
+    {
+        //! The organization and application names, which Settings uses to name its file.
+        struct ApplicationNames
+        {
+            //! Guards the two names. They are read and set from any thread.
+            std::mutex mMutex;
+
+            //! The name set by setOrganizationName(). Empty until then.
+            std::string mOrganization;
+
+            //! The name set by setApplicationName(). Empty until then.
+            std::string mApplication;
+        };
+
+        //! Returns the one set of names.
+        //!
+        //! Made on first use and never destroyed, because a Settings object with static storage
+        //! duration can read the names after every other static is destroyed.
+        ApplicationNames& applicationNames()
+        {
+            static ApplicationNames* const names = new ApplicationNames();
+            return *names;
+        }
+    }
+
     std::atomic<CoreApplication*> CoreApplication::sInstance { nullptr };
 
     //! Constructs the application and adopts the calling thread as the main thread.
@@ -227,6 +255,53 @@ namespace QtLikeSignal
             return app->mMainThread->post( std::move( aTask ) );
         }
         return false;
+    }
+
+    //! Sets the name of the organization that wrote the application, for example "Garmin".
+    //! Thread-safe.
+    //!
+    //! Settings uses it to name its file when no name is given to its constructor. Static, and
+    //! usable before an application object exists, as in Qt: the name must be set before the first
+    //! Settings object is made, which can be before the application object is.
+    void CoreApplication::setOrganizationName
+        (
+        const std::string& aName  //!< The name. It becomes a directory name, so avoid '/' and ''.
+        )
+    {
+        ApplicationNames& names = applicationNames();
+        std::lock_guard<std::mutex> lock( names.mMutex );
+        names.mOrganization = aName;
+    }
+
+    //! Returns the name that setOrganizationName() set, or an empty string. Thread-safe.
+    std::string CoreApplication::organizationName()
+    {
+        ApplicationNames& names = applicationNames();
+        std::lock_guard<std::mutex> lock( names.mMutex );
+        return names.mOrganization;
+    }
+
+    //! Sets the name of the application, for example "Chartplotter". Thread-safe.
+    //!
+    //! Settings uses it to name its file when no name is given to its constructor. Unlike Qt, there
+    //! is no default taken from the program's file name: the file name of a program can change
+    //! between versions, and the settings file must not move with it.
+    void CoreApplication::setApplicationName
+        (
+        const std::string& aName  //!< The name. It becomes a file name, so avoid '/' and ''.
+        )
+    {
+        ApplicationNames& names = applicationNames();
+        std::lock_guard<std::mutex> lock( names.mMutex );
+        names.mApplication = aName;
+    }
+
+    //! Returns the name that setApplicationName() set, or an empty string. Thread-safe.
+    std::string CoreApplication::applicationName()
+    {
+        ApplicationNames& names = applicationNames();
+        std::lock_guard<std::mutex> lock( names.mMutex );
+        return names.mApplication;
     }
 
 } // namespace QtLikeSignal

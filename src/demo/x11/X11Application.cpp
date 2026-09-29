@@ -23,7 +23,6 @@
 #include <poll.h>
 
 #include <X11/Xlib.h>
-#include <X11/Xutil.h>
 #include <X11/keysym.h>
 
 //! This demo's category, declared in X11Application.hpp so main.cpp can report on it too.

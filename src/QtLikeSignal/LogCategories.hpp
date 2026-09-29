@@ -5,16 +5,17 @@
 //!
 //! The logging categories QtLikeSignal itself reports on.
 //!
-//! Six of them, one for each part of the library, so that a reader can turn up the thread
+//! Seven of them, one for each part of the library, so that a reader can turn up the thread
 //! machinery without also turning up every parent-child warning:
 //!
 //! ```
 //! QTLIKESIGNAL_LOG_RULES="qtlikesignal.*=warning,qtlikesignal.thread=debug"
 //! ```
 //!
-//! Declared in one header rather than each in the file that uses it, because three of the six are
+//! Declared in one header rather than each in the file that uses it, because four of the seven are
 //! shared: the thread category is reported on by Thread.cpp and by both of its platform halves,
-//! and the dispatcher category by both dispatchers. A category is one object, so it has to be
+//! the dispatcher category by both dispatchers, and the settings category by the value type, the
+//! file store and the Settings class. A category is one object, so it has to be
 //! declared somewhere both halves can see and defined exactly once -- which is LogCategories.cpp.
 //!
 //! An application's own categories do not belong here. Define them with
@@ -43,5 +44,8 @@ QTLIKESIGNAL_DECLARE_LOG_CATEGORY( gLogDispatcher )
 
 //! The opt-in shutdown-signal watcher: what it installed, and what arrived. "QSGW" to DLT.
 QTLIKESIGNAL_DECLARE_LOG_CATEGORY( gLogSignalWatcher )
+
+//! Settings: reading, writing and locking settings files. "QSET" to DLT.
+QTLIKESIGNAL_DECLARE_LOG_CATEGORY( gLogSettings )
 
 #endif // QT_LIKE_SIGNAL_LOG_CATEGORIES_HPP

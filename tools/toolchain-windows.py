@@ -38,6 +38,10 @@ def configure_win_msvc_common(ctx, env_name):
     ctx.env.append_value(
         "CXXFLAGS",
         [
+            # --no-exceptions removes /EHsc for the library targets only, and adds
+            # _HAS_EXCEPTIONS=0 and /we4530. It is a check that the library compiles the way an
+            # application without exceptions builds it, and not a build to ship. See
+            # apply_library_exception_policy() in src/QtLikeSignal/qtlikesignal_waf.py.
             "/EHsc",
             "/std:c++17",
             "/permissive-",  # Enforce standard conformance.

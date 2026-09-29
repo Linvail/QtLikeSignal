@@ -3,7 +3,20 @@
 
 # Applications build this library from source with exceptions disabled, so it has to compile that
 # way. --no-exceptions is how that is checked, with the real include paths.
-from toolchains import apply_library_exception_policy
+from waflib import Context
+
+
+def load_library_policy(bld):
+    """
+    Returns the build policy that the library wscripts share, from
+    src/QtLikeSignal/qtlikesignal_waf.py.
+
+    It is loaded by path because only the directory of this wscript is on sys.path while waf runs
+    it. That module says why it is in src/QtLikeSignal and not in tools/.
+    """
+    return Context.load_tool(
+        "qtlikesignal_waf", [bld.path.parent.find_dir("QtLikeSignal").abspath()]
+    )
 
 
 def build(bld):
@@ -21,12 +34,13 @@ def build(bld):
     did not get -- the same treatment the X11 demo gets, and the reason a build of this stays green
     on a bare container.
     """
-    # : Every backend that is one source file and some libraries. Listed here so the glob below can
-    # : exclude all of them and add back only the ones this target can actually build. : : Wayland
-    # is not in this table and is handled after it: it is the only backend that also : contributes
-    # generated C, an include directory for the headers generated beside it, and the : "c" feature
-    # to compile them. Bending the table into a shape that could carry those would make : five rows
-    # harder to read for the sake of one.
+    #: Every backend that is one source file and some libraries. Listed here so the glob below can
+    #: exclude all of them and add back only the ones this target can actually build.
+    #:
+    #: Wayland is not in this table and is handled after it: it is the only backend that also
+    #: contributes generated C, an include directory for the headers generated beside it, and the
+    #: "c" feature to compile them. Bending the table into a shape that could carry those would make
+    #: five rows harder to read for the sake of one.
     all_backends = [
         ("windows", "PlatformIntegrationWin32.cpp", "win32", ["USER32"], None),
         ("x11", "PlatformIntegrationX11.cpp", "linux", ["X11"], "install libx11-dev"),
@@ -124,6 +138,6 @@ def build(bld):
     # "QtLikeSignalGui/Window.hpp" and sit next to the "QtLikeSignal/Object.hpp" ones.
     kw["export_includes"] = ".."
 
-    apply_library_exception_policy(bld, kw)
+    load_library_policy(bld).apply_library_exception_policy(bld, kw)
 
     bld(target="QtLikeSignalGui", **kw)

@@ -3,12 +3,13 @@
 
 # Applications build this library from source with exceptions disabled, so it has to compile that
 # way. --no-exceptions is how that is checked with the real include paths.
-from toolchains import apply_library_exception_policy
+from qtlikesignal_waf import apply_library_exception_policy, use_user32
 
 
 def build(bld):
     """
-    Build the QtLikeSignal library: the event loop, the threads, the timers and the signals.
+    Build the QtLikeSignal library: the event loop, the threads, the timers, the signals and the
+    settings.
     """
     kw = {}
     kw["use"] = []
@@ -22,16 +23,20 @@ def build(bld):
             "EventDispatcherLinux.cpp",
             "SignalWatcherWin.cpp",
             "SignalWatcherPosix.cpp",
+            "SettingsFileIoWin.cpp",
+            "SettingsFileIoPosix.cpp",
         ],
     )
     if bld.env.DEST_OS == "win32":
         kw["source"].append(bld.path.find_node("ThreadWin.cpp"))
         kw["source"].append(bld.path.find_node("EventDispatcherWin32.cpp"))
         kw["source"].append(bld.path.find_node("SignalWatcherWin.cpp"))
+        kw["source"].append(bld.path.find_node("SettingsFileIoWin.cpp"))
     elif bld.env.DEST_OS == "linux":
         kw["source"].append(bld.path.find_node("ThreadPosix.cpp"))
         kw["source"].append(bld.path.find_node("EventDispatcherLinux.cpp"))
         kw["source"].append(bld.path.find_node("SignalWatcherPosix.cpp"))
+        kw["source"].append(bld.path.find_node("SettingsFileIoPosix.cpp"))
     # ".." is src/, the directory holding this one, and it is what goes on the include path -- so
     # every include of a QtLikeSignal header reads "QtLikeSignal/Object.hpp" rather than
     # "Object.hpp". These are ordinary header names that another library on the include path could
@@ -44,6 +49,7 @@ def build(bld):
     if build_shared_lib and bld.env.DEST_OS != "win32":
         kw["features"].append("cxxshlib")
 
+    use_user32(bld, kw)
     apply_library_exception_policy(bld, kw)
 
     bld(target="QtLikeSignal", **kw)

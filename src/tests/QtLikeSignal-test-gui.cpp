@@ -70,6 +70,34 @@ namespace
         int mLastWidth { 0 };         //!< Width from the most recent resize.
         int mLastHeight { 0 };        //!< Height from the most recent resize.
     };
+
+    //! Records its own destruction, to prove that the parent it was given was destroyed.
+    //!
+    //! A parent destroys its children, so the flag goes true exactly when the parent is destroyed.
+    //! Merely detaching the parent from its own parent does not set it.
+    class DestructionWitness : public QtLikeSignal::Object
+    {
+    public:
+        //! Makes a witness owned by @p aParent, which sets @p aDestroyed when it is destroyed.
+        DestructionWitness
+            (
+            QtLikeSignal::Object* aParent,   //!< The object whose destruction is to be witnessed.
+            bool* aDestroyed            //!< Set to true when this witness is destroyed.
+            )
+            : QtLikeSignal::Object( aParent )
+            , mDestroyed( aDestroyed )
+        {
+        }
+
+        //! Sets the flag.
+        virtual ~DestructionWitness() override
+        {
+            *mDestroyed = true;
+        }
+
+    private:
+        bool* mDestroyed;   //!< The flag to set on destruction. Outlives this witness.
+    };
 }
 
 //! An empty set holds nothing, and None is never a member of any set.
@@ -370,6 +398,100 @@ TEST( GuiWindowSystemInterfaceTest, NullWindowsAreIgnored )
     WindowSystemInterface::handleWindowDestroyed( nullptr );
 
     SUCCEED();
+}
+
+//! closeWindow() destroys a window the application owns, and takes it out of the list.
+//!
+//! The list alone does not prove the window was destroyed: a closeWindow() that only detached it
+//! would empty the list the same way, and leak the window. So the window carries a child that
+//! records its own destruction, which happens only when the window itself is destroyed.
+//!
+//! One window, because the Wayland backend supports only one. A new window after the close shows
+//! that the close gave back what the backend holds for a window.
+TEST( GuiWindowTest, CloseWindowDestroysAnOwnedWindow )
+{
+    // Declared first, so it outlives every object that may destroy the witness.
+    bool destroyed = false;
+
+    GuiApplication application;
+    if( !application.hasPlatform() )
+    {
+        GTEST_SKIP() << "no window system on this machine";
+    }
+
+    Window* const window = application.createWindow( WindowSettings() );
+    ASSERT_NE( nullptr, window );
+    ASSERT_EQ( 1u, application.windows().size() );
+
+    new DestructionWitness( window, &destroyed );
+
+    EXPECT_TRUE( application.closeWindow( window ) );
+    EXPECT_TRUE( destroyed );
+    EXPECT_EQ( 0u, application.windows().size() );
+
+    Window* const next = application.createWindow( WindowSettings() );
+    ASSERT_NE( nullptr, next );
+    EXPECT_EQ( 1u, application.windows().size() );
+}
+
+//! closeWindow() leaves the other windows of the application as they are.
+//!
+//! This is the point of closing one window early, rather than waiting for the application's
+//! destructor to take them all. Skipped where the backend supports only one window, as Wayland
+//! does.
+TEST( GuiWindowTest, CloseWindowLeavesTheOtherWindowsAlone )
+{
+    GuiApplication application;
+    if( !application.hasPlatform() )
+    {
+        GTEST_SKIP() << "no window system on this machine";
+    }
+    if( application.platformType() == PlatformType::Wayland )
+    {
+        GTEST_SKIP() << "the Wayland backend supports one window";
+    }
+
+    Window* const first  = application.createWindow( WindowSettings() );
+    Window* const second = application.createWindow( WindowSettings() );
+    ASSERT_NE( nullptr, first );
+    ASSERT_NE( nullptr, second );
+    ASSERT_EQ( 2u, application.windows().size() );
+
+    EXPECT_TRUE( application.closeWindow( first ) );
+
+    ASSERT_EQ( 1u, application.windows().size() );
+    EXPECT_EQ( second, application.windows().front() );
+}
+
+//! closeWindow() refuses a null pointer and a window this application does not own.
+TEST( GuiWindowTest, CloseWindowRefusesNullAndForeignWindows )
+{
+    // Declared first, so it outlives every object that may destroy the witness.
+    bool destroyed = false;
+
+    GuiApplication application;
+    if( !application.hasPlatform() )
+    {
+        GTEST_SKIP() << "no window system on this machine";
+    }
+
+    EXPECT_FALSE( application.closeWindow( nullptr ) );
+
+    Window* const window = application.createWindow( WindowSettings() );
+    ASSERT_NE( nullptr, window );
+
+    // Re-homed onto something that is not this application, so closing it through the application
+    // must be refused rather than deleting a pointer the application no longer owns. The stranger
+    // is declared after the application, so it -- and the window it now holds -- is destroyed
+    // first, while the backend is still alive to tear the native window down.
+    QtLikeSignal::Object stranger;
+    ASSERT_TRUE( window->setParent( &stranger ) );
+
+    new DestructionWitness( window, &destroyed );
+
+    EXPECT_FALSE( application.closeWindow( window ) );
+    EXPECT_FALSE( destroyed );
+    EXPECT_EQ( 0u, application.windows().size() );
 }
 
 #if defined( _WIN32 )

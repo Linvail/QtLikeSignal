@@ -4,8 +4,9 @@
 //! @file
 //!
 //! The Windows half of QtLikeSignal::CallStack. For the calling thread, it uses
-//! CaptureStackBackTrace(). For a different thread, it copies the registers and the stack while
-//! the thread is suspended, and walks the copy with DbgHelp after the thread runs again.
+//! CaptureStackBackTrace(), and on x86 also StackWalk64(); see callingThreadFrames(). For a
+//! different thread, it copies the registers and the stack while the thread is suspended, and walks
+//! the copy with DbgHelp after the thread runs again.
 
 #include "QtLikeSignalDebug/CallStack.hpp"
 
@@ -278,15 +279,27 @@ namespace QtLikeSignal
         //! be wrong, and the walk can stop about twelve frames later. The chain needs no symbols,
         //! and each system DLL and each build without optimisation keeps it. It misses only code
         //! that is built without frame pointers, and there StackWalk64 is better. Thus both walks
-        //! run, and the capture keeps the deeper walk.
+        //! run, and the capture merges them with mergeWalks().
+        //!
+        //! **At a function entry** the chain alone skips the caller: the function has not pushed
+        //! EBP yet, so EBP is still the caller's, and the word above it is the return address of
+        //! the caller's caller. The caller's own return address is at the stack pointer. The
+        //! capture reads it there, and passes it as @p aEntryReturn, to go between the two. At a
+        //! return instruction the epilogue has popped EBP, and the same is true.
         std::vector<void*> framePointerWalk
             (
             const CONTEXT& aContext,    //!< The registers of the thread.
-            const Snapshot& aSnapshot   //!< The stack of the thread.
+            const Snapshot& aSnapshot,  //!< The stack of the thread.
+            DWORD aEntryReturn          //!< At a function entry or a return instruction, the word
+                                        //!< at the stack pointer; otherwise 0.
             )
         {
             std::vector<void*> frames;
             frames.push_back( reinterpret_cast<void*>( std::uintptr_t { aContext.Eip } ) );
+            if( aEntryReturn != 0 )
+            {
+                frames.push_back( reinterpret_cast<void*>( std::uintptr_t { aEntryReturn } ) );
+            }
 
             DWORD64 ebp = aContext.Ebp;
             while( frames.size() < static_cast<std::size_t>( CallStack::kMaxFrames ) )
@@ -320,7 +333,217 @@ namespace QtLikeSignal
         }
         #endif
 
+        #if defined( _M_IX86 ) || defined( __i386__ )
+        //! Walks the calling thread with StackWalk64, from its current registers, and gives the
+        //! frames from @p aFirst outwards. Empty if DbgHelp is not available, or if the walk does
+        //! not reach @p aFirst.
+        //!
+        //! The walk reads the live stack. That is safe for the calling thread: the walk itself
+        //! uses only the stack below this frame, and reads only the frames above it, which do not
+        //! change until this function returns.
+        //!
+        //! Not inlined, so that RtlCaptureContext() always runs in a frame of its own. Where the
+        //! compiler put this code into its caller, the walk depended on how that caller was laid
+        //! out, and a change as small as one more statement there made it fail.
+        //!
+        //! A result that does not contain @p aFirst is dropped, not kept. fromFrame() would give it
+        //! back whole, with the frames of this file at the top, and it could then win the
+        //! comparison in callingThreadFrames() only by those extra frames.
+        QT_LIKE_SIGNAL_DEBUG_NOINLINE std::vector<void*> stackWalkOfCallingThread
+            (
+            void* aFirst  //!< The return address of CallStack::capture().
+            )
+        {
+            DbgHelp& api = dbgHelp();
+            const std::lock_guard<std::mutex> lock( api.mLock );
+            if( !load( api ) )
+            {
+                return std::vector<void*>();
+            }
+
+            CONTEXT context;
+            std::memset( &context, 0, sizeof context );
+            RtlCaptureContext( &context );
+            STACKFRAME64 frame;
+            const DWORD machine = startFrame( context, frame );
+
+            // Without this, a module that loaded after the first capture has no frame data.
+            ( void )api.mSymRefreshModuleList( GetCurrentProcess() );
+
+            const std::size_t kWanted = static_cast<std::size_t>( CallStack::kMaxFrames
+                + CallStackPlatform::kInnerFrames );
+            std::vector<void*> frames;
+            while( frames.size() < kWanted
+                && api.mStackWalk64( machine, GetCurrentProcess(), GetCurrentThread(), &frame,
+                &context, nullptr, api.mSymFunctionTableAccess64, api.mSymGetModuleBase64,
+                nullptr ) != FALSE )
+            {
+                if( frame.AddrPC.Offset == 0 )
+                {
+                    break;
+                }
+                frames.push_back(
+                    reinterpret_cast<void*>( static_cast<std::uintptr_t>( frame.AddrPC.Offset ) ) );
+            }
+
+            if( std::find( frames.begin(), frames.end(), aFirst ) == frames.end() )
+            {
+                return std::vector<void*>();
+            }
+            return CallStackPlatform::fromFrame( frames.data(), static_cast<int>( frames.size() ),
+                aFirst );
+        }
+        #endif
+
+        #if defined( _M_IX86 ) || defined( __i386__ )
+        //! @return true if @p aAddress is the first instruction of a function, as the symbols of
+        //! its module say. Call it with the lock of DbgHelp held.
+        //!
+        //! A module without a PDB still gives the symbols of its exports, so the entry of an
+        //! exported system function is found too. An address with no symbol at all is not an
+        //! entry.
+        bool isFunctionEntry
+            (
+            DbgHelp& aApi,     //!< The loaded DbgHelp.
+            DWORD64 aAddress   //!< The address to test.
+            )
+        {
+            // SYMBOL_INFO ends in a name of one character, and the caller gives it space to grow.
+            std::vector<unsigned char> buffer( sizeof( SYMBOL_INFO ) + kMaxSymbolName );
+            SYMBOL_INFO* const symbol = reinterpret_cast<SYMBOL_INFO*>( buffer.data() );
+            symbol->SizeOfStruct = sizeof( SYMBOL_INFO );
+            symbol->MaxNameLen = kMaxSymbolName;
+            DWORD64 displacement = 1;
+            return aApi.mSymFromAddr( GetCurrentProcess(), aAddress, &displacement, symbol )
+                   != FALSE && displacement == 0;
+        }
+
+        //! @return true if the thread in @p aContext stopped where the return address to its
+        //! caller is the word at the stack pointer, and EBP already belongs to the caller. Call it
+        //! with the lock of DbgHelp held.
+        //!
+        //! That is true at two places in a function: at its first instruction, before the prologue
+        //! pushes EBP, and at its return instruction, after the epilogue pops EBP. At both places
+        //! the chain of frame pointers and StackWalk64 skip the caller. A thread that spins
+        //! around a small call stops at each of the two places often.
+        //!
+        //! The test of the return instruction reads one byte of code, which is exact: EIP always
+        //! points to the start of an instruction. The two forms are RET (C3) and RET imm16 (C2),
+        //! which also removes imm16 bytes of arguments.
+        bool returnAddressOnTop
+            (
+            DbgHelp& aApi,            //!< The loaded DbgHelp.
+            const CONTEXT& aContext,  //!< The registers of the stopped thread.
+            DWORD& aPopped            //!< Gets how many bytes above the return address the return
+                                      //!< removes; 0 at a function entry.
+            )
+        {
+            aPopped = 0;
+            unsigned char code[3] = {};
+            SIZE_T read = 0;
+            if( ReadProcessMemory( GetCurrentProcess(),
+                reinterpret_cast<LPCVOID>( std::uintptr_t { aContext.Eip } ), code, sizeof code,
+                &read ) != FALSE && read == sizeof code )
+            {
+                if( code[0] == 0xC3 )
+                {
+                    return true;
+                }
+                if( code[0] == 0xC2 )
+                {
+                    aPopped = static_cast<DWORD>( code[1] | ( code[2] << 8 ) );
+                    return true;
+                }
+            }
+            return isFunctionEntry( aApi, aContext.Eip );
+        }
+
+        //! Merges two walks of one stack, @p aPreferred and @p aOther, both innermost first, into
+        //! one list that has the frames of both.
+        //!
+        //! **Why a merge, and not the deeper walk.** On x86 each walk can skip one frame that the
+        //! other finds: the chain of frame pointers skips a function built without a frame
+        //! pointer, and StackWalk64 can skip a frame where its frame data is wrong, as it did for
+        //! the caller of a function built with AddressSanitizer. Then one walk can lose a frame
+        //! near the top and still be as deep as the other, because it gets one more frame at the
+        //! bottom. A choice by size then keeps a stack with a frame missing.
+        //!
+        //! The merge goes down both walks together. Where they agree, it keeps the frame. Where
+        //! one walk has a frame and the other walk continues with the frame after it, the other
+        //! walk skipped it, and the merge keeps it. Where the walks differ in any other way, they
+        //! have diverged: the merge stops, and adds the rest of the walk that goes deeper, or of
+        //! @p aPreferred when both go equally deep. A frame is kept only where both walks agree
+        //! on the frame after it, so a wrong guess of StackWalk64 does not get into the result.
+        //! @return at most CallStack::kMaxFrames frames, and sets @p aCut if there were more.
+        std::vector<void*> mergeWalks
+            (
+            const std::vector<void*>& aPreferred,  //!< The walk that wins a tie.
+            const std::vector<void*>& aOther,      //!< The second walk.
+            bool& aCut                             //!< Set to true if the merge had to drop frames.
+            )
+        {
+            std::vector<void*> merged;
+            std::size_t p = 0;
+            std::size_t o = 0;
+            while( p < aPreferred.size() && o < aOther.size() )
+            {
+                if( aPreferred[p] == aOther[o] )
+                {
+                    merged.push_back( aPreferred[p] );
+                    ++p;
+                    ++o;
+                }
+                else if( p + 1 < aPreferred.size() && aPreferred[p + 1] == aOther[o] )
+                {
+                    merged.push_back( aPreferred[p] );
+                    ++p;
+                }
+                else if( o + 1 < aOther.size() && aOther[o + 1] == aPreferred[p] )
+                {
+                    merged.push_back( aOther[o] );
+                    ++o;
+                }
+                else
+                {
+                    break;
+                }
+            }
+            if( aOther.size() - o > aPreferred.size() - p )
+            {
+                merged.insert( merged.end(), aOther.begin() + o, aOther.end() );
+            }
+            else
+            {
+                merged.insert( merged.end(), aPreferred.begin() + p, aPreferred.end() );
+            }
+
+            const std::size_t kMost = static_cast<std::size_t>( CallStack::kMaxFrames );
+            if( merged.size() > kMost )
+            {
+                merged.resize( kMost );
+                aCut = true;
+            }
+            return merged;
+        }
+        #endif
+
         //! Gets the frames of the calling thread, from @p aFirst outwards.
+        //!
+        //! CaptureStackBackTrace() is exact on x64, where it unwinds with the unwind tables that
+        //! every function has. On x86 it follows the chain of frame pointers, and a function built
+        //! without a frame pointer -- which /O2 allows on x86, because it includes /Oy -- is not
+        //! in that chain: the walk goes from its callee straight to its caller, and the frame is
+        //! lost without an error. So on x86 the calling thread is also walked with StackWalk64,
+        //! which finds such a function from the frame data in its PDB, and the two walks are
+        //! merged by mergeWalks(), as for another thread. StackWalk64 wins a tie. Without symbols
+        //! StackWalk64 can stop early, in a system DLL; then the rest of the chain is kept.
+        //!
+        //! **The walks merge only when the chain contains @p aFirst.** When it does not,
+        //! fromFrame() gives it back whole, with the frames of this library at its top, and the
+        //! merge would keep those frames. That cannot happen with MSVC, because /Oy- keeps the
+        //! frame of capture(), which holds @p aFirst, in the chain. It can with a different x86
+        //! compiler that leaves the frame pointer out of this library. So such a chain is dropped
+        //! for any StackWalk64 result.
         std::vector<void*> callingThreadFrames
             (
             void* aFirst  //!< The return address of CallStack::capture().
@@ -329,7 +552,23 @@ namespace QtLikeSignal
             const int kWanted = CallStack::kMaxFrames + CallStackPlatform::kInnerFrames;
             void* frames[kWanted];
             const USHORT count = CaptureStackBackTrace( 0, kWanted, frames, nullptr );
-            return CallStackPlatform::fromFrame( frames, count, aFirst );
+            std::vector<void*> result = CallStackPlatform::fromFrame( frames, count, aFirst );
+
+            #if defined( _M_IX86 ) || defined( __i386__ )
+                const bool chainHasFirst = std::find( frames, frames + count, aFirst )
+                    != frames + count;
+                std::vector<void*> walked = stackWalkOfCallingThread( aFirst );
+                if( !walked.empty() && !chainHasFirst )
+                {
+                    result.swap( walked );
+                }
+                else if( !walked.empty() )
+                {
+                    bool cut = false;
+                    result = mergeWalks( walked, result, cut );
+                }
+            #endif
+            return result;
         }
 
         //! @return @p aValue in hexadecimal, without a prefix.
@@ -559,6 +798,40 @@ namespace QtLikeSignal
         gWalking = &snapshot;
         stack.mExactFirst = true;
         bool cutShort = false;
+        DWORD entryReturn = 0;
+
+        #if defined( _M_IX86 ) || defined( __i386__ )
+            // A thread stopped at the first instruction of a function has not run its prologue:
+            // the return address to its caller is at the stack pointer, and EBP still belongs to a
+            // frame further out. StackWalk64 does not see this. It unwinds the function as though
+            // its frame were set up, through that outer EBP, and skips every frame between the
+            // function and the owner of that EBP -- which is what a thread stopped at the start of
+            // a small CRT function did, in about half of all runs of a test. So at a function entry
+            // the stopped frame is recorded here, and the walk starts from the caller, with the
+            // registers as they were just before the call. Only the call has changed the stack at
+            // that point, so this is exact, not a guess.
+            //
+            // A thread stopped at the return instruction of a function is in the same state: the
+            // epilogue has popped EBP, and the return address is at the stack pointer. A thread
+            // that calls a small function in a loop stops there in a few captures of each
+            // thousand. Then the walk starts from the caller with the registers as they are just
+            // after the return, which also removes the arguments of a RET imm16.
+            DWORD popped = 0;
+            if( returnAddressOnTop( api, stopped, popped ) && snapshot.mSize >= sizeof( DWORD ) )
+            {
+                DWORD returnAddress = 0;
+                std::memcpy( &returnAddress, snapshot.mBytes.data(), sizeof returnAddress );
+                if( returnAddress != 0 )
+                {
+                    stack.mFrames.push_back(
+                        reinterpret_cast<void*>( std::uintptr_t { stopped.Eip } ) );
+                    context.Eip = returnAddress;
+                    context.Esp += sizeof( DWORD ) + popped;
+                    ( void )startFrame( context, frame );
+                    entryReturn = returnAddress;
+                }
+            }
+        #endif
         while( api.mStackWalk64( machine, GetCurrentProcess(), thread, &frame, &context,
             &readMemory, api.mSymFunctionTableAccess64, api.mSymGetModuleBase64, nullptr )
             != FALSE )
@@ -582,14 +855,13 @@ namespace QtLikeSignal
         gWalking = nullptr;
 
         #if defined( _M_IX86 ) || defined( __i386__ )
-            std::vector<void*> chain = framePointerWalk( stopped, snapshot );
-            if( chain.size() > stack.mFrames.size() )
-            {
-                stack.mFrames.swap( chain );
-                cutShort = ( stack.mFrames.size() == static_cast<std::size_t>( kMaxFrames ) );
-            }
+            // The chain stops at kMaxFrames frames, so a chain of that size can have had more.
+            const std::vector<void*> chain = framePointerWalk( stopped, snapshot, entryReturn );
+            cutShort = cutShort || chain.size() == static_cast<std::size_t>( kMaxFrames );
+            stack.mFrames = mergeWalks( stack.mFrames, chain, cutShort );
         #else
             ( void )stopped;
+            ( void )entryReturn;
         #endif
 
         if( cutShort )

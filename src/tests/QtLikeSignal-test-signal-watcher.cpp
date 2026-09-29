@@ -44,7 +44,6 @@
 
 #if defined( __linux__ )
     #include <csignal>
-    #include <pthread.h>
 #endif
 
 #if defined( _WIN32 )

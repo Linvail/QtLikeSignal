@@ -12,9 +12,7 @@
 #include "QtLikeSignal/Object.hpp"
 #include "QtLikeSignal/Signal.hpp"
 #include "QtLikeSignal/Event.hpp"
-#include "QtLikeSignal/CoreApplication.hpp"
 #include "QtLikeSignal/Thread.hpp"
-#include "QtLikeSignal/Timer.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <mutex>

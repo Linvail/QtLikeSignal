@@ -11,7 +11,6 @@
 #include "gtest/gtest.h"
 #include "QtLikeSignal/Object.hpp"
 #include "QtLikeSignal/Thread.hpp"
-#include "QtLikeSignal/Signal.hpp"
 #include <chrono>
 #include <future>
 #include <thread>

@@ -22,6 +22,7 @@
 #include <chrono>
 #include <memory>
 #include <thread>
+#include <vector>
 
 #include <poll.h>
 #include <unistd.h>
@@ -354,6 +355,64 @@ TEST( EventDispatcherLinuxTest, SourceUnregisteredFromACallbackIsNotCalledInThat
         "unregistration, so unregisterEventSource() did not take effect until the next round.";
 
     dispatcher->unregisterEventSource( first.readFd() );
+}
+
+//! Verifies registerEventSource() caps the source count so waitForEvents() never needs the heap.
+//!
+//! The dispatcher builds its poll set in a fixed stack buffer sized for kMaxEventSources platform
+//! descriptors plus the one wakeup FD, which is only safe if the count cannot grow past it. So a
+//! new descriptor beyond the ceiling has to be refused, a re-registration of one already in the set
+//! must not count against it, and freeing a slot has to let a new one back in.
+TEST( EventDispatcherLinuxTest, RegisteringPastTheCapIsRefused )
+{
+    CoreApplication app;
+    auto dispatcher = currentLinuxDispatcher();
+    ASSERT_NE( dispatcher, nullptr );
+
+    // One pipe per source that fits, plus one more whose descriptor must be turned away.
+    std::vector<std::unique_ptr<TestPipe> > pipes;
+    for( std::size_t i = 0; i < EventDispatcherLinux::kMaxEventSources + 1; ++i )
+    {
+        pipes.push_back( std::make_unique<TestPipe>() );
+        ASSERT_GE( pipes.back()->readFd(), 0 );
+    }
+
+    // Fill the set exactly to the ceiling.
+    for( std::size_t i = 0; i < EventDispatcherLinux::kMaxEventSources; ++i )
+    {
+        EXPECT_TRUE( dispatcher->registerEventSource( pipes[i]->readFd(), POLLIN, []( short )
+            {
+            } ) )
+            << "source " << i << " within the cap should register";
+    }
+
+    // The next new descriptor is over the ceiling and must be refused rather than admitted.
+    const int overflowFd = pipes[EventDispatcherLinux::kMaxEventSources]->readFd();
+    EXPECT_FALSE( dispatcher->registerEventSource( overflowFd, POLLIN, []( short )
+        {
+        } ) )
+        << "a new descriptor past kMaxEventSources must be refused, not admitted to the heap";
+
+    // Re-registering one already in the set replaces it in place and does not grow the set, so it
+    // is allowed even while full.
+    EXPECT_TRUE( dispatcher->registerEventSource( pipes[0]->readFd(), POLLIN, []( short )
+        {
+        } ) )
+        << "re-registering an existing descriptor must not count against the cap";
+
+    // Freeing a slot lets the previously-refused descriptor in.
+    EXPECT_TRUE( dispatcher->unregisterEventSource( pipes[0]->readFd() ) );
+    EXPECT_TRUE( dispatcher->registerEventSource( overflowFd, POLLIN, []( short )
+        {
+        } ) )
+        << "once a slot frees up, a new descriptor should be accepted again";
+
+    // Leave the dispatcher clean for later tests sharing this thread.
+    EXPECT_TRUE( dispatcher->unregisterEventSource( overflowFd ) );
+    for( std::size_t i = 1; i < EventDispatcherLinux::kMaxEventSources; ++i )
+    {
+        dispatcher->unregisterEventSource( pipes[i]->readFd() );
+    }
 }
 
 #endif // __linux__

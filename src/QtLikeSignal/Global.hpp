@@ -34,8 +34,6 @@
 #ifndef QT_LIKE_SIGNAL_GLOBAL_HPP
 #define QT_LIKE_SIGNAL_GLOBAL_HPP
 
-#include "QtLikeSignal/Connection.hpp"
-
 #include <type_traits>
 
 namespace QtLikeSignal

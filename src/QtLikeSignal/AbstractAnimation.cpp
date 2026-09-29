@@ -15,7 +15,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <memory>
 #include <vector>
 
 namespace QtLikeSignal

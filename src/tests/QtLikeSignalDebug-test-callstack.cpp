@@ -19,7 +19,6 @@
 #include <utility>
 
 #if defined( __linux__ )
-    #include <pthread.h>
     #include <signal.h>
 #endif
 
@@ -154,14 +153,16 @@ namespace
     //!
     //! "One of the innermost", not "the innermost": a thread that stops in a loop can stop inside
     //! a function that the loop calls. In a build without optimisation, even atomic<bool>::load()
-    //! is a call with a frame of its own.
+    //! is a call with a frame of its own. With 32-bit MSVC in debug, that call goes down three
+    //! frames: load(), then _Check_load_memory_order(), then __RTC_CheckEsp, the stack check of
+    //! /RTC that exists only on x86. Thus three frames can be above the probe.
     ::testing::AssertionResult isNearTheTop
         (
         const std::string& aText,  //!< Text from CallStack::toString().
         const char* aName          //!< The probe that must be near the top.
         )
     {
-        static const int kMostAbove = 2;
+        static const int kMostAbove = 3;
         static const char* const kMechanism[] = { "CallStack", "onCaptureSignal", "__restore_rt",
                                                   "captureTargetHere" };
 
@@ -282,14 +283,19 @@ TEST( CallStackTest, CapturesABusyThread )
 
 //! The walk goes to the bottom of a thread that stopped inside system code, which usually has no
 //! symbols here. Each capture finds the frame at the bottom of the probe thread, not only the
-//! frames near the top.
+//! frames near the top, and the frame that called into the clock.
+//!
+//! The probe calls the clock in a tight loop, so many captures stop at the first instruction of a
+//! small clock function, before its prologue. There, on x86, the return address to the probe's
+//! frame is only at the stack pointer, and a walk that starts from EBP skips that frame. Checking
+//! readTheClockUntilReleased as well as runBody is what catches a walk that loses it.
 TEST( CallStackTest, WalksPastSystemCodeToTheBottom )
 {
     const int kCaptures = 20;
     std::atomic<bool> spinning { false };
     std::atomic<bool> release { false };
-    int reachedBottom = 0;
-    std::string shortest;
+    int complete = 0;
+    std::string incomplete;
     {
         ProbeThread busy( [&spinning, &release]()
             {
@@ -299,19 +305,20 @@ TEST( CallStackTest, WalksPastSystemCodeToTheBottom )
         for( int i = 0; i < kCaptures; ++i )
         {
             const std::string text = CallStack::capture( busy.target() ).toString();
-            if( text.find( "runBody" ) != std::string::npos )
+            if( text.find( "runBody" ) != std::string::npos
+                && text.find( "readTheClockUntilReleased" ) != std::string::npos )
             {
-                ++reachedBottom;
+                ++complete;
             }
-            else if( shortest.empty() || text.size() < shortest.size() )
+            else if( incomplete.empty() || text.size() < incomplete.size() )
             {
-                shortest = text;
+                incomplete = text;
             }
         }
         release.store( true );
     }
 
-    EXPECT_EQ( reachedBottom, kCaptures ) << "one that stopped short:\n" << shortest;
+    EXPECT_EQ( complete, kCaptures ) << "one that lost a frame:\n" << incomplete;
 }
 
 //! The capture also reads a thread that is blocked in the kernel, through the frames of the

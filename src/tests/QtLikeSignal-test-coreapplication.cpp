@@ -3,7 +3,6 @@
 
 //! @file
 
-#include "QtLikeSignal-test-types.hpp"
 #include "TestCpuTime.hpp"
 
 #include "gtest/gtest.h"
@@ -15,7 +14,6 @@
 #include <atomic>
 #include <memory>
 #include <chrono>
-#include <future>
 #include <thread>
 
 using namespace QtLikeSignal;

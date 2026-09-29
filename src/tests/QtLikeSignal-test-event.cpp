@@ -14,7 +14,6 @@
 #include "QtLikeSignal/Object.hpp"
 #include "QtLikeSignal/Signal.hpp"
 #include "QtLikeSignal/Thread.hpp"
-#include "QtLikeSignal/Timer.hpp"
 #include <atomic>
 #include <thread>
 #include <vector>

@@ -10,14 +10,12 @@
 //! platforms and needs no compositor. The Wayland backend wires the same seam to wl_surface.frame;
 //! what is portable is the contract, and that is what these check.
 
-#include "QtLikeSignal-test-types.hpp"
 
 #include "gtest/gtest.h"
 #include "QtLikeSignalGui/PlatformIntegration.hpp"
 #include "QtLikeSignalGui/Window.hpp"
 #include "QtLikeSignalGui/WindowSystemInterface.hpp"
 #include "QtLikeSignal/Object.hpp"
-#include <memory>
 
 using namespace QtLikeSignal;
 using namespace QtLikeSignalGui;

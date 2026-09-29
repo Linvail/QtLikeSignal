@@ -37,7 +37,6 @@
 #include "QtLikeSignalGui/GuiApplication.hpp"
 #include "QtLikeSignalGui/Window.hpp"
 
-#include "QtLikeSignal/AbstractAnimation.hpp"
 #include "QtLikeSignal/CoreApplication.hpp"
 #include "QtLikeSignal/Object.hpp"
 #include "QtLikeSignal/Property.hpp"

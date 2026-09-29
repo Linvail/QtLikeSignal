@@ -1,6 +1,6 @@
 out
 install
-tools/__pycache__
+__pycache__/
 .vscode
 .lock-*
 compile_commands.json

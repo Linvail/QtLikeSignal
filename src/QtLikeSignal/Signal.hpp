@@ -17,6 +17,7 @@
 #ifndef QT_LIKE_SIGNAL_SIGNAL_HPP
 #define QT_LIKE_SIGNAL_SIGNAL_HPP
 
+#include "QtLikeSignal/Connection.hpp"
 #include "QtLikeSignal/Global.hpp"
 
 #include <algorithm>

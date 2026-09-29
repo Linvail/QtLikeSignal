@@ -20,7 +20,6 @@
 #include "QtLikeSignal/Signal.hpp"
 
 #include <atomic>
-#include <chrono>
 #include <climits>
 #include <condition_variable>
 #include <functional>

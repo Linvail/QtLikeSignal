@@ -497,7 +497,7 @@ namespace
             )
         {
             // Just reading the data to ensure it arrived safely
-            EXPECT_EQ( payload.data.size(), 1000 );
+            EXPECT_EQ( payload.data.size(), 1000U );
         }
 
     };
@@ -769,6 +769,6 @@ namespace
         // It must not crash (meaning no dangling pointers were left behind).
         longLivedSignal.emit();
 
-        EXPECT_EQ( longLivedSignal.receivers(), 0 );
+        EXPECT_EQ( longLivedSignal.receivers(), 0U );
     }
 }

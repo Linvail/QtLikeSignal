@@ -6,8 +6,6 @@
 //! GoogleTest suite for event priority -- queue ordering, preemption of a pass already running, and
 //! how priority composes with a bounded queue.
 
-#include "QtLikeSignal-test-types.hpp"
-
 #include "gtest/gtest.h"
 #include "QtLikeSignal/AbstractEventDispatcher.hpp"
 #include "QtLikeSignal/Event.hpp"

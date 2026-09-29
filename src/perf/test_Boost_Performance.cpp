@@ -46,7 +46,6 @@
 #include <cstdio>
 #include <deque>
 #include <future>
-#include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>

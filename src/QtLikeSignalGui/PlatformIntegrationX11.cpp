@@ -27,8 +27,6 @@
 #include <poll.h>
 
 #include <X11/Xlib.h>
-#include <X11/Xatom.h>
-#include <X11/Xresource.h>
 
 // For XVisualInfo and XGetVisualInfo, which createWindow() needs to turn a VisualID from a GL
 // library's chosen config into the Visual* and depth XCreateWindow wants.
